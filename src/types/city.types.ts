@@ -34,6 +34,21 @@ export type TrafficCell = {
   congestion: number;
 };
 
+export type TrafficLightAxis = 'horizontal' | 'vertical';
+export type TrafficLightPhase = 'horizontalGreen' | 'horizontalYellow' | 'verticalGreen' | 'verticalYellow';
+export type TrafficLightSignal = 'green' | 'yellow' | 'red';
+
+export type TrafficLightState = {
+  id: string;
+  x: number;
+  y: number;
+  phase: TrafficLightPhase;
+  timer: number;
+  greenSeconds: number;
+  yellowSeconds: number;
+  offsetSeconds: number;
+};
+
 export type CityStats = {
   money: number;
   population: number;
@@ -53,5 +68,5 @@ export type SelectedEntity =
   | { kind: 'none' }
   | { kind: 'tile'; x: number; y: number; type: TileType }
   | { kind: 'building'; building: Building }
-  | { kind: 'road'; x: number; y: number; roadType: RoadType; traffic: TrafficCell }
+  | { kind: 'road'; x: number; y: number; roadType: RoadType; traffic: TrafficCell; trafficLight?: TrafficLightState }
   | { kind: 'car'; carId: string };

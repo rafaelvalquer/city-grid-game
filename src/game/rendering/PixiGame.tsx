@@ -6,10 +6,11 @@ import { ROAD_CONFIG } from '../config/roadConfig';
 import { useGameStore, type HoverPreview } from '../../store/gameStore';
 import { inBounds, isRoadType, keyOf } from '../city/grid';
 import type { Car } from '../../types/agent.types';
-import type { BuildingType, RoadType, Tile, Vec2 } from '../../types/city.types';
+import type { BuildingType, RoadType, Tile, TrafficLightState, Vec2 } from '../../types/city.types';
 import type { Tool } from '../../types/game.types';
 import { MAP_COLORS, congestionColor } from './visualTheme';
-import { getDirection, getLaneOffset } from '../systems/trafficRules';
+import { getDirection, getLaneOffset, isIntersection } from '../systems/trafficRules';
+import { getTrafficLightOpenAxis, TRAFFIC_LIGHT_BUILD_COST } from '../systems/trafficLights';
 
 type ActionPreview = HoverPreview & {
   reason?: string;
@@ -25,6 +26,10 @@ type CarRenderPose = {
 
 const TURN_IN_START = 0.64;
 const TURN_OUT_END = 0.36;
+const SIGNAL_RED = 0xef4444;
+const SIGNAL_YELLOW = 0xfacc15;
+const SIGNAL_GREEN = 0x22c55e;
+const SIGNAL_OFF = 0x172033;
 
 export function PixiGame({ world }: { world: GameWorld }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -224,6 +229,8 @@ function draw(
     }
   }
 
+  drawTrafficLights(graphics, world, ts);
+
   if (showHeatmap) {
     for (const t of world.traffic.values()) {
       if (t.congestion <= 0) continue;
@@ -293,6 +300,34 @@ function drawRoad(graphics: Graphics, grid: Tile[][], x: number, y: number, ts: 
   graphics.circle(px + center, py + center, halfRoad).fill(roadColor).stroke({ color: edgeColor, width: 1, alpha: 0.75 });
 
   drawLaneMarkings(graphics, px, py, ts, isAvenue, neighbors);
+}
+
+function drawTrafficLights(graphics: Graphics, world: GameWorld, ts: number): void {
+  for (const light of world.trafficLights.values()) {
+    drawTrafficLight(graphics, light, ts);
+  }
+}
+
+function drawTrafficLight(graphics: Graphics, light: TrafficLightState, ts: number): void {
+  const px = light.x * ts;
+  const py = light.y * ts;
+  const center = ts / 2;
+  const axis = getTrafficLightOpenAxis(light);
+  const yellow = light.phase === 'horizontalYellow' || light.phase === 'verticalYellow';
+  const horizontalColor = axis === 'horizontal' ? (yellow ? SIGNAL_YELLOW : SIGNAL_GREEN) : SIGNAL_RED;
+  const verticalColor = axis === 'vertical' ? (yellow ? SIGNAL_YELLOW : SIGNAL_GREEN) : SIGNAL_RED;
+
+  graphics.circle(px + center, py + center, 6).fill({ color: MAP_COLORS.shadow, alpha: 0.48 });
+
+  drawSignalDot(graphics, px + center - 13, py + 7, verticalColor);
+  drawSignalDot(graphics, px + center + 13, py + ts - 7, verticalColor);
+  drawSignalDot(graphics, px + 7, py + center + 13, horizontalColor);
+  drawSignalDot(graphics, px + ts - 7, py + center - 13, horizontalColor);
+}
+
+function drawSignalDot(graphics: Graphics, x: number, y: number, color: number): void {
+  graphics.circle(x, y, 5).fill(SIGNAL_OFF).stroke({ color: MAP_COLORS.laneSoft, width: 1, alpha: 0.65 });
+  graphics.circle(x, y, 3.2).fill(color);
 }
 
 function drawBuilding(graphics: Graphics, type: BuildingType, x: number, y: number, connected: boolean, ts: number): void {
@@ -549,12 +584,23 @@ function getActionPreview(world: GameWorld, x: number, y: number, tool: Tool, mo
     return { x, y, label: tool === 'road' ? 'Construir rua' : 'Construir avenida', cost, valid: true, successMessage: `${tool === 'road' ? 'Rua' : 'Avenida'} construída por $ ${cost}.` };
   }
 
+  if (tool === 'trafficLight') {
+    const cost = TRAFFIC_LIGHT_BUILD_COST;
+    const key = keyOf(x, y);
+    if (!isRoadType(tile.type)) return { x, y, label: 'Semáforo indisponível', cost, valid: false, reason: 'Semáforos só podem ser adicionados em ruas e avenidas.', successMessage: '' };
+    if (!isIntersection(world.grid, { x, y })) return { x, y, label: 'Não é cruzamento', cost, valid: false, reason: 'Coloque o semáforo apenas em cruzamentos ou cruzamentos em T.', successMessage: '' };
+    if (world.trafficLights.has(key)) return { x, y, label: 'Semáforo já instalado', cost, valid: false, reason: 'Este cruzamento já possui semáforo.', successMessage: '' };
+    if (money < cost) return { x, y, label: 'Dinheiro insuficiente', cost, valid: false, reason: `Faltam $ ${cost - money} para instalar o semáforo.`, successMessage: '' };
+    return { x, y, label: 'Instalar semáforo', cost, valid: true, successMessage: `Semáforo instalado por $ ${cost}.` };
+  }
+
   if (tool === 'remove') {
     if (!isRoadType(tile.type)) return { x, y, label: 'Nada para remover', valid: false, reason: 'Só é possível remover ruas e avenidas.', successMessage: '' };
     const roadType = tile.type as RoadType;
     const cost = ROAD_CONFIG[roadType].removeCost;
     if (money < cost) return { x, y, label: 'Dinheiro insuficiente', cost, valid: false, reason: `Faltam $ ${cost - money} para remover.`, successMessage: '' };
-    return { x, y, label: `Remover ${ROAD_CONFIG[roadType].label.toLowerCase()}`, cost, valid: true, successMessage: `${ROAD_CONFIG[roadType].label} removida por $ ${cost}.` };
+    const hasSignal = world.trafficLights.has(keyOf(x, y));
+    return { x, y, label: `Remover ${ROAD_CONFIG[roadType].label.toLowerCase()}`, cost, valid: true, successMessage: `${ROAD_CONFIG[roadType].label} removida por $ ${cost}.${hasSignal ? ' Semáforo removido junto.' : ''}` };
   }
 
   return { x, y, label: 'Ação indisponível', valid: false, reason: 'Ação indisponível.', successMessage: '' };

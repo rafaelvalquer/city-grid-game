@@ -1,11 +1,13 @@
-import { Eye, Flame, Gauge, Hammer, Pause, Play, Radar, Route, Trash2, X } from 'lucide-react';
+import { CircleDot, Eye, Flame, Gauge, Hammer, Pause, Play, Radar, Route, Trash2, X } from 'lucide-react';
 import { useGameStore } from '../store/gameStore';
 import type { Tool, SimulationSpeed } from '../types/game.types';
 import { ROAD_CONFIG } from '../game/config/roadConfig';
+import { TRAFFIC_LIGHT_BUILD_COST } from '../game/systems/trafficLights';
 
 const tools: Array<{ id: Tool; label: string; cost?: number; Icon: typeof Route }> = [
   { id: 'road', label: 'Rua', cost: ROAD_CONFIG.road.buildCost, Icon: Route },
   { id: 'avenue', label: 'Avenida', cost: ROAD_CONFIG.avenue.buildCost, Icon: Gauge },
+  { id: 'trafficLight', label: 'Semáforo', cost: TRAFFIC_LIGHT_BUILD_COST, Icon: CircleDot },
   { id: 'remove', label: 'Remover', cost: ROAD_CONFIG.road.removeCost, Icon: Trash2 },
   { id: 'inspect', label: 'Inspecionar', Icon: Eye },
 ];
@@ -67,8 +69,9 @@ export function ToolPanel({ className = '', onClose }: { className?: string; onC
 
       <div className="panel-section small">
         <div><Route size={14} /> Carros escolhem menor tempo.</div>
+        <div><CircleDot size={14} /> Semáforo funciona apenas em cruzamentos.</div>
         <div><Eye size={14} /> Clique para ver detalhes.</div>
-        <div><Trash2 size={14} /> Remover rua também custa.</div>
+        <div><Trash2 size={14} /> Remover rua também remove semáforo.</div>
       </div>
     </aside>
   );

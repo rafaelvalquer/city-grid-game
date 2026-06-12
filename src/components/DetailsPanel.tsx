@@ -3,6 +3,7 @@ import { GameWorld } from '../game/engine/simulation';
 import { useGameStore } from '../store/gameStore';
 import { BUILDING_CONFIG } from '../game/config/buildingConfig';
 import { ROAD_CONFIG } from '../game/config/roadConfig';
+import { getTrafficLightOpenAxis } from '../game/systems/trafficLights';
 import { TrafficChart } from './TrafficChart';
 
 const trafficStateLabel = {
@@ -10,6 +11,13 @@ const trafficStateLabel = {
   queued: 'Em fila',
   intersection: 'Aguardando cruzamento',
   turning: 'Reduzindo na curva',
+} as const;
+
+const trafficLightPhaseLabel = {
+  horizontalGreen: 'Horizontal verde',
+  horizontalYellow: 'Horizontal amarelo',
+  verticalGreen: 'Vertical verde',
+  verticalYellow: 'Vertical amarelo',
 } as const;
 
 export function DetailsPanel({ world, className = '', onClose }: { world: GameWorld; className?: string; onClose?: () => void }) {
@@ -55,6 +63,13 @@ export function DetailsPanel({ world, className = '', onClose }: { world: GameWo
           <p><span>Carros atuais</span><strong>{selected.traffic.cars}</strong></p>
           <p><span>Congestionamento</span><strong>{Math.round(selected.traffic.congestion * 100)}%</strong></p>
           <p><span>Velocidade base</span><strong>{ROAD_CONFIG[selected.roadType].speed}x</strong></p>
+          {selected.trafficLight && (
+            <>
+              <p><span>Semáforo</span><strong>{trafficLightPhaseLabel[selected.trafficLight.phase]}</strong></p>
+              <p><span>Faixa liberada</span><strong>{getTrafficLightOpenAxis(selected.trafficLight) === 'horizontal' ? 'Horizontal' : 'Vertical'}</strong></p>
+              <p><span>Tempo fase</span><strong>{selected.trafficLight.timer.toFixed(1)}s</strong></p>
+            </>
+          )}
         </div>
       )}
 

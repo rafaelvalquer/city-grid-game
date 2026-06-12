@@ -1,5 +1,6 @@
 import { nanoid } from 'nanoid';
 import type { Building, CityStats, RoadType, SelectedEntity, Tile, TrafficCell, Vec2 } from '../../types/city.types';
+import type { TrafficLightState } from '../../types/city.types';
 import type { Car } from '../../types/agent.types';
 import type { Tool } from '../../types/game.types';
 import { GAME_CONFIG } from '../config/gameConfig';
@@ -9,6 +10,7 @@ import { CityGenerator } from '../city/cityGenerator';
 import { updateBuildingConnection } from '../city/buildings';
 import { findFastestPath } from '../pathfinding/pathfinder';
 import { buildIntersectionControls, computeTrafficDecision, getDirection, getLaneOffset, isIntersection } from '../systems/trafficRules';
+import { createTrafficLight, getTrafficLightKey, TRAFFIC_LIGHT_BUILD_COST, updateTrafficLight } from '../systems/trafficLights';
 import { TimeSystem } from './timeSystem';
 import { chooseTrip } from '../agents/tripGenerator';
 
@@ -17,6 +19,7 @@ export class GameWorld {
   buildings: Building[] = [];
   cars: Car[] = [];
   traffic = new Map<string, TrafficCell>();
+  trafficLights = new Map<string, TrafficLightState>();
   selected: SelectedEntity = { kind: 'none' };
   money = GAME_CONFIG.initialMoney;
   satisfaction = 100;
@@ -86,6 +89,7 @@ export class GameWorld {
     if (paused || speed === 0) return;
     const dt = Math.min(0.08, deltaSeconds) * speed;
     this.time.update(dt);
+    this.updateTrafficLights(dt);
     this.buildingTimer += dt;
     this.tripTimer += dt;
     this.economyTimer += dt;
@@ -114,6 +118,20 @@ export class GameWorld {
   buildAt(x: number, y: number, tool: Tool): boolean {
     if (!inBounds(x, y)) return false;
     const tile = this.grid[y][x];
+
+    if (tool === 'trafficLight') {
+      if (!isRoadType(tile.type)) return false;
+      if (!isIntersection(this.grid, { x, y })) return false;
+      const key = getTrafficLightKey(x, y);
+      if (this.trafficLights.has(key)) return false;
+      if (this.money < TRAFFIC_LIGHT_BUILD_COST) return false;
+      this.trafficLights.set(key, createTrafficLight(x, y, this.trafficLights.size));
+      this.money -= TRAFFIC_LIGHT_BUILD_COST;
+      this.inspectAt(x, y);
+      this.emit();
+      return true;
+    }
+
     if (tool === 'road' || tool === 'avenue') {
       if (tile.type === 'building') return false;
       const cost = ROAD_CONFIG[tool].buildCost;
@@ -125,17 +143,20 @@ export class GameWorld {
       this.emit();
       return true;
     }
+
     if (tool === 'remove') {
       if (!isRoadType(tile.type)) return false;
       const roadType = tile.type as RoadType;
       const cost = ROAD_CONFIG[roadType].removeCost;
       if (this.money < cost) return false;
       this.grid[y][x] = { x, y, type: 'empty' };
+      this.trafficLights.delete(getTrafficLightKey(x, y));
       this.money -= cost;
       this.updateConnections();
       this.emit();
       return true;
     }
+
     return false;
   }
 
@@ -147,7 +168,7 @@ export class GameWorld {
       if (building) this.selected = { kind: 'building', building };
     } else if (isRoadType(tile.type)) {
       const t = this.traffic.get(keyOf(x, y)) ?? { x, y, cars: 0, capacity: ROAD_CONFIG[tile.type as RoadType].capacity, congestion: 0 };
-      this.selected = { kind: 'road', x, y, roadType: tile.type as RoadType, traffic: t };
+      this.selected = { kind: 'road', x, y, roadType: tile.type as RoadType, traffic: t, trafficLight: this.trafficLights.get(getTrafficLightKey(x, y)) };
     } else {
       this.selected = { kind: 'tile', x, y, type: tile.type };
     }
@@ -170,6 +191,19 @@ export class GameWorld {
 
   private updateConnections(): void {
     this.buildings = this.buildings.map((b) => updateBuildingConnection(b, this.grid));
+  }
+
+  private updateTrafficLights(dt: number): void {
+    if (!this.trafficLights.size) return;
+    for (const [key, light] of this.trafficLights) {
+      this.trafficLights.set(key, updateTrafficLight(light, dt));
+    }
+    if (this.selected.kind === 'road') {
+      const selectedKey = getTrafficLightKey(this.selected.x, this.selected.y);
+      if (this.trafficLights.has(selectedKey)) {
+        this.selected = { ...this.selected, trafficLight: this.trafficLights.get(selectedKey) };
+      }
+    }
   }
 
   private updateTrafficMap(): void {
@@ -272,7 +306,7 @@ export class GameWorld {
       car.travelTime += dt;
       const traffic = this.traffic.get(keyOf(car.currentTileX, car.currentTileY));
       const congestion = traffic?.congestion ?? 0;
-      const decision = computeTrafficDecision(this.grid, car, this.cars, intersectionControls, congestion);
+      const decision = computeTrafficDecision(this.grid, car, this.cars, intersectionControls, this.trafficLights, congestion);
       car.desiredSpeed = decision.desiredSpeed;
       car.targetSpeed = decision.targetSpeed;
       car.laneOffset = decision.laneOffset;
