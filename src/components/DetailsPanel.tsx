@@ -1,0 +1,78 @@
+import { BarChart3, Building2, Car, CircleDot, MapPin, Route, X } from 'lucide-react';
+import { GameWorld } from '../game/engine/simulation';
+import { useGameStore } from '../store/gameStore';
+import { BUILDING_CONFIG } from '../game/config/buildingConfig';
+import { ROAD_CONFIG } from '../game/config/roadConfig';
+
+const trafficStateLabel = {
+  moving: 'Movendo',
+  queued: 'Em fila',
+  intersection: 'Aguardando cruzamento',
+  turning: 'Reduzindo na curva',
+} as const;
+
+export function DetailsPanel({ world, className = '', onClose }: { world: GameWorld; className?: string; onClose?: () => void }) {
+  const selected = useGameStore((s) => s.selected);
+  const car = selected.kind === 'car' ? world.getCar(selected.carId) : undefined;
+
+  return (
+    <aside className={`details-panel ${className}`}>
+      <div className="panel-heading">
+        <span className="heading-icon"><BarChart3 size={16} /></span>
+        <h2>Detalhes</h2>
+        <button className="panel-close" aria-label="Fechar detalhes" onClick={onClose}><X size={17} /></button>
+      </div>
+      {selected.kind === 'none' && <p className="muted">Selecione uma rua, prédio ou carro.</p>}
+
+      {selected.kind === 'tile' && (
+        <div className="detail-card">
+          <h3><CircleDot size={15} /> Tile vazio</h3>
+          <p><span>Coordenada</span><strong>{selected.x}, {selected.y}</strong></p>
+          <p className="muted">Use Rua ou Avenida para conectar prédios.</p>
+        </div>
+      )}
+
+      {selected.kind === 'building' && (
+        <div className="detail-card">
+          <h3><Building2 size={15} /> {BUILDING_CONFIG[selected.building.type].label}</h3>
+          <p><span>Status</span><strong className={selected.building.connected ? 'good' : 'bad'}>{selected.building.connected ? 'Conectado' : 'Desconectado'}</strong></p>
+          <p><span>População</span><strong>{selected.building.population}</strong></p>
+          <p><span>Empregos</span><strong>{selected.building.jobs}</strong></p>
+          <p><span>Atração</span><strong>{selected.building.attraction}</strong></p>
+          <p><span>Viagens hoje</span><strong>{selected.building.tripsToday}</strong></p>
+          <p><span>Posição</span><strong>{selected.building.x}, {selected.building.y}</strong></p>
+        </div>
+      )}
+
+      {selected.kind === 'road' && (
+        <div className="detail-card">
+          <h3><Route size={15} /> {ROAD_CONFIG[selected.roadType].label}</h3>
+          <p><span>Posição</span><strong>{selected.x}, {selected.y}</strong></p>
+          <p><span>Capacidade</span><strong>{selected.traffic.capacity}</strong></p>
+          <p><span>Carros atuais</span><strong>{selected.traffic.cars}</strong></p>
+          <p><span>Congestionamento</span><strong>{Math.round(selected.traffic.congestion * 100)}%</strong></p>
+          <p><span>Velocidade base</span><strong>{ROAD_CONFIG[selected.roadType].speed}x</strong></p>
+        </div>
+      )}
+
+      {selected.kind === 'car' && car && (
+        <div className="detail-card">
+          <h3><Car size={15} /> Carro #{car.id}</h3>
+          <p><span>Status</span><strong>{trafficStateLabel[car.trafficState]}</strong></p>
+          <p><span>Origem</span><strong>{world.getBuilding(car.originBuildingId)?.type ?? '-'}</strong></p>
+          <p><span>Destino</span><strong>{world.getBuilding(car.destinationBuildingId)?.type ?? '-'}</strong></p>
+          <p><span>Tempo viagem</span><strong>{Math.round(car.travelTime)}s</strong></p>
+          <p><span>Atraso</span><strong>{Math.round(car.delay)}s</strong></p>
+          <p><span>Velocidade alvo</span><strong>{car.desiredSpeed.toFixed(1)}x</strong></p>
+          <p><span>Faixa</span><strong>{car.laneIndex + 1}</strong></p>
+          <p><span>Rota</span><strong>{car.route.length} tiles</strong></p>
+        </div>
+      )}
+
+      <div className="detail-card muted-card">
+        <h3><MapPin size={15} /> Objetivo sandbox</h3>
+        <p>Mantenha a satisfação alta, conecte novos prédios e crie rotas alternativas para evitar colapso urbano.</p>
+      </div>
+    </aside>
+  );
+}

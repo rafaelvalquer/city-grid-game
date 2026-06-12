@@ -1,0 +1,38 @@
+import type { Vec2 } from './city.types';
+
+export type CarStatus = 'moving' | 'stopped' | 'arrived' | 'no_route';
+export type TrafficState = 'moving' | 'queued' | 'intersection' | 'turning';
+export type TravelDirection = 'north' | 'south' | 'east' | 'west';
+
+export type Car = {
+  id: string;
+  originBuildingId: string;
+  destinationBuildingId: string;
+  x: number;
+  y: number;
+  currentTileX: number;
+  currentTileY: number;
+  route: Vec2[];
+  routeIndex: number;
+  progressToNext: number;
+  baseSpeed: number;
+  currentSpeed: number;
+  targetSpeed: number;
+  acceleration: number;
+  braking: number;
+  desiredSpeed: number;
+  laneOffset: Vec2;
+  laneIndex: number;
+  laneCount: number;
+  laneSide: -1 | 1;
+  waitTimer: number;
+  intersectionStopKey?: string;
+  turnSlowdown: number;
+  blockedByCarId?: string;
+  trafficState: TrafficState;
+  direction: TravelDirection;
+  status: CarStatus;
+  travelTime: number;
+  estimatedTime: number;
+  delay: number;
+};
