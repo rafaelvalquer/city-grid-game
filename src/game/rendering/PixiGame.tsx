@@ -17,7 +17,7 @@ type ActionPreview = HoverPreview & {
   successMessage: string;
 };
 
-type LotDecor = 'trees' | 'park' | 'parking' | 'garden' | 'plain';
+type LotDecor = 'trees' | 'park' | 'parking' | 'garden' | 'plaza' | 'plain';
 
 type CarRenderPose = {
   x: number;
@@ -215,6 +215,7 @@ function draw(
   scale: number,
 ): void {
   const ts = GAME_CONFIG.tileSize;
+  const timeSeconds = performance.now() / 1000;
   graphics.clear();
   labels.removeChildren();
   graphics.position.set(camX, camY);
@@ -239,7 +240,7 @@ function draw(
     }
   }
 
-  drawTrafficLights(graphics, world, ts);
+  drawTrafficLights(graphics, world, ts, timeSeconds);
 
   drawHeatmapMode(graphics, world, heatmapMode, ts);
 
@@ -257,10 +258,10 @@ function draw(
   }
 
   for (const car of world.cars) {
-    drawCar(graphics, car, world, ts);
+    drawCar(graphics, car, world, ts, timeSeconds);
   }
 
-  if (hoverPreview) drawConstructionPreview(graphics, world, hoverPreview, ts);
+  if (hoverPreview) drawConstructionPreview(graphics, world, hoverPreview, ts, timeSeconds);
   if (world.selected.kind === 'tile') drawSelection(graphics, world.selected.x, world.selected.y, ts);
   if (world.selected.kind === 'road') drawSelection(graphics, world.selected.x, world.selected.y, ts);
   if (world.selected.kind === 'building') drawSelection(graphics, world.selected.building.x, world.selected.building.y, ts);
@@ -278,10 +279,12 @@ function drawSelection(graphics: Graphics, x: number, y: number, ts: number): vo
 }
 
 function drawBaseTile(graphics: Graphics, tile: Tile, x: number, y: number, ts: number): void {
-  const base = (x + y) % 2 === 0 ? MAP_COLORS.block : MAP_COLORS.blockAlt;
+  const tone = hash2(x, y, 3) % 7;
+  const base = tone === 0 ? MAP_COLORS.blockWarm : (x + y) % 2 === 0 ? MAP_COLORS.block : MAP_COLORS.blockAlt;
   graphics.rect(x * ts, y * ts, ts, ts).fill(base).stroke({ width: 1, color: MAP_COLORS.grid, alpha: 0.28 });
   if (tile.type === 'empty') {
-    graphics.roundRect(x * ts + 5, y * ts + 5, ts - 10, ts - 10, 6).stroke({ width: 1, color: MAP_COLORS.lotStroke, alpha: 0.22 });
+    const inset = 5 + (hash2(x, y, 5) % 2);
+    graphics.roundRect(x * ts + inset, y * ts + inset, ts - inset * 2, ts - inset * 2, 6).stroke({ width: 1, color: MAP_COLORS.lotStroke, alpha: 0.18 + (tone % 3) * 0.035 });
   }
 }
 
@@ -306,6 +309,15 @@ function drawLotDecoration(graphics: Graphics, x: number, y: number, ts: number)
     return;
   }
 
+  if (decor === 'plaza') {
+    graphics.roundRect(px + 8, py + 8, ts - 16, ts - 16, 5).fill({ color: MAP_COLORS.plaza, alpha: 0.5 });
+    graphics.rect(px + 13, py + 13, ts - 26, 1).fill({ color: MAP_COLORS.parkingLine, alpha: 0.34 });
+    graphics.rect(px + 13, py + ts - 14, ts - 26, 1).fill({ color: MAP_COLORS.parkingLine, alpha: 0.34 });
+    graphics.circle(px + ts / 2, py + ts / 2, 3).fill({ color: MAP_COLORS.garden, alpha: 0.76 });
+    drawTree(graphics, px + 12, py + 27, 3.2);
+    return;
+  }
+
   if (decor === 'parking') {
     graphics.roundRect(px + 7, py + 8, ts - 14, ts - 15, 4).fill({ color: MAP_COLORS.parking, alpha: 0.34 });
     for (let i = 0; i < 3; i += 1) {
@@ -323,6 +335,7 @@ function drawLotDecoration(graphics: Graphics, x: number, y: number, ts: number)
 
 function drawTree(graphics: Graphics, x: number, y: number, radius: number): void {
   graphics.circle(x + 3, y + 4, radius).fill({ color: MAP_COLORS.shadow, alpha: 0.18 });
+  graphics.circle(x + radius * 0.15, y + radius * 0.15, radius * 0.88).fill(MAP_COLORS.treeDark);
   graphics.circle(x, y, radius).fill(MAP_COLORS.tree);
   graphics.circle(x - radius * 0.45, y + radius * 0.15, radius * 0.55).fill(MAP_COLORS.treeLight);
 }
@@ -332,7 +345,8 @@ function lotDecorAt(x: number, y: number): LotDecor {
   if (value < 10) return 'park';
   if (value < 23) return 'trees';
   if (value < 31) return 'parking';
-  if (value < 42) return 'garden';
+  if (value < 38) return 'plaza';
+  if (value < 49) return 'garden';
   return 'plain';
 }
 
@@ -349,8 +363,14 @@ function drawRoad(graphics: Graphics, grid: Tile[][], x: number, y: number, ts: 
   const center = ts / 2;
   const neighbors = roadNeighbors(grid, x, y);
 
+  drawRoadConnectors(graphics, px + 2, py + 3, ts, halfWalk, MAP_COLORS.curbShadow, neighbors);
+  graphics.circle(px + center + 2, py + center + 3, halfWalk).fill(MAP_COLORS.curbShadow);
+
   drawRoadConnectors(graphics, px, py, ts, halfWalk, MAP_COLORS.sidewalk, neighbors);
   graphics.circle(px + center, py + center, halfWalk).fill(MAP_COLORS.sidewalk);
+
+  drawRoadConnectors(graphics, px + 1, py + 2, ts, halfRoad, MAP_COLORS.shadow, neighbors);
+  graphics.circle(px + center + 1, py + center + 2, halfRoad).fill({ color: MAP_COLORS.shadow, alpha: 0.24 });
 
   drawRoadConnectors(graphics, px, py, ts, halfRoad, roadColor, neighbors);
   graphics.circle(px + center, py + center, halfRoad).fill(roadColor).stroke({ color: edgeColor, width: 1, alpha: 0.75 });
@@ -410,31 +430,37 @@ function drawTurnArrow(graphics: Graphics, x: number, y: number, angle: number):
   graphics.poly(points).fill({ color: MAP_COLORS.laneSoft, alpha: 0.62 });
 }
 
-function drawTrafficLights(graphics: Graphics, world: GameWorld, ts: number): void {
+function drawTrafficLights(graphics: Graphics, world: GameWorld, ts: number, timeSeconds: number): void {
   for (const light of world.trafficLights.values()) {
-    drawTrafficLight(graphics, light, ts);
+    drawTrafficLight(graphics, light, ts, timeSeconds);
   }
 }
 
-function drawTrafficLight(graphics: Graphics, light: TrafficLightState, ts: number): void {
+function drawTrafficLight(graphics: Graphics, light: TrafficLightState, ts: number, timeSeconds: number): void {
   const px = light.x * ts;
   const py = light.y * ts;
   const center = ts / 2;
   const startupBlink = light.startupSeconds > 0 && Math.floor(light.startupSeconds * 3) % 2 === 0;
   const horizontalColor = startupBlink ? SIGNAL_OFF : signalColor(getTrafficLightSignal(light, 'east'));
   const verticalColor = startupBlink ? SIGNAL_OFF : signalColor(getTrafficLightSignal(light, 'north'));
+  const phase = (light.x * 0.17) + (light.y * 0.11);
 
   graphics.circle(px + center, py + center, 6).fill({ color: MAP_COLORS.shadow, alpha: 0.48 });
 
-  drawSignalDot(graphics, px + center - 13, py + 7, verticalColor);
-  drawSignalDot(graphics, px + center + 13, py + ts - 7, verticalColor);
-  drawSignalDot(graphics, px + 7, py + center + 13, horizontalColor);
-  drawSignalDot(graphics, px + ts - 7, py + center - 13, horizontalColor);
+  drawSignalDot(graphics, px + center - 13, py + 7, verticalColor, timeSeconds, phase);
+  drawSignalDot(graphics, px + center + 13, py + ts - 7, verticalColor, timeSeconds, phase + 0.13);
+  drawSignalDot(graphics, px + 7, py + center + 13, horizontalColor, timeSeconds, phase + 0.27);
+  drawSignalDot(graphics, px + ts - 7, py + center - 13, horizontalColor, timeSeconds, phase + 0.41);
 }
 
-function drawSignalDot(graphics: Graphics, x: number, y: number, color: number): void {
+function drawSignalDot(graphics: Graphics, x: number, y: number, color: number, timeSeconds: number, phase = 0): void {
+  const active = color !== SIGNAL_OFF;
+  if (active) {
+    const glow = pulse(timeSeconds, 0.9, phase);
+    graphics.circle(x, y, 6.8 + glow * 1.7).fill({ color, alpha: 0.08 + glow * 0.09 });
+  }
   graphics.circle(x, y, 5).fill(SIGNAL_OFF).stroke({ color: MAP_COLORS.laneSoft, width: 1, alpha: 0.65 });
-  graphics.circle(x, y, 3.2).fill(color);
+  graphics.circle(x, y, 3.2).fill({ color, alpha: active ? 0.82 + pulse(timeSeconds, 0.7, phase + 0.3) * 0.18 : 1 });
 }
 
 function signalColor(signal: 'green' | 'yellow' | 'red'): number {
@@ -503,36 +529,47 @@ function drawBuildingVariant(graphics: Graphics, building: Building, ts: number)
   const px = x * ts;
   const py = y * ts;
   const variant = hash2(x, y, type.length);
-  const activity = Math.min(1, (building.population + building.jobs + building.attraction) / 14);
-  graphics.roundRect(px + 6, py + 7, ts - 8, ts - 7, 4).fill({ color: MAP_COLORS.shadow, alpha: 0.28 });
+  const activity = Math.min(1, (building.population + building.jobs + building.attraction) / 16);
+  const growth = activity > 0.72 ? 2 : activity > 0.38 ? 1 : 0;
+  graphics.roundRect(px + 7, py + 8, ts - 7, ts - 7, 5).fill({ color: MAP_COLORS.buildingShadow, alpha: 0.22 + activity * 0.16 });
   if (type === 'house') {
     const roofShift = variant % 2 === 0 ? 0 : 3;
-    graphics.poly([px + 5, py + 13, px + ts / 2 + roofShift, py + 4, px + ts - 5, py + 13]).fill(MAP_COLORS.houseRoof);
-    graphics.roundRect(px + 6, py + 12, ts - 12, ts - 16, 3).fill(MAP_COLORS.house);
-    graphics.rect(px + 12, py + 20, 5, 6).fill({ color: MAP_COLORS.carWindow, alpha: 0.4 + activity * 0.35 });
-    graphics.rect(px + 23, py + 18, 5, 4).fill({ color: MAP_COLORS.laneSoft, alpha: 0.35 + activity * 0.42 });
+    const bodyInset = growth === 2 ? 4 : 6;
+    const roofTop = growth === 2 ? py + 2 : py + 4;
+    graphics.poly([px + bodyInset - 1, py + 14, px + ts / 2 + roofShift, roofTop, px + ts - bodyInset + 1, py + 14]).fill(MAP_COLORS.houseRoof);
+    graphics.poly([px + ts - bodyInset + 1, py + 14, px + ts / 2 + roofShift, roofTop, px + ts / 2 + roofShift + 5, py + 15]).fill({ color: MAP_COLORS.shadow, alpha: 0.16 });
+    graphics.roundRect(px + bodyInset, py + 13, ts - bodyInset * 2, ts - 16 + growth, 3).fill(MAP_COLORS.house);
+    graphics.rect(px + bodyInset + 6, py + 21, 5, 7).fill({ color: MAP_COLORS.carWindow, alpha: 0.42 + activity * 0.34 });
+    graphics.rect(px + ts - bodyInset - 11, py + 18, 6, 5).fill({ color: MAP_COLORS.laneSoft, alpha: 0.34 + activity * 0.42 });
+    if (growth > 0) graphics.rect(px + ts / 2 - 4, py + 25, 8, 7).fill({ color: MAP_COLORS.houseTrim, alpha: 0.72 });
   } else if (type === 'shop') {
-    graphics.roundRect(px + 5, py + 7, ts - 10, ts - 10, 3).fill(MAP_COLORS.shop);
+    const heightBoost = growth * 2;
+    graphics.roundRect(px + 5, py + 6 - heightBoost, ts - 10, ts - 10 + heightBoost, 3).fill(MAP_COLORS.shop);
+    graphics.rect(px + 7, py + 8 - heightBoost, ts - 14, 4).fill(MAP_COLORS.shopSign);
     for (let i = 0; i < 4; i += 1) {
-      graphics.rect(px + 6 + i * 7, py + 8, 5, 4).fill(i % 2 === 0 ? MAP_COLORS.shopAwning : MAP_COLORS.laneSoft);
+      graphics.rect(px + 6 + i * 7, py + 12 - heightBoost, 5, 4).fill(i % 2 === 0 ? MAP_COLORS.shopAwning : MAP_COLORS.laneSoft);
     }
-    graphics.rect(px + 9, py + 16, ts - 18, 5).fill({ color: MAP_COLORS.officeGlass, alpha: 0.35 + activity * 0.38 });
-    graphics.rect(px + 16, py + 25, 8, 7).fill({ color: MAP_COLORS.shadow, alpha: 0.2 });
+    graphics.rect(px + 9, py + 18, ts - 18, 6).fill({ color: MAP_COLORS.shopGlass, alpha: 0.4 + activity * 0.35 });
+    graphics.rect(px + 16, py + 26, 8, 7).fill({ color: MAP_COLORS.shadow, alpha: 0.22 });
+    if (growth === 2) graphics.rect(px + 10, py + 28, ts - 20, 2).fill({ color: MAP_COLORS.shopAwning, alpha: 0.78 });
   } else {
-    const floors = 3 + (variant % 2);
-    graphics.roundRect(px + 5, py + 4, ts - 10, ts - 7, 3).fill(MAP_COLORS.office);
-    graphics.rect(px + ts - 11, py + 8, 4, ts - 16).fill({ color: MAP_COLORS.shadow, alpha: 0.16 });
+    const floors = 3 + (variant % 2) + growth;
+    const top = py + 6 - growth * 2;
+    const height = ts - 9 + growth * 2;
+    graphics.roundRect(px + 5, top, ts - 10, height, 3).fill(MAP_COLORS.office);
+    graphics.rect(px + ts - 11, top + 4, 4, height - 8).fill({ color: MAP_COLORS.officeDark, alpha: 0.38 });
     for (let row = 0; row < floors; row += 1) {
-      const yy = py + 7 + row * 5;
+      const yy = top + 4 + row * 5;
       graphics.rect(px + 8, yy, 3, 2).fill({ color: MAP_COLORS.officeGlass, alpha: 0.55 + activity * 0.35 });
       graphics.rect(px + 14, yy, 3, 2).fill({ color: MAP_COLORS.officeGlass, alpha: 0.55 + activity * 0.35 });
       graphics.rect(px + 22, yy, 3, 2).fill({ color: MAP_COLORS.officeGlass, alpha: 0.45 + activity * 0.3 });
     }
+    graphics.rect(px + 7, py + ts - 8, ts - 14, 2).fill({ color: MAP_COLORS.officeDark, alpha: 0.5 });
   }
   graphics.roundRect(px + 4, py + 4, ts - 8, ts - 8, 4).stroke({ color: connected ? MAP_COLORS.lotStroke : MAP_COLORS.disconnected, width: connected ? 1 : 3, alpha: connected ? 0.8 : 1 });
 }
 
-function drawCar(graphics: Graphics, car: Car, world: GameWorld, ts: number): void {
+function drawCar(graphics: Graphics, car: Car, world: GameWorld, ts: number, timeSeconds: number): void {
   const pose = getCarRenderPose(car, world.grid);
   const cx = pose.x * ts + ts / 2;
   const cy = pose.y * ts + ts / 2;
@@ -543,13 +580,17 @@ function drawCar(graphics: Graphics, car: Car, world: GameWorld, ts: number): vo
     : car.trafficState === 'queued'
       ? blendCarStateColor(carDestinationColor(world, car), MAP_COLORS.carAltA)
       : carDestinationColor(world, car);
+  if (car.trafficState === 'queued' || car.trafficState === 'intersection') {
+    const halo = car.trafficState === 'queued' ? MAP_COLORS.carTail : MAP_COLORS.lane;
+    graphics.circle(cx, cy, 7.5).fill({ color: halo, alpha: car.trafficState === 'queued' ? 0.16 : 0.2 });
+  }
   drawCapsule(graphics, cx + 3, cy + 4, length, width, pose.angle, MAP_COLORS.shadow, 0.28);
   drawCapsule(graphics, cx, cy, length, width, pose.angle, color, 1, MAP_COLORS.roadEdge);
   drawRotatedRect(graphics, cx + Math.cos(pose.angle) * 1.8, cy + Math.sin(pose.angle) * 1.8, 4.2, 3.2, pose.angle, MAP_COLORS.carWindow, 0.88);
-  drawCarLights(graphics, cx, cy, length, width, pose.angle);
+  drawCarLights(graphics, car, cx, cy, length, width, pose.angle, timeSeconds);
 }
 
-function drawCarLights(graphics: Graphics, cx: number, cy: number, length: number, width: number, angle: number): void {
+function drawCarLights(graphics: Graphics, car: Car, cx: number, cy: number, length: number, width: number, angle: number, timeSeconds: number): void {
   const dx = Math.cos(angle);
   const dy = Math.sin(angle);
   const px = -dy;
@@ -558,10 +599,15 @@ function drawCarLights(graphics: Graphics, cx: number, cy: number, length: numbe
   const frontY = cy + dy * (length / 2 - 1.2);
   const backX = cx - dx * (length / 2 - 1.5);
   const backY = cy - dy * (length / 2 - 1.5);
-  graphics.circle(frontX + px * (width * 0.22), frontY + py * (width * 0.22), 1.15).fill(MAP_COLORS.carLight);
-  graphics.circle(frontX - px * (width * 0.22), frontY - py * (width * 0.22), 1.15).fill(MAP_COLORS.carLight);
-  graphics.circle(backX + px * (width * 0.2), backY + py * (width * 0.2), 0.95).fill(MAP_COLORS.carTail);
-  graphics.circle(backX - px * (width * 0.2), backY - py * (width * 0.2), 0.95).fill(MAP_COLORS.carTail);
+  const queuedPulse = car.trafficState === 'queued' ? pulse(timeSeconds, 1.15, idPhase(car.id)) : 1;
+  const lightAlpha = car.trafficState === 'queued' ? 0.55 + queuedPulse * 0.45 : 0.88;
+  const tailAlpha = car.trafficState === 'queued' ? 0.5 + queuedPulse * 0.5 : 0.86;
+  const lightRadius = car.trafficState === 'queued' ? 1.05 + queuedPulse * 0.45 : 1.15;
+  const tailRadius = car.trafficState === 'queued' ? 0.85 + queuedPulse * 0.3 : 0.95;
+  graphics.circle(frontX + px * (width * 0.22), frontY + py * (width * 0.22), lightRadius).fill({ color: MAP_COLORS.carLight, alpha: lightAlpha });
+  graphics.circle(frontX - px * (width * 0.22), frontY - py * (width * 0.22), lightRadius).fill({ color: MAP_COLORS.carLight, alpha: lightAlpha });
+  graphics.circle(backX + px * (width * 0.2), backY + py * (width * 0.2), tailRadius).fill({ color: MAP_COLORS.carTail, alpha: tailAlpha });
+  graphics.circle(backX - px * (width * 0.2), backY - py * (width * 0.2), tailRadius).fill({ color: MAP_COLORS.carTail, alpha: tailAlpha });
 }
 
 function carDestinationColor(world: GameWorld, car: Car): number {
@@ -780,21 +826,36 @@ function hash2(x: number, y: number, salt = 0): number {
   return value;
 }
 
-function drawConstructionPreview(graphics: Graphics, world: GameWorld, preview: HoverPreview, ts: number): void {
+function pulse(timeSeconds: number, speed: number, phase = 0): number {
+  return (Math.sin((timeSeconds * speed + phase) * Math.PI * 2) + 1) / 2;
+}
+
+function idPhase(id: string): number {
+  let total = 0;
+  for (let i = 0; i < id.length; i += 1) total += id.charCodeAt(i) * (i + 1);
+  return (total % 997) / 997;
+}
+
+function drawConstructionPreview(graphics: Graphics, world: GameWorld, preview: HoverPreview, ts: number, timeSeconds: number): void {
   const { x, y, valid, tool } = preview;
   if (!inBounds(x, y)) return;
   const color = valid ? MAP_COLORS.previewValid : MAP_COLORS.previewInvalid;
   const px = x * ts;
   const py = y * ts;
-  graphics.roundRect(px + 2, py + 2, ts - 4, ts - 4, 5).fill({ color, alpha: valid ? 0.13 : 0.2 }).stroke({ color, width: 2, alpha: 0.94 });
-  graphics.roundRect(px + 7, py + 7, ts - 14, ts - 14, 5).stroke({ color, width: 1, alpha: valid ? 0.52 : 0.72 });
+  const previewPulse = pulse(timeSeconds, valid ? 1.2 : 1.75, x * 0.19 + y * 0.13);
+  const outerInset = 2 - previewPulse * 1.2;
+  graphics.roundRect(px + outerInset, py + outerInset, ts - outerInset * 2, ts - outerInset * 2, 5)
+    .fill({ color, alpha: valid ? 0.1 + previewPulse * 0.07 : 0.16 + previewPulse * 0.06 })
+    .stroke({ color, width: 1.6 + previewPulse * 1.1, alpha: valid ? 0.68 + previewPulse * 0.28 : 0.76 + previewPulse * 0.2 });
+  graphics.roundRect(px + 7, py + 7, ts - 14, ts - 14, 5).stroke({ color, width: 1, alpha: valid ? 0.4 + previewPulse * 0.25 : 0.56 + previewPulse * 0.22 });
 
   if (tool === 'road' || tool === 'avenue') {
     const roadW = tool === 'avenue' ? 30 : 21;
-    graphics.roundRect(px + ts / 2 - roadW / 2, py + 5, roadW, ts - 10, 6).fill({ color: valid ? MAP_COLORS.road : MAP_COLORS.previewInvalid, alpha: valid ? 0.44 : 0.26 });
-    graphics.roundRect(px + 5, py + ts / 2 - roadW / 2, ts - 10, roadW, 6).fill({ color: valid ? MAP_COLORS.road : MAP_COLORS.previewInvalid, alpha: valid ? 0.2 : 0.14 });
+    graphics.roundRect(px + ts / 2 - roadW / 2, py + 5, roadW, ts - 10, 6).fill({ color: valid ? MAP_COLORS.road : MAP_COLORS.previewInvalid, alpha: valid ? 0.38 + previewPulse * 0.1 : 0.22 + previewPulse * 0.06 });
+    graphics.roundRect(px + 5, py + ts / 2 - roadW / 2, ts - 10, roadW, 6).fill({ color: valid ? MAP_COLORS.road : MAP_COLORS.previewInvalid, alpha: valid ? 0.16 + previewPulse * 0.07 : 0.1 + previewPulse * 0.05 });
   } else if (tool === 'trafficLight') {
-    graphics.circle(px + ts / 2, py + ts / 2, 7).fill({ color: valid ? SIGNAL_GREEN : SIGNAL_RED, alpha: 0.78 });
+    graphics.circle(px + ts / 2, py + ts / 2, 8.5 + previewPulse * 1.6).fill({ color, alpha: 0.1 + previewPulse * 0.1 });
+    graphics.circle(px + ts / 2, py + ts / 2, 7).fill({ color: valid ? SIGNAL_GREEN : SIGNAL_RED, alpha: 0.68 + previewPulse * 0.18 });
     graphics.circle(px + ts / 2, py + ts / 2, 3).fill(SIGNAL_OFF);
   } else if (tool === 'remove') {
     graphics.moveTo(px + 10, py + 10).lineTo(px + ts - 10, py + ts - 10).stroke({ color, width: 3, alpha: 0.85 });
