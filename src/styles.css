@@ -415,6 +415,68 @@ h3 {
   background: #0c1625;
 }
 
+.traffic-chart-card {
+  overflow: hidden;
+}
+
+.traffic-chart {
+  display: block;
+  width: 100%;
+  height: 96px;
+  margin-top: 6px;
+  border: 1px solid rgba(150, 167, 189, 0.16);
+  border-radius: 8px;
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+    #0b1524;
+  background-size: 100% 22px, 40px 100%;
+}
+
+.chart-area {
+  fill: rgba(244, 197, 66, 0.16);
+  stroke: none;
+}
+
+.chart-line {
+  fill: none;
+  stroke-width: 2.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chart-line.cars {
+  stroke: var(--accent);
+}
+
+.chart-line.waiting {
+  stroke: var(--bad);
+}
+
+.chart-legend {
+  display: grid;
+  gap: 5px;
+  margin-top: 9px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.chart-legend span {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.chart-legend i {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+}
+
+.chart-legend .cars { background: var(--accent); }
+.chart-legend .waiting { background: var(--bad); }
+.chart-legend .congestion { background: var(--warn); }
+
 .good { color: var(--good) !important; }
 .bad { color: var(--bad) !important; }
 

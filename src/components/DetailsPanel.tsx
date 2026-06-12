@@ -3,6 +3,7 @@ import { GameWorld } from '../game/engine/simulation';
 import { useGameStore } from '../store/gameStore';
 import { BUILDING_CONFIG } from '../game/config/buildingConfig';
 import { ROAD_CONFIG } from '../game/config/roadConfig';
+import { TrafficChart } from './TrafficChart';
 
 const trafficStateLabel = {
   moving: 'Movendo',
@@ -23,6 +24,8 @@ export function DetailsPanel({ world, className = '', onClose }: { world: GameWo
         <button className="panel-close" aria-label="Fechar detalhes" onClick={onClose}><X size={17} /></button>
       </div>
       {selected.kind === 'none' && <p className="muted">Selecione uma rua, prédio ou carro.</p>}
+
+      <TrafficChart world={world} />
 
       {selected.kind === 'tile' && (
         <div className="detail-card">
@@ -63,8 +66,18 @@ export function DetailsPanel({ world, className = '', onClose }: { world: GameWo
           <p><span>Destino</span><strong>{world.getBuilding(car.destinationBuildingId)?.type ?? '-'}</strong></p>
           <p><span>Tempo viagem</span><strong>{Math.round(car.travelTime)}s</strong></p>
           <p><span>Atraso</span><strong>{Math.round(car.delay)}s</strong></p>
-          <p><span>Velocidade alvo</span><strong>{car.desiredSpeed.toFixed(1)}x</strong></p>
-          <p><span>Faixa</span><strong>{car.laneIndex + 1}</strong></p>
+          <p><span>Velocidade atual</span><strong>{car.currentSpeed.toFixed(1)} tiles/s</strong></p>
+          <p><span>Velocidade alvo</span><strong>{car.targetSpeed.toFixed(1)} tiles/s</strong></p>
+          <p><span>Faixa</span><strong>{car.laneIndex + 1}/{Math.max(1, car.laneCount / 2)}</strong></p>
+          {car.intersectionWaitSeconds > 0 && (
+            <p><span>Espera cruzamento</span><strong>{car.intersectionWaitSeconds.toFixed(1)}s</strong></p>
+          )}
+          {car.intersectionQueuePosition && (
+            <p><span>Fila cruzamento</span><strong>{car.intersectionQueuePosition}/{car.intersectionQueueLength ?? car.intersectionQueuePosition}</strong></p>
+          )}
+          {car.gridlockEscapeSeconds > 0 && (
+            <p><span>Anti-travamento</span><strong>Prioridade ativa</strong></p>
+          )}
           <p><span>Rota</span><strong>{car.route.length} tiles</strong></p>
         </div>
       )}

@@ -8,7 +8,7 @@ import { createGrid, inBounds, isRoadType, keyOf } from '../city/grid';
 import { CityGenerator } from '../city/cityGenerator';
 import { updateBuildingConnection } from '../city/buildings';
 import { findFastestPath } from '../pathfinding/pathfinder';
-import { computeTrafficDecision, getDirection, getIntersectionReservations, getLaneOffset } from '../systems/trafficRules';
+import { buildIntersectionControls, computeTrafficDecision, getDirection, getLaneOffset, isIntersection } from '../systems/trafficRules';
 import { TimeSystem } from './timeSystem';
 import { chooseTrip } from '../agents/tripGenerator';
 
@@ -32,6 +32,7 @@ export class GameWorld {
   private economyTimer = 0;
   private listeners = new Set<() => void>();
   private tripHistory: number[] = [];
+  private nextPriorityToken = 1;
 
   constructor() {
     this.seedInitialCity();
@@ -208,10 +209,10 @@ export class GameWorld {
   private generateTrips(): void {
     const multiplier = this.time.getTripMultiplier();
     const population = this.getSnapshot().population;
-    const attempts = Math.max(1, Math.floor((population / 45) * multiplier));
+    const attempts = Math.max(1, Math.floor((population / 32) * multiplier));
     for (let i = 0; i < attempts; i++) {
       if (this.cars.length >= GAME_CONFIG.maxCars) return;
-      if (Math.random() > 0.65) continue;
+      if (Math.random() > 0.62) continue;
       const trip = chooseTrip(this.buildings, this.time.getPeriod());
       if (!trip || !trip.origin.nearestRoad || !trip.destination.nearestRoad) {
         this.failedTrips += 1;
@@ -237,17 +238,27 @@ export class GameWorld {
         route,
         routeIndex: 0,
         progressToNext: 0,
-        baseSpeed: 3.2,
-        desiredSpeed: 3.2 * ROAD_CONFIG[initialRoadType].speed,
+        baseSpeed: 1.45,
+        currentSpeed: 0,
+        targetSpeed: 0,
+        acceleration: 1.65,
+        braking: 3.8,
+        desiredSpeed: 1.45 * ROAD_CONFIG[initialRoadType].speed,
         laneOffset: lane.offset,
         laneIndex: lane.laneIndex,
+        laneCount: lane.laneCount,
+        laneSide: lane.laneSide,
         waitTimer: 0,
+        intersectionWaitSeconds: 0,
+        priorityToken: 0,
+        gridlockEscapeSeconds: 0,
+        insideIntersectionSeconds: 0,
         turnSlowdown: 0,
         trafficState: 'moving',
         direction: initialDirection,
         status: 'moving',
         travelTime: 0,
-        estimatedTime: route.length / 3.2,
+        estimatedTime: route.length / 1.45,
         delay: 0,
       });
       trip.origin.tripsToday += 1;
@@ -256,34 +267,64 @@ export class GameWorld {
 
   private updateCars(dt: number): void {
     const arrived: Car[] = [];
-    const intersectionReservations = getIntersectionReservations(this.grid, this.cars);
+    const intersectionControls = buildIntersectionControls(this.grid, this.cars);
     for (const car of this.cars) {
       car.travelTime += dt;
       const traffic = this.traffic.get(keyOf(car.currentTileX, car.currentTileY));
       const congestion = traffic?.congestion ?? 0;
-      const decision = computeTrafficDecision(this.grid, car, this.cars, intersectionReservations, congestion);
+      const decision = computeTrafficDecision(this.grid, car, this.cars, intersectionControls, congestion);
       car.desiredSpeed = decision.desiredSpeed;
+      car.targetSpeed = decision.targetSpeed;
       car.laneOffset = decision.laneOffset;
       car.laneIndex = decision.laneIndex;
+      car.laneCount = decision.laneCount;
+      car.laneSide = decision.laneSide;
       car.direction = decision.direction;
       car.blockedByCarId = decision.blockedByCarId;
       car.trafficState = decision.state;
-      car.status = decision.speed < 0.08 ? 'stopped' : 'moving';
+      car.intersectionQueuePosition = decision.intersectionQueuePosition;
+      car.intersectionQueueLength = decision.intersectionQueueLength;
+      applySmoothSpeed(car, decision.targetSpeed, dt, decision.hardStop);
+      car.status = car.currentSpeed < 0.08 ? 'stopped' : 'moving';
       car.turnSlowdown = decision.turning ? Math.max(car.turnSlowdown, 0.32) : Math.max(0, car.turnSlowdown - dt);
 
       if (decision.intersectionStopKey) {
         if (car.intersectionStopKey !== decision.intersectionStopKey) {
           car.intersectionStopKey = decision.intersectionStopKey;
+          car.lastIntersectionKey = decision.intersectionStopKey;
           car.waitTimer = 0;
+          car.intersectionWaitSeconds = 0;
+          car.gridlockEscapeSeconds = 0;
+          car.priorityToken = this.nextPriorityToken;
+          this.nextPriorityToken += 1;
+          if (this.nextPriorityToken > Number.MAX_SAFE_INTEGER - 1000) this.nextPriorityToken = 1;
         }
-        if (decision.state === 'intersection') car.waitTimer += dt;
+        if (decision.state === 'intersection') {
+          car.waitTimer += dt;
+          car.intersectionWaitSeconds += dt;
+          car.gridlockEscapeSeconds = Math.max(0, car.intersectionWaitSeconds - 5);
+        }
       } else {
         car.intersectionStopKey = undefined;
         car.waitTimer = 0;
+        car.intersectionWaitSeconds = 0;
+        car.gridlockEscapeSeconds = 0;
+        car.priorityToken = 0;
+        car.intersectionQueuePosition = undefined;
+        car.intersectionQueueLength = undefined;
       }
 
-      if (decision.speed < 0.35) car.delay += dt;
-      car.progressToNext += decision.speed * dt;
+      const insideIntersection = isIntersection(this.grid, { x: car.currentTileX, y: car.currentTileY });
+      if (insideIntersection && car.currentSpeed < 0.18) {
+        car.insideIntersectionSeconds += dt;
+      } else if (!insideIntersection) {
+        car.insideIntersectionSeconds = 0;
+      } else {
+        car.insideIntersectionSeconds = Math.max(0, car.insideIntersectionSeconds - dt * 2);
+      }
+
+      if (car.currentSpeed < 0.25) car.delay += dt;
+      car.progressToNext += car.currentSpeed * dt;
       while (car.progressToNext >= 1 && car.routeIndex < car.route.length - 1) {
         car.progressToNext -= 1;
         car.routeIndex += 1;
@@ -331,7 +372,7 @@ export class GameWorld {
 
     const snapshot = this.getSnapshot();
     const disconnectedPenalty = snapshot.disconnectedBuildings * 4.5;
-    const congestionPenalty = Math.min(45, snapshot.averageCongestion * 0.23);
+    const congestionPenalty = Math.min(52, snapshot.averageCongestion * 0.28);
     const failedPenalty = Math.min(25, this.failedTrips * 0.12);
     const travelPenalty = Math.min(25, Math.max(0, this.averageTravelTime - 7) * 1.8);
     this.satisfaction = Math.max(0, Math.min(100, 100 - disconnectedPenalty - congestionPenalty - failedPenalty - travelPenalty));
@@ -341,4 +382,18 @@ export class GameWorld {
     if (this.selected.kind !== 'car') return [];
     return this.getCar(this.selected.carId)?.route ?? [];
   }
+}
+
+function applySmoothSpeed(car: Car, targetSpeed: number, dt: number, hardStop: boolean): void {
+  if (hardStop) {
+    car.currentSpeed = 0;
+    return;
+  }
+
+  if (targetSpeed > car.currentSpeed) {
+    car.currentSpeed = Math.min(targetSpeed, car.currentSpeed + car.acceleration * dt);
+    return;
+  }
+
+  car.currentSpeed = Math.max(targetSpeed, car.currentSpeed - car.braking * dt);
 }

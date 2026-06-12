@@ -27,6 +27,13 @@ export type Car = {
   laneSide: -1 | 1;
   waitTimer: number;
   intersectionStopKey?: string;
+  intersectionWaitSeconds: number;
+  lastIntersectionKey?: string;
+  priorityToken: number;
+  gridlockEscapeSeconds: number;
+  insideIntersectionSeconds: number;
+  intersectionQueuePosition?: number;
+  intersectionQueueLength?: number;
   turnSlowdown: number;
   blockedByCarId?: string;
   trafficState: TrafficState;

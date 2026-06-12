@@ -6,14 +6,25 @@ import { ROAD_CONFIG } from '../config/roadConfig';
 import { useGameStore, type HoverPreview } from '../../store/gameStore';
 import { inBounds, isRoadType, keyOf } from '../city/grid';
 import type { Car } from '../../types/agent.types';
-import type { BuildingType, RoadType, Tile } from '../../types/city.types';
+import type { BuildingType, RoadType, Tile, Vec2 } from '../../types/city.types';
 import type { Tool } from '../../types/game.types';
 import { MAP_COLORS, congestionColor } from './visualTheme';
+import { getDirection, getLaneOffset } from '../systems/trafficRules';
 
 type ActionPreview = HoverPreview & {
   reason?: string;
   successMessage: string;
 };
+
+type CarRenderPose = {
+  x: number;
+  y: number;
+  angle: number;
+  turningAmount: number;
+};
+
+const TURN_IN_START = 0.64;
+const TURN_OUT_END = 0.36;
 
 export function PixiGame({ world }: { world: GameWorld }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -21,7 +32,7 @@ export function PixiGame({ world }: { world: GameWorld }) {
   const stageRef = useRef<Container | null>(null);
   const isDrawingRef = useRef(false);
   const lastTileRef = useRef<string>('');
-  const cameraRef = useRef({ x: 42, y: 32, scale: 1 });
+  const cameraRef = useRef({ x: 56, y: 42, scale: 0.75 });
   const panningRef = useRef<{ active: boolean; x: number; y: number }>({ active: false, x: 0, y: 0 });
   const hoverPreview = useGameStore((s) => s.hoverPreview);
   const actionFeedback = useGameStore((s) => s.actionFeedback);
@@ -138,7 +149,7 @@ export function PixiGame({ world }: { world: GameWorld }) {
         event.preventDefault();
         const cam = cameraRef.current;
         const factor = event.deltaY < 0 ? 1.1 : 0.9;
-        cam.scale = Math.max(0.55, Math.min(2.2, cam.scale * factor));
+        cam.scale = Math.max(0.45, Math.min(2.2, cam.scale * factor));
       }, { passive: false, signal: abortController.signal });
 
       app.ticker.add((ticker) => {
@@ -234,7 +245,7 @@ function draw(
   }
 
   for (const car of world.cars) {
-    drawCar(graphics, car, ts);
+    drawCar(graphics, car, world.grid, ts);
   }
 
   if (hoverPreview) drawPreview(graphics, hoverPreview.x, hoverPreview.y, hoverPreview.valid, ts);
@@ -243,7 +254,10 @@ function draw(
   if (world.selected.kind === 'building') drawSelection(graphics, world.selected.building.x, world.selected.building.y, ts);
   if (world.selected.kind === 'car') {
     const car = world.getCar(world.selected.carId);
-    if (car) graphics.circle(car.x * ts + ts / 2, car.y * ts + ts / 2, 9).stroke({ color: MAP_COLORS.selection, width: 2 });
+    if (car) {
+      const pose = getCarRenderPose(car, world.grid);
+      graphics.circle(pose.x * ts + ts / 2, pose.y * ts + ts / 2, 9).stroke({ color: MAP_COLORS.selection, width: 2 });
+    }
   }
 }
 
@@ -265,7 +279,7 @@ function drawRoad(graphics: Graphics, grid: Tile[][], x: number, y: number, ts: 
   const py = y * ts;
   const roadColor = isAvenue ? MAP_COLORS.avenue : MAP_COLORS.road;
   const edgeColor = isAvenue ? MAP_COLORS.avenueEdge : MAP_COLORS.roadEdge;
-  const roadW = isAvenue ? 24 : 18;
+  const roadW = isAvenue ? 34 : 24;
   const walkW = Math.min(ts - 4, roadW + 8);
   const halfRoad = roadW / 2;
   const halfWalk = walkW / 2;
@@ -302,23 +316,147 @@ function drawBuilding(graphics: Graphics, type: BuildingType, x: number, y: numb
   graphics.roundRect(px + 4, py + 4, ts - 8, ts - 8, 4).stroke({ color: connected ? MAP_COLORS.lotStroke : MAP_COLORS.disconnected, width: connected ? 1 : 3, alpha: connected ? 0.8 : 1 });
 }
 
-function drawCar(graphics: Graphics, car: Car, ts: number): void {
-  const cx = car.x * ts + ts / 2;
-  const cy = car.y * ts + ts / 2;
-  const horizontal = car.direction === 'east' || car.direction === 'west';
-  const w = horizontal ? 13 : 8;
-  const h = horizontal ? 8 : 13;
+function drawCar(graphics: Graphics, car: Car, grid: Tile[][], ts: number): void {
+  const pose = getCarRenderPose(car, grid);
+  const cx = pose.x * ts + ts / 2;
+  const cy = pose.y * ts + ts / 2;
+  const length = 13;
+  const width = 7;
   const color = car.trafficState === 'intersection'
     ? MAP_COLORS.carAltC
     : car.trafficState === 'queued'
       ? MAP_COLORS.carAltA
       : carColor(car.id);
-  graphics.roundRect(cx - w / 2 + 3, cy - h / 2 + 4, w, h, 3).fill({ color: MAP_COLORS.shadow, alpha: 0.28 });
-  graphics.roundRect(cx - w / 2, cy - h / 2, w, h, 3).fill(color).stroke({ color: MAP_COLORS.roadEdge, width: 1, alpha: 0.55 });
-  graphics.roundRect(cx - (horizontal ? 1 : 2), cy - (horizontal ? 2 : 1), 4, 4, 2).fill(MAP_COLORS.carWindow);
-  const noseX = cx + (car.direction === 'east' ? 5 : car.direction === 'west' ? -5 : 0);
-  const noseY = cy + (car.direction === 'south' ? 5 : car.direction === 'north' ? -5 : 0);
-  graphics.circle(noseX, noseY, 1.4).fill(MAP_COLORS.laneSoft);
+  drawCapsule(graphics, cx + 3, cy + 4, length, width, pose.angle, MAP_COLORS.shadow, 0.28);
+  drawCapsule(graphics, cx, cy, length, width, pose.angle, color, 1, MAP_COLORS.roadEdge);
+  drawRotatedRect(graphics, cx + Math.cos(pose.angle) * 1.8, cy + Math.sin(pose.angle) * 1.8, 4.2, 3.2, pose.angle, MAP_COLORS.carWindow, 0.88);
+  graphics
+    .circle(cx + Math.cos(pose.angle) * (length / 2 - 1.2), cy + Math.sin(pose.angle) * (length / 2 - 1.2), 1.35)
+    .fill(MAP_COLORS.laneSoft);
+}
+
+function getCarRenderPose(car: Car, grid: Tile[][]): CarRenderPose {
+  const current = car.route[car.routeIndex];
+  const next = car.route[car.routeIndex + 1];
+  if (!current || !next) return { x: car.x, y: car.y, angle: directionAngle(car.direction), turningAmount: 0 };
+
+  const after = car.route[car.routeIndex + 2];
+  if (after && isRouteTurn(current, next, after) && car.progressToNext >= TURN_IN_START) {
+    const curve = buildTurnCurve(car, grid, current, next, after);
+    const t = ((car.progressToNext - TURN_IN_START) / (1 - TURN_IN_START)) * 0.5;
+    return poseOnCurve(curve, t);
+  }
+
+  const previous = car.route[car.routeIndex - 1];
+  if (previous && isRouteTurn(previous, current, next) && car.progressToNext <= TURN_OUT_END) {
+    const curve = buildTurnCurve(car, grid, previous, current, next);
+    const t = 0.5 + (car.progressToNext / TURN_OUT_END) * 0.5;
+    return poseOnCurve(curve, t);
+  }
+
+  const offset = laneOffsetForSegment(car, grid, current, next);
+  return {
+    x: current.x + (next.x - current.x) * car.progressToNext + offset.x,
+    y: current.y + (next.y - current.y) * car.progressToNext + offset.y,
+    angle: Math.atan2(next.y - current.y, next.x - current.x),
+    turningAmount: 0,
+  };
+}
+
+function buildTurnCurve(car: Car, grid: Tile[][], from: Vec2, corner: Vec2, to: Vec2): { p0: Vec2; p1: Vec2; p2: Vec2 } {
+  const incomingOffset = laneOffsetForSegment(car, grid, from, corner);
+  const outgoingOffset = laneOffsetForSegment(car, grid, corner, to);
+  return {
+    p0: {
+      x: from.x + (corner.x - from.x) * TURN_IN_START + incomingOffset.x,
+      y: from.y + (corner.y - from.y) * TURN_IN_START + incomingOffset.y,
+    },
+    p1: { x: corner.x, y: corner.y },
+    p2: {
+      x: corner.x + (to.x - corner.x) * TURN_OUT_END + outgoingOffset.x,
+      y: corner.y + (to.y - corner.y) * TURN_OUT_END + outgoingOffset.y,
+    },
+  };
+}
+
+function poseOnCurve(curve: { p0: Vec2; p1: Vec2; p2: Vec2 }, rawT: number): CarRenderPose {
+  const t = Math.max(0, Math.min(1, rawT));
+  const mt = 1 - t;
+  const x = mt * mt * curve.p0.x + 2 * mt * t * curve.p1.x + t * t * curve.p2.x;
+  const y = mt * mt * curve.p0.y + 2 * mt * t * curve.p1.y + t * t * curve.p2.y;
+  const dx = 2 * mt * (curve.p1.x - curve.p0.x) + 2 * t * (curve.p2.x - curve.p1.x);
+  const dy = 2 * mt * (curve.p1.y - curve.p0.y) + 2 * t * (curve.p2.y - curve.p1.y);
+  return { x, y, angle: Math.atan2(dy, dx), turningAmount: Math.sin(Math.PI * t) };
+}
+
+function laneOffsetForSegment(car: Car, grid: Tile[][], from: Vec2, to: Vec2): Vec2 {
+  return getLaneOffset(getDirection(from, to), roadTypeAt(grid, from), car.id).offset;
+}
+
+function roadTypeAt(grid: Tile[][], pos: Vec2): RoadType {
+  return grid[pos.y]?.[pos.x]?.type === 'avenue' ? 'avenue' : 'road';
+}
+
+function isRouteTurn(from: Vec2, corner: Vec2, to: Vec2): boolean {
+  return getDirection(from, corner) !== getDirection(corner, to);
+}
+
+function directionAngle(direction: Car['direction']): number {
+  if (direction === 'west') return Math.PI;
+  if (direction === 'north') return -Math.PI / 2;
+  if (direction === 'south') return Math.PI / 2;
+  return 0;
+}
+
+function drawCapsule(
+  graphics: Graphics,
+  cx: number,
+  cy: number,
+  length: number,
+  width: number,
+  angle: number,
+  color: number,
+  alpha = 1,
+  strokeColor?: number,
+): void {
+  const radius = width / 2;
+  const halfStraight = Math.max(0, (length - width) / 2);
+  const dx = Math.cos(angle);
+  const dy = Math.sin(angle);
+  const px = -dy;
+  const py = dx;
+  const front = { x: cx + dx * halfStraight, y: cy + dy * halfStraight };
+  const back = { x: cx - dx * halfStraight, y: cy - dy * halfStraight };
+  const body = [
+    back.x + px * radius, back.y + py * radius,
+    front.x + px * radius, front.y + py * radius,
+    front.x - px * radius, front.y - py * radius,
+    back.x - px * radius, back.y - py * radius,
+  ];
+
+  graphics.poly(body).fill({ color, alpha });
+  graphics.circle(front.x, front.y, radius).fill({ color, alpha });
+  graphics.circle(back.x, back.y, radius).fill({ color, alpha });
+  if (strokeColor !== undefined) {
+    graphics.poly(body).stroke({ color: strokeColor, width: 1, alpha: 0.55 });
+    graphics.circle(front.x, front.y, radius).stroke({ color: strokeColor, width: 1, alpha: 0.55 });
+    graphics.circle(back.x, back.y, radius).stroke({ color: strokeColor, width: 1, alpha: 0.55 });
+  }
+}
+
+function drawRotatedRect(graphics: Graphics, cx: number, cy: number, width: number, height: number, angle: number, color: number, alpha = 1): void {
+  const dx = Math.cos(angle);
+  const dy = Math.sin(angle);
+  const px = -dy;
+  const py = dx;
+  const hw = width / 2;
+  const hh = height / 2;
+  graphics.poly([
+    cx - dx * hw - px * hh, cy - dy * hw - py * hh,
+    cx + dx * hw - px * hh, cy + dy * hw - py * hh,
+    cx + dx * hw + px * hh, cy + dy * hw + py * hh,
+    cx - dx * hw + px * hh, cy - dy * hw + py * hh,
+  ]).fill({ color, alpha });
 }
 
 function roadNeighbors(grid: Tile[][], x: number, y: number): Record<'north' | 'south' | 'east' | 'west', boolean> {
@@ -361,12 +499,12 @@ function drawLaneMarkings(
   if (horizontal) drawDashedLine(graphics, px + 5, py + center - 1, ts - 10, true, MAP_COLORS.lane);
   if (vertical) drawDashedLine(graphics, px + center - 1, py + 5, ts - 10, false, MAP_COLORS.lane);
   if (isAvenue && horizontal) {
-    drawDashedLine(graphics, px + 6, py + center - 7, ts - 12, true, MAP_COLORS.laneSoft, 0.55);
-    drawDashedLine(graphics, px + 6, py + center + 5, ts - 12, true, MAP_COLORS.laneSoft, 0.55);
+    drawDashedLine(graphics, px + 6, py + center - 11, ts - 12, true, MAP_COLORS.laneSoft, 0.52);
+    drawDashedLine(graphics, px + 6, py + center + 9, ts - 12, true, MAP_COLORS.laneSoft, 0.52);
   }
   if (isAvenue && vertical) {
-    drawDashedLine(graphics, px + center - 7, py + 6, ts - 12, false, MAP_COLORS.laneSoft, 0.55);
-    drawDashedLine(graphics, px + center + 5, py + 6, ts - 12, false, MAP_COLORS.laneSoft, 0.55);
+    drawDashedLine(graphics, px + center - 11, py + 6, ts - 12, false, MAP_COLORS.laneSoft, 0.52);
+    drawDashedLine(graphics, px + center + 9, py + 6, ts - 12, false, MAP_COLORS.laneSoft, 0.52);
   }
 }
 
