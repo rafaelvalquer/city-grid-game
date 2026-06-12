@@ -3,6 +3,7 @@ import type { Vec2 } from './city.types';
 export type CarStatus = 'moving' | 'stopped' | 'arrived' | 'no_route';
 export type TrafficState = 'moving' | 'queued' | 'intersection' | 'turning';
 export type TravelDirection = 'north' | 'south' | 'east' | 'west';
+export type IntersectionReason = 'signal_red' | 'signal_yellow' | 'unsignalized_queue' | 'right_turn_free' | 'box_occupied' | 'exit_blocked';
 
 export type Car = {
   id: string;
@@ -34,6 +35,7 @@ export type Car = {
   insideIntersectionSeconds: number;
   intersectionQueuePosition?: number;
   intersectionQueueLength?: number;
+  intersectionReason?: IntersectionReason;
   turnSlowdown: number;
   blockedByCarId?: string;
   trafficState: TrafficState;
@@ -42,4 +44,10 @@ export type Car = {
   travelTime: number;
   estimatedTime: number;
   delay: number;
+  stuckSeconds: number;
+  rerouteCooldownSeconds: number;
+  rerouteCount: number;
+  lastRerouteReason?: string;
+  signalTransitionGraceSeconds: number;
+  signalTransitionKey?: string;
 };

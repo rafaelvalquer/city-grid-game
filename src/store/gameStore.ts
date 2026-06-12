@@ -2,17 +2,21 @@ import { create } from 'zustand';
 import type { CityStats, SelectedEntity } from '../types/city.types';
 import type { SimulationSpeed, Tool } from '../types/game.types';
 
+export type HeatmapMode = 'traffic' | 'satisfaction' | 'flow' | 'disconnected' | 'off';
+
 export type HoverPreview = {
   x: number;
   y: number;
   label: string;
   cost?: number;
   valid: boolean;
+  reason?: string;
+  tool?: Tool;
 };
 
 export type GameStore = {
   selectedTool: Tool;
-  showHeatmap: boolean;
+  heatmapMode: HeatmapMode;
   paused: boolean;
   speed: SimulationSpeed;
   stats: CityStats;
@@ -20,7 +24,7 @@ export type GameStore = {
   hoverPreview: HoverPreview | null;
   actionFeedback: string | null;
   setTool: (tool: Tool) => void;
-  toggleHeatmap: () => void;
+  setHeatmapMode: (mode: HeatmapMode) => void;
   togglePaused: () => void;
   setSpeed: (speed: SimulationSpeed) => void;
   setStats: (stats: CityStats) => void;
@@ -46,7 +50,7 @@ const initialStats: CityStats = {
 
 export const useGameStore = create<GameStore>((set) => ({
   selectedTool: 'road',
-  showHeatmap: true,
+  heatmapMode: 'traffic',
   paused: false,
   speed: 1,
   stats: initialStats,
@@ -54,7 +58,7 @@ export const useGameStore = create<GameStore>((set) => ({
   hoverPreview: null,
   actionFeedback: null,
   setTool: (tool) => set({ selectedTool: tool, actionFeedback: null }),
-  toggleHeatmap: () => set((s) => ({ showHeatmap: !s.showHeatmap })),
+  setHeatmapMode: (mode) => set({ heatmapMode: mode }),
   togglePaused: () => set((s) => ({ paused: !s.paused })),
   setSpeed: (speed) => set({ speed }),
   setStats: (stats) => set({ stats }),

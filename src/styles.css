@@ -272,6 +272,34 @@ h3 {
   font-size: 12px;
 }
 
+.heatmap-mode-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.heatmap-mode {
+  min-height: 34px;
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #111d2f;
+  color: #d5e2f0;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.heatmap-mode:hover {
+  border-color: var(--line-strong);
+  background: #162640;
+}
+
+.heatmap-mode.active {
+  border-color: var(--accent);
+  background: rgba(36, 167, 223, 0.18);
+  color: #f7fbff;
+}
+
 .speed-row {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

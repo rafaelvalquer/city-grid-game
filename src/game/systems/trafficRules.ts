@@ -1,8 +1,8 @@
-import type { Car, TrafficState, TravelDirection } from '../../types/agent.types';
+import type { Car, IntersectionReason, TrafficState, TravelDirection } from '../../types/agent.types';
 import type { RoadType, Tile, Vec2 } from '../../types/city.types';
 import { ROAD_CONFIG } from '../config/roadConfig';
 import { getNeighbors4, isRoadType, keyOf } from '../city/grid';
-import { getTrafficLightSignal, type TrafficLightMap } from './trafficLights';
+import { getTrafficLightSignal, isTrafficLightControlling, type TrafficLightMap } from './trafficLights';
 
 export type TrafficDecision = {
   targetSpeed: number;
@@ -17,6 +17,7 @@ export type TrafficDecision = {
   intersectionStopKey?: string;
   intersectionQueuePosition?: number;
   intersectionQueueLength?: number;
+  intersectionReason?: IntersectionReason;
   turning: boolean;
   hardStop: boolean;
 };
@@ -29,6 +30,8 @@ export type IntersectionIntent = {
   entryDirection: TravelDirection;
   exitDirection: TravelDirection;
   turnIntent: TurnIntent;
+  entryRoadType: RoadType;
+  roadRank: number;
   waitSeconds: number;
   priorityToken: number;
   escape: boolean;
@@ -46,17 +49,25 @@ export type IntersectionControl = {
 export type IntersectionControls = Map<string, IntersectionControl>;
 
 const STOP_BEFORE_INTERSECTION_AT = 0.52;
-const INTERSECTION_STOP_SECONDS = 0.25;
-const INTERSECTION_APPROACH_SPEED = 0.35;
-const INTERSECTION_CLEAR_SPEED = 0.75;
-const TRAFFIC_LIGHT_STOP_AT = 0.66;
-const PRIORITY_WAIT_SECONDS = 2.8;
+const INTERSECTION_STOP_SECONDS = 0.22;
+const INTERSECTION_APPROACH_SPEED = 0.38;
+const INTERSECTION_CLEAR_SPEED = 0.95;
+const TRAFFIC_LIGHT_STOP_AT = 0.62;
+const PRIORITY_WAIT_SECONDS = 2.4;
 const GRIDLOCK_ESCAPE_SECONDS = 5;
-const INSIDE_CLEAR_SECONDS = 2;
+const INSIDE_CLEAR_SECONDS = 1.4;
 const SAFE_DISTANCE = 0.48;
 const LOOK_AHEAD_DISTANCE = 1.18;
-const CURVE_SLOWDOWN = 0.58;
+const CURVE_SLOWDOWN = 0.62;
 const BASE_SPEED = 1.45;
+const EXIT_ROLLING_RELEASE_WAIT_SECONDS = 2.6;
+const EXIT_CRITICAL_PROGRESS = 0.24;
+const EXIT_LANE_CLEARANCE = 0.16;
+const RIGHT_TURN_YIELD_SPEED = 0.72;
+const RIGHT_TURN_DEBUG_SECONDS = 2.5;
+const OVERLAP_LEADER_DISTANCE = 0.08;
+
+const rightTurnDebugTimers = new Map<string, number>();
 
 export function getDirection(from: Vec2, to: Vec2): TravelDirection {
   const dx = to.x - from.x;
@@ -165,10 +176,7 @@ export function computeTrafficDecision(
   }
 
   const direction = getDirection(current, next);
-  const insideIntersection = isIntersection(grid, {
-    x: car.currentTileX,
-    y: car.currentTileY,
-  });
+  const insideIntersection = isIntersection(grid, { x: car.currentTileX, y: car.currentTileY });
   const roadType = getRoadType(grid, current);
   const { offset, laneIndex, laneCount, laneSide } = getLaneOffset(direction, roadType, car.id);
   const desiredSpeed = (BASE_SPEED * ROAD_CONFIG[roadType].speed) / (1 + Math.max(0, congestion - 0.25));
@@ -193,13 +201,9 @@ export function computeTrafficDecision(
     }
   }
 
-  if (insideIntersection) {
-    targetSpeed = Math.max(targetSpeed, INTERSECTION_CLEAR_SPEED);
-    state = 'intersection';
-    hardStop = false;
-  }
-
-  if (clearingIntersectionBox) {
+  // Um carro que já entrou na caixa do cruzamento não deve mais obedecer vermelho.
+  // Ele tem prioridade de limpeza para não bloquear todas as aproximações.
+  if (insideIntersection || clearingIntersectionBox) {
     targetSpeed = Math.max(targetSpeed, INTERSECTION_CLEAR_SPEED);
     state = 'intersection';
     hardStop = false;
@@ -209,6 +213,7 @@ export function computeTrafficDecision(
   const enteringIntersection = !insideIntersection && isApproachingIntersection(grid, car, next);
   let intersectionQueuePosition: number | undefined;
   let intersectionQueueLength: number | undefined;
+  let intersectionReason: IntersectionReason | undefined;
 
   if (enteringIntersection) {
     const control = intersectionControls.get(intersectionKey);
@@ -219,39 +224,55 @@ export function computeTrafficDecision(
     const trafficLight = trafficLights.get(intersectionKey);
     const intent = control?.queue.find((entry) => entry.carId === car.id);
     const physicalOccupant = isBlockingPhysicalOccupant(control, car, cars, intent);
+    const signalIsControlling = Boolean(trafficLight && isTrafficLightControlling(trafficLight));
 
-    if (trafficLight && intent) {
+    if (trafficLight && signalIsControlling && intent) {
       const signal = getTrafficLightSignal(trafficLight, direction);
       const blockedByExit = intent.exitBlocked || physicalOccupant;
-
       if (signal !== 'green') {
         targetSpeed = car.progressToNext >= TRAFFIC_LIGHT_STOP_AT ? 0 : Math.min(targetSpeed, INTERSECTION_APPROACH_SPEED);
         state = 'intersection';
         hardStop = car.progressToNext >= TRAFFIC_LIGHT_STOP_AT;
+        intersectionReason = signal === 'yellow' ? 'signal_yellow' : 'signal_red';
       } else if (blockedByExit) {
         targetSpeed = car.progressToNext >= TRAFFIC_LIGHT_STOP_AT ? 0 : Math.min(targetSpeed, INTERSECTION_APPROACH_SPEED);
         state = 'intersection';
         hardStop = car.progressToNext >= TRAFFIC_LIGHT_STOP_AT;
+        intersectionReason = intent.exitBlocked ? 'exit_blocked' : 'box_occupied';
       } else {
-        // Sinal verde: libera o eixo sem parada obrigatória. O carro ainda respeita líder e saída bloqueada.
+        // Sinal verde: o eixo liberado flui sem parada obrigatória.
         hardStop = false;
       }
     } else {
       const alreadyStoppedHere = car.intersectionStopKey === intersectionKey && car.waitTimer >= INTERSECTION_STOP_SECONDS;
       const released = Boolean(control?.releasedCarIds.has(car.id));
+      const rightTurnFree = Boolean(intent && canRightTurnYield(intent, control));
       const freeFlow = Boolean(intent && released && canFreeFlowThroughIntersection(grid, intersectionKey, intent, control));
-      const canEscape = Boolean(intent?.escape && !physicalOccupant);
-      const escapingBlockedExit = Boolean(released && intent?.escape && intent.exitBlocked);
 
-      if (!alreadyStoppedHere && !freeFlow) {
+      if (rightTurnFree) {
+        if (hardStop && blockedByCarId) {
+          targetSpeed = 0;
+          state = 'queued';
+        } else {
+          targetSpeed = blockedByCarId
+            ? Math.min(targetSpeed, RIGHT_TURN_YIELD_SPEED)
+            : Math.max(Math.min(targetSpeed, RIGHT_TURN_YIELD_SPEED), INTERSECTION_APPROACH_SPEED);
+          state = 'intersection';
+          hardStop = false;
+        }
+        intersectionReason = 'right_turn_free';
+      } else if (intent?.turnIntent === 'right') {
+        debugRightTurnBlocked(car, intent, control, physicalOccupant);
+      } else if (!alreadyStoppedHere && !freeFlow) {
         targetSpeed = car.progressToNext >= TRAFFIC_LIGHT_STOP_AT ? 0 : Math.min(targetSpeed, INTERSECTION_APPROACH_SPEED);
         state = 'intersection';
-      } else if (escapingBlockedExit) {
-        targetSpeed = Math.min(targetSpeed, INTERSECTION_APPROACH_SPEED);
-        state = 'intersection';
-      } else if (!released && !canEscape) {
+        hardStop = car.progressToNext >= TRAFFIC_LIGHT_STOP_AT;
+        intersectionReason = 'unsignalized_queue';
+      } else if (!released) {
         targetSpeed = physicalOccupant || car.progressToNext >= TRAFFIC_LIGHT_STOP_AT ? 0 : Math.min(targetSpeed, INTERSECTION_APPROACH_SPEED);
         state = 'intersection';
+        hardStop = physicalOccupant || car.progressToNext >= TRAFFIC_LIGHT_STOP_AT;
+        intersectionReason = physicalOccupant ? 'box_occupied' : intent?.exitBlocked ? 'exit_blocked' : 'unsignalized_queue';
       }
     }
   }
@@ -269,6 +290,7 @@ export function computeTrafficDecision(
     intersectionStopKey: enteringIntersection ? intersectionKey : undefined,
     intersectionQueuePosition,
     intersectionQueueLength,
+    intersectionReason,
     turning,
     hardStop,
   };
@@ -338,10 +360,12 @@ function buildIntentForCar(grid: Tile[][], car: Car, cars: Car[], intersectionTi
     entryDirection,
     exitDirection,
     turnIntent: getTurnIntent(entryDirection, exitDirection),
-    waitSeconds: car.intersectionWaitSeconds,
+    entryRoadType: getRoadType(grid, insideIntersection ? previous ?? current : current),
+    roadRank: getRoadRank(grid, insideIntersection ? previous ?? current : current),
+    waitSeconds: Math.max(car.intersectionWaitSeconds, car.stuckSeconds),
     priorityToken: car.priorityToken || Number.MAX_SAFE_INTEGER,
-    escape: car.intersectionWaitSeconds >= GRIDLOCK_ESCAPE_SECONDS,
-    exitBlocked: isExitBlocked(car, cars, exitTile),
+    escape: Math.max(car.intersectionWaitSeconds, car.stuckSeconds) >= GRIDLOCK_ESCAPE_SECONDS,
+    exitBlocked: isExitBlocked(grid, car, cars, exitTile, exitDirection),
   };
 }
 
@@ -366,13 +390,40 @@ function canFreeFlowThroughIntersection(grid: Tile[][], intersectionKey: string,
   return false;
 }
 
+function canRightTurnYield(
+  intent: IntersectionIntent,
+  control: IntersectionControl | undefined,
+): boolean {
+  if (intent.turnIntent !== 'right') return false;
+  if (intent.exitBlocked) return false;
+  if (!control) return true;
+
+  const activeAndReleased = [
+    ...control.active,
+    ...control.queue.filter((entry) => control.releasedCarIds.has(entry.carId)),
+  ].filter((entry) => entry.carId !== intent.carId);
+
+  if (activeAndReleased.some((entry) => hasSameExit(entry, intent))) return false;
+  if (activeAndReleased.some((entry) => isSameMovement(entry, intent))) return false;
+  return true;
+}
+
 function compareIntersectionIntent(a: IntersectionIntent, b: IntersectionIntent): number {
+  if (a.roadRank !== b.roadRank) return b.roadRank - a.roadRank;
   if (a.escape !== b.escape) return a.escape ? -1 : 1;
   const aPriority = a.waitSeconds >= PRIORITY_WAIT_SECONDS;
   const bPriority = b.waitSeconds >= PRIORITY_WAIT_SECONDS;
   if (aPriority !== bPriority) return aPriority ? -1 : 1;
+  if (turnRank(a.turnIntent) !== turnRank(b.turnIntent)) return turnRank(b.turnIntent) - turnRank(a.turnIntent);
   if (Math.abs(a.waitSeconds - b.waitSeconds) > 0.05) return b.waitSeconds - a.waitSeconds;
   return a.priorityToken - b.priorityToken;
+}
+
+function turnRank(turnIntent: TurnIntent): number {
+  if (turnIntent === 'straight') return 3;
+  if (turnIntent === 'right') return 2;
+  if (turnIntent === 'left') return 1;
+  return 0;
 }
 
 function resolveReleasedCars(grid: Tile[][], control: IntersectionControl): Set<string> {
@@ -380,10 +431,11 @@ function resolveReleasedCars(grid: Tile[][], control: IntersectionControl): Set<
   const acceptedIntents = [...control.active];
 
   for (const intent of control.queue) {
+    if (intent.turnIntent === 'right') continue;
     if (!canReleaseIntoIntersection(intent)) continue;
 
     const compatible = acceptedIntents.every((activeIntent) => areMovementsCompatible(grid, control.key, intent, activeIntent));
-    if (!compatible && !intent.escape) continue;
+    if (!compatible) continue;
 
     released.add(intent.carId);
     acceptedIntents.push(intent);
@@ -393,7 +445,7 @@ function resolveReleasedCars(grid: Tile[][], control: IntersectionControl): Set<
 }
 
 function canReleaseIntoIntersection(intent: IntersectionIntent): boolean {
-  return !intent.exitBlocked || intent.escape;
+  return !intent.exitBlocked;
 }
 
 function areMovementsCompatible(grid: Tile[][], intersectionKey: string, a: IntersectionIntent, b: IntersectionIntent): boolean {
@@ -425,26 +477,90 @@ function isSameAxis(a: TravelDirection, b: TravelDirection): boolean {
   return horizontalA === horizontalB;
 }
 
+function isInExitLane(car: Car, exitDirection: TravelDirection, exitLanePosition: Vec2): boolean {
+  const laneAxis = exitDirection === 'east' || exitDirection === 'west' ? 'y' : 'x';
+  return Math.abs(car[laneAxis] - exitLanePosition[laneAxis]) <= EXIT_LANE_CLEARANCE;
+}
+
+function debugRightTurnBlocked(
+  car: Car,
+  intent: IntersectionIntent,
+  control: IntersectionControl | undefined,
+  physicalOccupant: boolean,
+): void {
+  if (!isTrafficDebugEnabled()) return;
+
+  const key = `${intent.key}:${car.id}`;
+  const elapsed = (rightTurnDebugTimers.get(key) ?? 0) + 0.08;
+  if (elapsed < RIGHT_TURN_DEBUG_SECONDS) {
+    rightTurnDebugTimers.set(key, elapsed);
+    return;
+  }
+  rightTurnDebugTimers.set(key, 0);
+
+  const active = [
+    ...(control?.active ?? []),
+    ...((control?.queue ?? []).filter((entry) => control?.releasedCarIds.has(entry.carId))),
+  ].filter((entry) => entry.carId !== car.id);
+
+  console.info('[intersection-right-turn-blocked]', {
+    carId: car.id,
+    key: intent.key,
+    entry: intent.entryDirection,
+    exit: intent.exitDirection,
+    wait: Number(Math.max(car.intersectionWaitSeconds, car.stuckSeconds).toFixed(1)),
+    exitBlocked: intent.exitBlocked,
+    physicalOccupant,
+    sameExit: active.some((entry) => hasSameExit(entry, intent)),
+    sameMovement: active.some((entry) => isSameMovement(entry, intent)),
+    active: active.map((entry) => ({
+      carId: entry.carId,
+      turn: entry.turnIntent,
+      entry: entry.entryDirection,
+      exit: entry.exitDirection,
+    })),
+  });
+}
+
 function isTIntersectionByKey(grid: Tile[][], key: string): boolean {
   const [xText, yText] = key.split(',');
   const pos = { x: Number(xText), y: Number(yText) };
   return getNeighbors4(pos).filter((next) => isRoadType(grid[next.y]?.[next.x]?.type)).length === 3;
 }
 
-function isExitBlocked(car: Car, cars: Car[], exitTile?: Vec2): boolean {
+function isExitBlocked(grid: Tile[][], car: Car, cars: Car[], exitTile: Vec2 | undefined, exitDirection: TravelDirection): boolean {
   if (!exitTile) return false;
+  const exitRoadType = getRoadType(grid, exitTile);
+  const exitLane = getLaneOffset(exitDirection, exitRoadType, car.id);
+  const exitLanePosition = {
+    x: exitTile.x + exitLane.offset.x,
+    y: exitTile.y + exitLane.offset.y,
+  };
 
   for (const other of cars) {
     if (other.id === car.id || other.status === 'arrived') continue;
     const sameTile = other.currentTileX === exitTile.x && other.currentTileY === exitTile.y;
     const nearCenter = Math.hypot(other.x - exitTile.x, other.y - exitTile.y) <= 0.58;
     if (!sameTile && !nearCenter) continue;
+    if (!isInExitLane(other, exitDirection, exitLanePosition)) continue;
+
+    const sameFlow = other.direction === exitDirection && other.laneIndex === car.laneIndex;
+    const carHasWaited = Math.max(car.intersectionWaitSeconds, car.stuckSeconds) >= EXIT_ROLLING_RELEASE_WAIT_SECONDS;
+
+    if (sameFlow) {
+      if (sameTile && other.progressToNext > EXIT_CRITICAL_PROGRESS) continue;
+      if (other.currentSpeed > 0.12) continue;
+      if (carHasWaited && other.progressToNext > EXIT_CRITICAL_PROGRESS * 0.65) continue;
+    }
+
+    // Se o outro carro já está quase saindo do tile de destino, não trave a aproximação inteira.
+    if (sameTile && other.currentSpeed > 0.22 && other.progressToNext > 0.5) continue;
+    if (nearCenter && other.currentSpeed > 0.32 && other.trafficState !== 'queued' && other.status !== 'stopped') continue;
 
     const blockingState = other.status === 'stopped'
       || other.trafficState === 'queued'
-      || other.trafficState === 'intersection'
-      || other.currentSpeed < 0.42;
-    const stillOccupyingTile = sameTile && other.progressToNext < 0.72;
+      || other.currentSpeed < 0.18;
+    const stillOccupyingTile = sameTile && other.progressToNext < (sameFlow ? EXIT_CRITICAL_PROGRESS : 0.58);
     if (blockingState || stillOccupyingTile) return true;
   }
 
@@ -463,9 +579,16 @@ function isBlockingPhysicalOccupant(
   const occupant = cars.find((other) => other.id === control.occupiedByCarId);
   if (!occupant) return false;
 
-  // O carro que já entrou no cruzamento deve conseguir limpar a área.
-  // Se ele estiver em movimento e no mesmo eixo liberado, não bloqueia todo o fluxo.
-  if (intent && occupant.currentSpeed > 0.35 && isSameAxis(occupant.direction, intent.entryDirection)) {
+  if (intent && occupant.currentSpeed > 0.28 && isSameAxis(occupant.direction, intent.entryDirection)) {
+    return false;
+  }
+
+  if (intent && occupant.insideIntersectionSeconds > 2.4 && isSameAxis(occupant.direction, intent.entryDirection)) {
+    return false;
+  }
+
+  // Se o ocupante está limpando o cruzamento, não segure todo mundo indefinidamente.
+  if (occupant.currentSpeed > 0.42 && occupant.insideIntersectionSeconds < 2.2) {
     return false;
   }
 
@@ -483,6 +606,10 @@ function shouldClearIntersectionBox(grid: Tile[][], car: Car): boolean {
 function getRoadType(grid: Tile[][], pos: Vec2): RoadType {
   const type = grid[pos.y]?.[pos.x]?.type;
   return type === 'avenue' ? 'avenue' : 'road';
+}
+
+function getRoadRank(grid: Tile[][], pos: Vec2): number {
+  return getRoadType(grid, pos) === 'avenue' ? 2 : 1;
 }
 
 function isTurningSoon(car: Car): boolean {
@@ -504,8 +631,12 @@ function findLeaderAhead(car: Car, cars: Car[], direction: TravelDirection, lane
     if (other.id === car.id || other.status === 'arrived') continue;
     if (other.direction !== direction || other.laneIndex !== laneIndex) continue;
     if (Math.round(other[lineAxis]) !== laneLine) continue;
-    const distance = travelScalar(other, direction) - scalar;
-    if (distance <= 0 || distance > LOOK_AHEAD_DISTANCE) continue;
+    const rawDistance = travelScalar(other, direction) - scalar;
+    const overlapped = Math.abs(rawDistance) <= OVERLAP_LEADER_DISTANCE;
+    if (!overlapped && (rawDistance <= 0 || rawDistance > LOOK_AHEAD_DISTANCE)) continue;
+    if (overlapped && other.id > car.id) continue;
+
+    const distance = overlapped ? OVERLAP_LEADER_DISTANCE : rawDistance;
     if (!leader || distance < leader.distance) leader = { car: other, distance };
   }
 
@@ -522,4 +653,14 @@ function hashLane(id: string): number {
   let total = 0;
   for (let i = 0; i < id.length; i += 1) total += id.charCodeAt(i);
   return total % 2;
+}
+
+function isTrafficDebugEnabled(): boolean {
+  try {
+    const fromStorage = globalThis.localStorage?.getItem('cityTrafficDebug') === '1';
+    const fromUrl = new URLSearchParams(globalThis.location?.search ?? '').get('trafficDebug') === '1';
+    return fromStorage || fromUrl;
+  } catch {
+    return false;
+  }
 }

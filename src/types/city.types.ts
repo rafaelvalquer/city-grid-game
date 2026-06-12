@@ -35,8 +35,9 @@ export type TrafficCell = {
 };
 
 export type TrafficLightAxis = 'horizontal' | 'vertical';
-export type TrafficLightPhase = 'horizontalGreen' | 'horizontalYellow' | 'verticalGreen' | 'verticalYellow';
+export type TrafficLightPhase = 'horizontalGreen' | 'horizontalYellow' | 'verticalGreen' | 'verticalYellow' | 'allRedClearance';
 export type TrafficLightSignal = 'green' | 'yellow' | 'red';
+export type TrafficLightSwitchReason = 'timer' | 'adaptive' | 'emergency' | 'startup';
 
 export type TrafficLightState = {
   id: string;
@@ -47,6 +48,11 @@ export type TrafficLightState = {
   greenSeconds: number;
   yellowSeconds: number;
   offsetSeconds: number;
+  startupSeconds: number;
+  emergencyAxis?: TrafficLightAxis;
+  emergencySeconds: number;
+  nextGreenAxis?: TrafficLightAxis;
+  lastSwitchReason: TrafficLightSwitchReason;
 };
 
 export type CityStats = {

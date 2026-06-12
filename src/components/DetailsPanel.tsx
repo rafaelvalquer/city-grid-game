@@ -13,11 +13,28 @@ const trafficStateLabel = {
   turning: 'Reduzindo na curva',
 } as const;
 
+const intersectionReasonLabel = {
+  signal_red: 'Semáforo vermelho',
+  signal_yellow: 'Semáforo amarelo',
+  unsignalized_queue: 'Fila sem semáforo',
+  right_turn_free: 'Conversão à direita livre',
+  box_occupied: 'Caixa ocupada',
+  exit_blocked: 'Saída bloqueada',
+} as const;
+
 const trafficLightPhaseLabel = {
   horizontalGreen: 'Horizontal verde',
   horizontalYellow: 'Horizontal amarelo',
   verticalGreen: 'Vertical verde',
   verticalYellow: 'Vertical amarelo',
+  allRedClearance: 'Todos vermelho',
+} as const;
+
+const switchReasonLabel = {
+  timer: 'Ciclo normal',
+  adaptive: 'Adaptativo',
+  emergency: 'Emergência anti-travamento',
+  startup: 'Instalação / amarelo piscante',
 } as const;
 
 export function DetailsPanel({ world, className = '', onClose }: { world: GameWorld; className?: string; onClose?: () => void }) {
@@ -66,8 +83,18 @@ export function DetailsPanel({ world, className = '', onClose }: { world: GameWo
           {selected.trafficLight && (
             <>
               <p><span>Semáforo</span><strong>{trafficLightPhaseLabel[selected.trafficLight.phase]}</strong></p>
-              <p><span>Faixa liberada</span><strong>{getTrafficLightOpenAxis(selected.trafficLight) === 'horizontal' ? 'Horizontal' : 'Vertical'}</strong></p>
+              <p>
+                <span>Faixa liberada</span>
+                <strong>{selected.trafficLight.phase === 'allRedClearance' ? 'Nenhuma' : getTrafficLightOpenAxis(selected.trafficLight) === 'horizontal' ? 'Horizontal' : 'Vertical'}</strong>
+              </p>
               <p><span>Tempo fase</span><strong>{selected.trafficLight.timer.toFixed(1)}s</strong></p>
+              <p><span>Modo</span><strong>{switchReasonLabel[selected.trafficLight.lastSwitchReason]}</strong></p>
+              {selected.trafficLight.startupSeconds > 0 && (
+                <p><span>Amarelo piscante</span><strong>{selected.trafficLight.startupSeconds.toFixed(1)}s</strong></p>
+              )}
+              {selected.trafficLight.emergencySeconds > 0 && (
+                <p><span>Anti-travamento</span><strong>{selected.trafficLight.emergencySeconds.toFixed(1)}s</strong></p>
+              )}
             </>
           )}
         </div>
@@ -77,6 +104,7 @@ export function DetailsPanel({ world, className = '', onClose }: { world: GameWo
         <div className="detail-card">
           <h3><Car size={15} /> Carro #{car.id}</h3>
           <p><span>Status</span><strong>{trafficStateLabel[car.trafficState]}</strong></p>
+          {car.intersectionReason && <p><span>Motivo parada</span><strong>{intersectionReasonLabel[car.intersectionReason]}</strong></p>}
           <p><span>Origem</span><strong>{world.getBuilding(car.originBuildingId)?.type ?? '-'}</strong></p>
           <p><span>Destino</span><strong>{world.getBuilding(car.destinationBuildingId)?.type ?? '-'}</strong></p>
           <p><span>Tempo viagem</span><strong>{Math.round(car.travelTime)}s</strong></p>
@@ -87,11 +115,23 @@ export function DetailsPanel({ world, className = '', onClose }: { world: GameWo
           {car.intersectionWaitSeconds > 0 && (
             <p><span>Espera cruzamento</span><strong>{car.intersectionWaitSeconds.toFixed(1)}s</strong></p>
           )}
+          {car.stuckSeconds > 0 && (
+            <p><span>Tempo travado</span><strong>{car.stuckSeconds.toFixed(1)}s</strong></p>
+          )}
           {car.intersectionQueuePosition && (
             <p><span>Fila cruzamento</span><strong>{car.intersectionQueuePosition}/{car.intersectionQueueLength ?? car.intersectionQueuePosition}</strong></p>
           )}
           {car.gridlockEscapeSeconds > 0 && (
             <p><span>Anti-travamento</span><strong>Prioridade ativa</strong></p>
+          )}
+          {car.rerouteCount > 0 && (
+            <p><span>Rotas recalculadas</span><strong>{car.rerouteCount}</strong></p>
+          )}
+          {car.lastRerouteReason && (
+            <p><span>Última decisão</span><strong>{car.lastRerouteReason}</strong></p>
+          )}
+          {car.signalTransitionGraceSeconds > 0 && (
+            <p><span>Adaptação semáforo</span><strong>{car.signalTransitionGraceSeconds.toFixed(1)}s</strong></p>
           )}
           <p><span>Rota</span><strong>{car.route.length} tiles</strong></p>
         </div>

@@ -1,5 +1,5 @@
-import { CircleDot, Eye, Flame, Gauge, Hammer, Pause, Play, Radar, Route, Trash2, X } from 'lucide-react';
-import { useGameStore } from '../store/gameStore';
+import { CircleDot, Eye, Gauge, Hammer, Pause, Play, Radar, Route, Trash2, X } from 'lucide-react';
+import { useGameStore, type HeatmapMode } from '../store/gameStore';
 import type { Tool, SimulationSpeed } from '../types/game.types';
 import { ROAD_CONFIG } from '../game/config/roadConfig';
 import { TRAFFIC_LIGHT_BUILD_COST } from '../game/systems/trafficLights';
@@ -12,11 +12,19 @@ const tools: Array<{ id: Tool; label: string; cost?: number; Icon: typeof Route 
   { id: 'inspect', label: 'Inspecionar', Icon: Eye },
 ];
 
+const heatmapModes: Array<{ id: HeatmapMode; label: string }> = [
+  { id: 'traffic', label: 'Trânsito' },
+  { id: 'satisfaction', label: 'Satisfação' },
+  { id: 'flow', label: 'Fluxo' },
+  { id: 'disconnected', label: 'Conexões' },
+  { id: 'off', label: 'Off' },
+];
+
 export function ToolPanel({ className = '', onClose }: { className?: string; onClose?: () => void }) {
   const selectedTool = useGameStore((s) => s.selectedTool);
   const setTool = useGameStore((s) => s.setTool);
-  const showHeatmap = useGameStore((s) => s.showHeatmap);
-  const toggleHeatmap = useGameStore((s) => s.toggleHeatmap);
+  const heatmapMode = useGameStore((s) => s.heatmapMode);
+  const setHeatmapMode = useGameStore((s) => s.setHeatmapMode);
   const paused = useGameStore((s) => s.paused);
   const togglePaused = useGameStore((s) => s.togglePaused);
   const speed = useGameStore((s) => s.speed);
@@ -51,10 +59,18 @@ export function ToolPanel({ className = '', onClose }: { className?: string; onC
 
       <div className="panel-section">
         <h3>Visualização</h3>
-        <button className={showHeatmap ? 'tool active' : 'tool'} onClick={toggleHeatmap}>
-          <Flame size={16} /> Heatmap
-        </button>
-        <div className="hint"><Radar size={14} /> Vermelho indica gargalo.</div>
+        <div className="heatmap-mode-grid" role="group" aria-label="Modo de heatmap">
+          {heatmapModes.map((mode) => (
+            <button
+              key={mode.id}
+              className={heatmapMode === mode.id ? 'heatmap-mode active' : 'heatmap-mode'}
+              onClick={() => setHeatmapMode(mode.id)}
+            >
+              {mode.label}
+            </button>
+          ))}
+        </div>
+        <div className="hint"><Radar size={14} /> Camadas para diagnosticar a cidade.</div>
       </div>
 
       <div className="panel-section">
