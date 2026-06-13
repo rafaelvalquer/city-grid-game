@@ -25,5 +25,5 @@ export function getNeighbors4(pos: Vec2): Vec2[] {
 }
 
 export function isRoadType(type: TileType): boolean {
-  return type === 'road' || type === 'avenue';
+  return type === 'road' || type === 'avenue' || type === 'roundabout';
 }

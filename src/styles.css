@@ -434,6 +434,31 @@ h3 {
   color: var(--text);
 }
 
+.upgrade-box {
+  margin-top: 12px;
+  padding: 10px;
+  border: 1px solid rgba(150, 167, 189, 0.16);
+  border-radius: 8px;
+  background: rgba(11, 21, 36, 0.72);
+}
+
+.upgrade-box > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+
+.upgrade-box > div span,
+.upgrade-box p span {
+  color: var(--muted);
+}
+
+.upgrade-box p {
+  margin: 6px 0;
+}
+
 .muted {
   color: var(--muted);
   font-size: 13px;
@@ -506,6 +531,7 @@ h3 {
 .chart-legend .congestion { background: var(--warn); }
 
 .good { color: var(--good) !important; }
+.warn { color: var(--warn) !important; }
 .bad { color: var(--bad) !important; }
 
 .bottom-bar {

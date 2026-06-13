@@ -4,9 +4,13 @@ export type DayPeriod = 'morning' | 'noon' | 'afternoon' | 'evening' | 'night';
 
 export class TimeSystem {
   private minutes = 6 * 60;
+  private day = 1;
 
   update(deltaSeconds: number): void {
-    this.minutes = (this.minutes + deltaSeconds * GAME_CONFIG.cityMinutePerRealSecond) % (24 * 60);
+    const nextMinutes = this.minutes + deltaSeconds * GAME_CONFIG.cityMinutePerRealSecond;
+    const elapsedDays = Math.floor(nextMinutes / (24 * 60));
+    if (elapsedDays > 0) this.day += elapsedDays;
+    this.minutes = nextMinutes % (24 * 60);
   }
 
   getHour(): number {
@@ -20,6 +24,10 @@ export class TimeSystem {
     if (h >= 14 && h < 17) return 'afternoon';
     if (h >= 17 && h < 21) return 'evening';
     return 'night';
+  }
+
+  getDay(): number {
+    return this.day;
   }
 
   getLabel(): string {

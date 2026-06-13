@@ -3,6 +3,7 @@ import type { RoadType, Tile, Vec2 } from '../../types/city.types';
 import { ROAD_CONFIG } from '../config/roadConfig';
 import { getNeighbors4, isRoadType, keyOf } from '../city/grid';
 import { getTrafficLightSignal, isTrafficLightControlling, type TrafficLightMap } from './trafficLights';
+import { getRoundaboutCenter, isEnteringRoundabout, isInsideRoundabout, isRoundaboutTile } from './roundabouts';
 
 export type TrafficDecision = {
   targetSpeed: number;
@@ -90,6 +91,10 @@ export function getLaneOffset(
   roadType: RoadType,
   carId: string,
 ): { offset: Vec2; laneIndex: number; laneCount: number; laneSide: -1 | 1 } {
+  if (roadType === 'roundabout') {
+    return { offset: { x: 0, y: 0 }, laneIndex: 0, laneCount: 1, laneSide: 1 };
+  }
+
   const isAvenue = roadType === 'avenue';
   const laneIndex = isAvenue ? hashLane(carId) : 0;
   const laneCount = isAvenue ? 4 : 2;
@@ -104,6 +109,7 @@ export function getLaneOffset(
 export function isIntersection(grid: Tile[][], pos: Vec2): boolean {
   const tile = grid[pos.y]?.[pos.x];
   if (!tile || !isRoadType(tile.type)) return false;
+  if (isRoundaboutTile(tile)) return false;
   return getNeighbors4(pos).filter((next) => isRoadType(grid[next.y]?.[next.x]?.type)).length >= 3;
 }
 
@@ -206,6 +212,39 @@ export function computeTrafficDecision(
   if (insideIntersection || clearingIntersectionBox) {
     targetSpeed = Math.max(targetSpeed, INTERSECTION_CLEAR_SPEED);
     state = 'intersection';
+    hardStop = false;
+  }
+
+  if (isInsideRoundabout(grid, current)) {
+    targetSpeed = Math.min(targetSpeed, desiredSpeed);
+    state = turning ? 'turning' : 'moving';
+    hardStop = false;
+  } else if (isEnteringRoundabout(grid, current, next)) {
+    const blockedByRoundabout = findRoundaboutEntryBlocker(grid, car, cars, next);
+    if (blockedByRoundabout) {
+      targetSpeed = car.progressToNext >= TRAFFIC_LIGHT_STOP_AT ? 0 : Math.min(targetSpeed, INTERSECTION_APPROACH_SPEED);
+      state = 'intersection';
+      hardStop = car.progressToNext >= TRAFFIC_LIGHT_STOP_AT;
+      blockedByCarId = blockedByRoundabout.id;
+      return {
+        targetSpeed,
+        desiredSpeed,
+        laneOffset: offset,
+        laneIndex,
+        laneCount,
+        laneSide,
+        direction,
+        state,
+        blockedByCarId,
+        intersectionStopKey: keyOf(next.x, next.y),
+        intersectionReason: 'roundabout_yield',
+        turning,
+        hardStop,
+      };
+    }
+
+    targetSpeed = Math.min(targetSpeed, 0.45);
+    state = 'turning';
     hardStop = false;
   }
 
@@ -448,6 +487,26 @@ function canReleaseIntoIntersection(intent: IntersectionIntent): boolean {
   return !intent.exitBlocked;
 }
 
+function findRoundaboutEntryBlocker(grid: Tile[][], car: Car, cars: Car[], entryTile: Vec2): Car | undefined {
+  const center = getRoundaboutCenter(grid, entryTile);
+  if (!center) return undefined;
+
+  for (const other of cars) {
+    if (other.id === car.id || other.status === 'arrived') continue;
+    if (!isInsideRoundabout(grid, { x: other.currentTileX, y: other.currentTileY })) continue;
+    const otherCenter = getRoundaboutCenter(grid, { x: other.currentTileX, y: other.currentTileY });
+    if (!otherCenter || otherCenter.x !== center.x || otherCenter.y !== center.y) continue;
+
+    const distanceToEntry = Math.hypot(other.x - entryTile.x, other.y - entryTile.y);
+    if (distanceToEntry < 1.08) return other;
+
+    const otherNext = other.route[other.routeIndex + 1];
+    if (otherNext && otherNext.x === entryTile.x && otherNext.y === entryTile.y) return other;
+  }
+
+  return undefined;
+}
+
 function areMovementsCompatible(grid: Tile[][], intersectionKey: string, a: IntersectionIntent, b: IntersectionIntent): boolean {
   if (a.carId === b.carId) return true;
   if (isSameMovement(a, b)) return false;
@@ -605,7 +664,8 @@ function shouldClearIntersectionBox(grid: Tile[][], car: Car): boolean {
 
 function getRoadType(grid: Tile[][], pos: Vec2): RoadType {
   const type = grid[pos.y]?.[pos.x]?.type;
-  return type === 'avenue' ? 'avenue' : 'road';
+  if (type === 'avenue' || type === 'roundabout') return type;
+  return 'road';
 }
 
 function getRoadRank(grid: Tile[][], pos: Vec2): number {

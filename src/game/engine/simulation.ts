@@ -1,14 +1,15 @@
 import { nanoid } from 'nanoid';
-import type { Building, CityStats, RoadType, SelectedEntity, Tile, TrafficCell, TrafficLightAxis, TrafficLightState, Vec2 } from '../../types/city.types';
+import type { Building, BuildingLevel, CityStats, RoadType, SelectedEntity, Tile, TrafficCell, TrafficLightAxis, TrafficLightState, Vec2 } from '../../types/city.types';
 import type { Car } from '../../types/agent.types';
 import type { Tool } from '../../types/game.types';
 import { GAME_CONFIG } from '../config/gameConfig';
 import { ROAD_CONFIG } from '../config/roadConfig';
 import { createGrid, inBounds, isRoadType, keyOf } from '../city/grid';
 import { CityGenerator } from '../city/cityGenerator';
-import { updateBuildingConnection } from '../city/buildings';
+import { applyBuildingLevel, updateBuildingConnection } from '../city/buildings';
 import { findFastestPath } from '../pathfinding/pathfinder';
 import { buildIntersectionControls, computeTrafficDecision, getDirection, getLaneOffset, isIntersection } from '../systems/trafficRules';
+import { canPlaceRoundabout, findRoundaboutCenterForTile, getRoundaboutArea, getRoundaboutRing, isRoundaboutCenter, isRoundaboutTile } from '../systems/roundabouts';
 import {
   createTrafficLight,
   EMPTY_TRAFFIC_LIGHT_DEMAND,
@@ -28,6 +29,13 @@ const REROUTE_FORCE_SECONDS = 14;
 const REROUTE_COOLDOWN_SECONDS = 11;
 const INTERSECTION_REROUTE_STUCK_SECONDS = 22;
 const SPAWN_LANE_CLEAR_DISTANCE = 0.85;
+const TRAVEL_TIME_HISTORY_LIMIT = 35;
+const FAILED_TRIP_PRESSURE_DECAY = 0.82;
+const FAILED_TRIP_PENALTY_FACTOR = 0.9;
+const BUILDING_UPGRADE_EVERY_SECONDS = 10;
+const BUILDING_UPGRADE_MIN_SATISFACTION = 45;
+const BUILDING_UPGRADE_MAX_CONGESTION = 140;
+const BUILDING_UPGRADE_MIN_SCORE = 3.2;
 
 export class GameWorld {
   grid: Tile[][] = createGrid();
@@ -46,10 +54,13 @@ export class GameWorld {
   generator = new CityGenerator();
 
   private buildingTimer = 0;
+  private buildingUpgradeTimer = 0;
   private tripTimer = 0;
   private economyTimer = 0;
   private listeners = new Set<() => void>();
   private tripHistory: number[] = [];
+  private failedTripPressure = 0;
+  private lastProcessedDay = 1;
   private nextPriorityToken = 1;
   private trafficLightDebugTimers = new Map<string, number>();
 
@@ -83,6 +94,7 @@ export class GameWorld {
       completedTrips: this.completedTrips,
       failedTrips: this.failedTrips,
       cityLevel: this.cityLevel,
+      day: this.time.getDay(),
       timeLabel: this.time.getLabel(),
       dayPeriod: this.time.getPeriod(),
     };
@@ -105,12 +117,15 @@ export class GameWorld {
     if (paused || speed === 0) return;
     const dt = Math.min(0.08, deltaSeconds) * speed;
     this.time.update(dt);
+    this.updateDailyBuildingActivity();
     this.updateTrafficLights(dt);
     this.buildingTimer += dt;
+    this.buildingUpgradeTimer += dt;
     this.tripTimer += dt;
     this.economyTimer += dt;
 
     this.updateConnections();
+    this.refreshSelectedBuilding();
     this.updateTrafficMap();
     this.updateCars(dt);
     this.updateTrafficMap();
@@ -125,6 +140,11 @@ export class GameWorld {
       this.growCity();
     }
 
+    if (this.buildingUpgradeTimer >= BUILDING_UPGRADE_EVERY_SECONDS) {
+      this.buildingUpgradeTimer = 0;
+      this.updateBuildingUpgrades();
+    }
+
     if (this.economyTimer >= GAME_CONFIG.economyTickSeconds) {
       this.economyTimer = 0;
       this.updateEconomyAndSatisfaction();
@@ -135,8 +155,30 @@ export class GameWorld {
     if (!inBounds(x, y)) return false;
     const tile = this.grid[y][x];
 
+    if (tool === 'roundabout') {
+      const placement = canPlaceRoundabout(this.grid, { x, y });
+      if (!placement.valid) return false;
+      if (this.money < ROAD_CONFIG.roundabout.buildCost) return false;
+
+      for (const pos of getRoundaboutArea({ x, y })) {
+        this.trafficLights.delete(getTrafficLightKey(pos.x, pos.y));
+        this.grid[pos.y][pos.x] = { x: pos.x, y: pos.y, type: 'empty' };
+      }
+      for (const pos of getRoundaboutRing({ x, y })) {
+        this.grid[pos.y][pos.x] = { x: pos.x, y: pos.y, type: 'roundabout' };
+      }
+      this.grid[y][x] = { x, y, type: 'roundaboutCenter' };
+      this.rerouteCarsAffectedBy(getRoundaboutArea({ x, y }));
+      this.money -= ROAD_CONFIG.roundabout.buildCost;
+      this.updateConnections();
+      this.inspectAt(x, y - 1);
+      this.emit();
+      return true;
+    }
+
     if (tool === 'trafficLight') {
       if (!isRoadType(tile.type)) return false;
+      if (isRoundaboutTile(tile)) return false;
       if (!isIntersection(this.grid, { x, y })) return false;
       const key = getTrafficLightKey(x, y);
       if (this.trafficLights.has(key)) return false;
@@ -154,6 +196,7 @@ export class GameWorld {
 
     if (tool === 'road' || tool === 'avenue') {
       if (tile.type === 'building') return false;
+      if (isRoundaboutTile(tile) || isRoundaboutCenter(tile)) return false;
       const cost = ROAD_CONFIG[tool].buildCost;
       if (this.money < cost) return false;
       if (tile.type === tool) return false;
@@ -165,12 +208,21 @@ export class GameWorld {
     }
 
     if (tool === 'remove') {
-      if (!isRoadType(tile.type)) return false;
-      const roadType = tile.type as RoadType;
+      if (!isRoadType(tile.type) && !isRoundaboutCenter(tile)) return false;
+      const center = findRoundaboutCenterForTile(this.grid, { x, y });
+      const roadType = center ? 'roundabout' : tile.type as RoadType;
       const cost = ROAD_CONFIG[roadType].removeCost;
       if (this.money < cost) return false;
-      this.grid[y][x] = { x, y, type: 'empty' };
-      this.trafficLights.delete(getTrafficLightKey(x, y));
+      if (center) {
+        for (const pos of getRoundaboutArea(center)) {
+          this.grid[pos.y][pos.x] = { x: pos.x, y: pos.y, type: 'empty' };
+          this.trafficLights.delete(getTrafficLightKey(pos.x, pos.y));
+        }
+        this.rerouteCarsAffectedBy(getRoundaboutArea(center));
+      } else {
+        this.grid[y][x] = { x, y, type: 'empty' };
+        this.trafficLights.delete(getTrafficLightKey(x, y));
+      }
       this.money -= cost;
       this.updateConnections();
       this.emit();
@@ -178,6 +230,41 @@ export class GameWorld {
     }
 
     return false;
+  }
+
+  buildRoadLine(tiles: Vec2[], roadType: 'road' | 'avenue'): { success: boolean; built: number; cost: number; reason?: string } {
+    const uniqueTiles = dedupeTiles(tiles);
+    if (!uniqueTiles.length) return { success: false, built: 0, cost: 0, reason: 'Nenhum tile selecionado.' };
+
+    let built = 0;
+    for (const pos of uniqueTiles) {
+      if (!inBounds(pos.x, pos.y)) return { success: false, built: 0, cost: 0, reason: 'A linha sai do mapa.' };
+      const tile = this.grid[pos.y][pos.x];
+      if (tile.type === 'building') return { success: false, built: 0, cost: 0, reason: 'A linha passa por um prédio.' };
+      if (isRoundaboutTile(tile) || isRoundaboutCenter(tile)) return { success: false, built: 0, cost: 0, reason: 'A linha passa por uma rotatória.' };
+      if (tile.type !== roadType) built += 1;
+    }
+
+    if (built === 0) return { success: false, built: 0, cost: 0, reason: 'Essa via já existe em toda a linha.' };
+
+    const cost = built * ROAD_CONFIG[roadType].buildCost;
+    if (this.money < cost) return { success: false, built, cost, reason: `Faltam $ ${cost - this.money} para construir.` };
+
+    for (const pos of uniqueTiles) {
+      if (this.grid[pos.y][pos.x].type !== roadType) {
+        this.grid[pos.y][pos.x] = { x: pos.x, y: pos.y, type: roadType };
+      }
+    }
+
+    for (const light of [...this.trafficLights.values()]) {
+      if (!isIntersection(this.grid, { x: light.x, y: light.y })) this.trafficLights.delete(getTrafficLightKey(light.x, light.y));
+    }
+
+    this.rerouteCarsAffectedBy(uniqueTiles);
+    this.money -= cost;
+    this.updateConnections();
+    this.emit();
+    return { success: true, built, cost };
   }
 
   inspectAt(x: number, y: number): SelectedEntity {
@@ -366,16 +453,16 @@ export class GameWorld {
       if (Math.random() > 0.62) continue;
       const trip = chooseTrip(this.buildings, this.time.getPeriod());
       if (!trip || !trip.origin.nearestRoad || !trip.destination.nearestRoad) {
-        this.failedTrips += 1;
+        this.recordFailedTrip();
         continue;
       }
       const route = findFastestPath(this.grid, this.traffic, trip.origin.nearestRoad, trip.destination.nearestRoad);
       if (route.length < 2) {
-        this.failedTrips += 1;
+        this.recordFailedTrip();
         continue;
       }
       const initialDirection = getDirection(route[0], route[1]);
-      const initialRoadType = this.grid[route[0].y]?.[route[0].x]?.type === 'avenue' ? 'avenue' : 'road';
+      const initialRoadType = this.getRoadTypeAt(route[0]);
       const carId = nanoid(8);
       const lane = getLaneOffset(initialDirection, initialRoadType, carId);
       if (this.isSpawnLaneBlocked(route[0], lane.offset, initialDirection)) {
@@ -422,6 +509,7 @@ export class GameWorld {
         intersectionReason: undefined,
       });
       trip.origin.tripsToday += 1;
+      trip.destination.tripsToday += 1;
     }
   }
 
@@ -533,7 +621,7 @@ export class GameWorld {
       for (const car of arrived) {
         this.completedTrips += 1;
         this.tripHistory.push(car.travelTime);
-        if (this.tripHistory.length > 100) this.tripHistory.shift();
+        if (this.tripHistory.length > TRAVEL_TIME_HISTORY_LIMIT) this.tripHistory.shift();
       }
       this.cars = this.cars.filter((c) => c.status !== 'arrived');
       this.averageTravelTime = this.tripHistory.length ? this.tripHistory.reduce((a, b) => a + b, 0) / this.tripHistory.length : 0;
@@ -591,7 +679,7 @@ export class GameWorld {
     if (newScore > oldScore * 0.94 && car.stuckSeconds < REROUTE_FORCE_SECONDS) return false;
 
     const direction = getDirection(newRoute[0], newRoute[1]);
-    const roadType = this.grid[newRoute[0].y]?.[newRoute[0].x]?.type === 'avenue' ? 'avenue' : 'road';
+    const roadType = this.getRoadTypeAt(newRoute[0]);
     const lane = getLaneOffset(direction, roadType, car.id);
 
     car.route = newRoute;
@@ -616,6 +704,75 @@ export class GameWorld {
     car.intersectionWaitSeconds = 0;
     car.gridlockEscapeSeconds = 0;
     return true;
+  }
+
+  private rerouteCarsAffectedBy(area: Vec2[]): void {
+    const affectedKeys = new Set(area.map((pos) => keyOf(pos.x, pos.y)));
+    for (const car of this.cars) {
+      const remainingRoute = car.route.slice(car.routeIndex);
+      if (!remainingRoute.some((pos) => affectedKeys.has(keyOf(pos.x, pos.y)))) continue;
+
+      if (isRoadType(this.grid[car.currentTileY]?.[car.currentTileX]?.type)) {
+        this.tryRerouteCar(car);
+        continue;
+      }
+
+      const fallbackStart = this.findNearestRoadTile({ x: car.currentTileX, y: car.currentTileY }, area);
+      const destination = this.getBuilding(car.destinationBuildingId)?.nearestRoad;
+      if (!fallbackStart || !destination) {
+        car.route = [{ x: car.currentTileX, y: car.currentTileY }];
+        car.routeIndex = 0;
+        car.status = 'arrived';
+        this.recordFailedTrip();
+        continue;
+      }
+
+      const newRoute = findFastestPath(this.grid, this.traffic, fallbackStart, destination);
+      if (newRoute.length < 2) {
+        car.route = [fallbackStart];
+        car.routeIndex = 0;
+        car.currentTileX = fallbackStart.x;
+        car.currentTileY = fallbackStart.y;
+        car.x = fallbackStart.x;
+        car.y = fallbackStart.y;
+        car.status = 'arrived';
+        this.recordFailedTrip();
+        continue;
+      }
+
+      const direction = getDirection(newRoute[0], newRoute[1]);
+      const roadType = this.getRoadTypeAt(newRoute[0]);
+      const lane = getLaneOffset(direction, roadType, car.id);
+      car.route = newRoute;
+      car.routeIndex = 0;
+      car.progressToNext = 0;
+      car.currentTileX = newRoute[0].x;
+      car.currentTileY = newRoute[0].y;
+      car.x = newRoute[0].x + lane.offset.x;
+      car.y = newRoute[0].y + lane.offset.y;
+      car.direction = direction;
+      car.laneOffset = lane.offset;
+      car.laneIndex = lane.laneIndex;
+      car.laneCount = lane.laneCount;
+      car.laneSide = lane.laneSide;
+      car.currentSpeed = 0;
+      car.targetSpeed = 0;
+      car.stuckSeconds = 0;
+      car.intersectionStopKey = undefined;
+      car.intersectionWaitSeconds = 0;
+      car.waitTimer = 0;
+      car.rerouteCount += 1;
+      car.lastRerouteReason = 'Via alterada: rota recalculada';
+    }
+  }
+
+  private findNearestRoadTile(origin: Vec2, candidates: Vec2[]): Vec2 | undefined {
+    return candidates
+      .filter((pos) => isRoadType(this.grid[pos.y]?.[pos.x]?.type))
+      .sort((a, b) => (
+        Math.abs(a.x - origin.x) + Math.abs(a.y - origin.y)
+        - (Math.abs(b.x - origin.x) + Math.abs(b.y - origin.y))
+      ))[0];
   }
 
   private buildRerouteTraffic(carToReroute: Car): Map<string, TrafficCell> {
@@ -644,6 +801,95 @@ export class GameWorld {
     if (building) this.addBuilding(building);
   }
 
+  private updateDailyBuildingActivity(): void {
+    const day = this.time.getDay();
+    if (day === this.lastProcessedDay) return;
+    this.lastProcessedDay = day;
+    this.buildings = this.buildings.map((building) => ({
+      ...building,
+      tripsToday: Math.floor(building.tripsToday * 0.25),
+    }));
+    this.refreshSelectedBuilding();
+  }
+
+  private updateBuildingUpgrades(): void {
+    const snapshot = this.getSnapshot();
+    if (this.satisfaction < BUILDING_UPGRADE_MIN_SATISFACTION) return;
+    if (snapshot.averageCongestion >= BUILDING_UPGRADE_MAX_CONGESTION) return;
+
+    const candidates = this.buildings
+      .map((building) => ({
+        building,
+        status: this.getBuildingUpgradeStatus(building),
+        score: this.getBuildingUpgradeScore(building),
+      }))
+      .filter((candidate) => candidate.status.canUpgrade && candidate.score >= BUILDING_UPGRADE_MIN_SCORE)
+      .sort((a, b) => b.score - a.score);
+
+    const candidate = candidates[0];
+    if (!candidate) return;
+    const nextLevel = this.nextAllowedBuildingLevel(candidate.building);
+    if (!nextLevel) return;
+
+    this.buildings = this.buildings.map((building) => (
+      building.id === candidate.building.id
+        ? applyBuildingLevel(building, nextLevel, this.time.getDay())
+        : building
+    ));
+    this.refreshSelectedBuilding();
+  }
+
+  getBuildingUpgradeStatus(building: Building): { canUpgrade: boolean; reason: string; nextLevel: BuildingLevel | null; score: number } {
+    const nextLevel = this.nextAllowedBuildingLevel(building);
+    const score = this.getBuildingUpgradeScore(building);
+    if (!nextLevel) return { canUpgrade: false, reason: 'Construção no nível máximo', nextLevel: null, score };
+    if (!building.connected) return { canUpgrade: false, reason: 'Precisa de conexão', nextLevel, score };
+    if (this.satisfaction < BUILDING_UPGRADE_MIN_SATISFACTION) return { canUpgrade: false, reason: 'Satisfação baixa demais', nextLevel, score };
+    if (this.getSnapshot().averageCongestion >= BUILDING_UPGRADE_MAX_CONGESTION) return { canUpgrade: false, reason: 'Trânsito alto demais', nextLevel, score };
+    if (!this.isBuildingLevelUnlocked(nextLevel)) return { canUpgrade: false, reason: 'Cidade precisa de nível maior', nextLevel, score };
+    if (score < BUILDING_UPGRADE_MIN_SCORE) return { canUpgrade: false, reason: 'Precisa de mais atividade', nextLevel, score };
+    return { canUpgrade: true, reason: 'Pode evoluir', nextLevel, score };
+  }
+
+  private nextAllowedBuildingLevel(building: Building): BuildingLevel | null {
+    if (building.level === 1) return 2;
+    if (building.level === 2) return 3;
+    return null;
+  }
+
+  private isBuildingLevelUnlocked(level: BuildingLevel): boolean {
+    if (level === 1) return true;
+    if (level === 2) return this.cityLevel >= 2 || this.time.getDay() >= 2;
+    return this.cityLevel >= 3 || this.time.getDay() >= 4;
+  }
+
+  private getBuildingUpgradeScore(building: Building): number {
+    const nearbyTraffic = this.getNearbyBuildingTraffic(building);
+    const levelBias = building.level === 1 ? 0.5 : 0;
+    const satisfactionBonus = Math.max(0, (this.satisfaction - BUILDING_UPGRADE_MIN_SATISFACTION) / 40);
+    return building.tripsToday * 0.7 + nearbyTraffic * 3.2 + satisfactionBonus + levelBias;
+  }
+
+  private getNearbyBuildingTraffic(building: Building): number {
+    let max = 0;
+    for (const next of [{ x: building.x + 1, y: building.y }, { x: building.x - 1, y: building.y }, { x: building.x, y: building.y + 1 }, { x: building.x, y: building.y - 1 }]) {
+      const traffic = this.traffic.get(keyOf(next.x, next.y));
+      if (traffic) max = Math.max(max, Math.min(2, traffic.cars / Math.max(1, traffic.capacity)));
+    }
+    return max;
+  }
+
+  private refreshSelectedBuilding(): void {
+    if (this.selected.kind !== 'building') return;
+    const building = this.getBuilding(this.selected.building.id);
+    if (building) this.selected = { kind: 'building', building };
+  }
+
+  private getRoadTypeAt(pos: Vec2): RoadType {
+    const type = this.grid[pos.y]?.[pos.x]?.type;
+    return type === 'avenue' || type === 'roundabout' ? type : 'road';
+  }
+
   private updateEconomyAndSatisfaction(): void {
     const connectedShops = this.buildings.filter((b) => b.type === 'shop' && b.connected).length;
     const connectedOffices = this.buildings.filter((b) => b.type === 'office' && b.connected).length;
@@ -653,9 +899,15 @@ export class GameWorld {
     const snapshot = this.getSnapshot();
     const disconnectedPenalty = snapshot.disconnectedBuildings * 4.5;
     const congestionPenalty = Math.min(52, snapshot.averageCongestion * 0.28);
-    const failedPenalty = Math.min(25, this.failedTrips * 0.12);
+    const failedPenalty = Math.min(25, this.failedTripPressure * FAILED_TRIP_PENALTY_FACTOR);
     const travelPenalty = Math.min(25, Math.max(0, this.averageTravelTime - 7) * 1.8);
     this.satisfaction = Math.max(0, Math.min(100, 100 - disconnectedPenalty - congestionPenalty - failedPenalty - travelPenalty));
+    this.failedTripPressure *= FAILED_TRIP_PRESSURE_DECAY;
+  }
+
+  private recordFailedTrip(): void {
+    this.failedTrips += 1;
+    this.failedTripPressure += 1;
   }
 
   getSelectedCarRoute(): Vec2[] {
@@ -711,6 +963,18 @@ function estimateRouteCost(grid: Tile[][], traffic: Map<string, TrafficCell>, ro
     total += ROAD_CONFIG[roadType].pathCost + congestionPenalty;
   }
   return total;
+}
+
+function dedupeTiles(tiles: Vec2[]): Vec2[] {
+  const seen = new Set<string>();
+  const result: Vec2[] = [];
+  for (const tile of tiles) {
+    const key = keyOf(tile.x, tile.y);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(tile);
+  }
+  return result;
 }
 
 function isTrafficDebugEnabled(): boolean {

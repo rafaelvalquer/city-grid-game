@@ -1,6 +1,7 @@
 import type { Tile, TrafficCell, Vec2 } from '../../types/city.types';
 import { ROAD_CONFIG } from '../config/roadConfig';
-import { getNeighbors4, isRoadType, keyOf } from '../city/grid';
+import { isRoadType, keyOf } from '../city/grid';
+import { getDrivableNeighbors } from '../systems/roundabouts';
 
 function heuristic(a: Vec2, b: Vec2): number {
   return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
@@ -32,10 +33,10 @@ export function findFastestPath(grid: Tile[][], traffic: Map<string, TrafficCell
     open.delete(current);
 
     const [cx, cy] = current.split(',').map(Number);
-    for (const next of getNeighbors4({ x: cx, y: cy })) {
+    for (const next of getDrivableNeighbors(grid, { x: cx, y: cy })) {
       const tile = grid[next.y][next.x];
       if (!isRoadType(tile.type)) continue;
-      const roadType = tile.type as 'road' | 'avenue';
+      const roadType = tile.type as 'road' | 'avenue' | 'roundabout';
       const base = ROAD_CONFIG[roadType].pathCost;
       const t = traffic.get(keyOf(next.x, next.y));
       const congestionPenalty = t ? Math.max(0, t.congestion - 0.2) * 12 : 0;

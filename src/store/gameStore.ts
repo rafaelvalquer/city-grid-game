@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { CityStats, SelectedEntity } from '../types/city.types';
+import type { Vec2 } from '../types/city.types';
 import type { SimulationSpeed, Tool } from '../types/game.types';
 
 export type HeatmapMode = 'traffic' | 'satisfaction' | 'flow' | 'disconnected' | 'off';
@@ -12,6 +13,9 @@ export type HoverPreview = {
   valid: boolean;
   reason?: string;
   tool?: Tool;
+  lineTiles?: Vec2[];
+  invalidTiles?: Vec2[];
+  buildableTiles?: number;
 };
 
 export type GameStore = {
@@ -44,6 +48,7 @@ const initialStats: CityStats = {
   completedTrips: 0,
   failedTrips: 0,
   cityLevel: 1,
+  day: 1,
   timeLabel: '06:00',
   dayPeriod: 'morning',
 };

@@ -1,7 +1,7 @@
 import { BarChart3, Building2, Car, CircleDot, MapPin, Route, X } from 'lucide-react';
 import { GameWorld } from '../game/engine/simulation';
 import { useGameStore } from '../store/gameStore';
-import { BUILDING_CONFIG } from '../game/config/buildingConfig';
+import { BUILDING_CONFIG, getBuildingLevelConfig } from '../game/config/buildingConfig';
 import { ROAD_CONFIG } from '../game/config/roadConfig';
 import { getTrafficLightOpenAxis } from '../game/systems/trafficLights';
 import { TrafficChart } from './TrafficChart';
@@ -20,6 +20,7 @@ const intersectionReasonLabel = {
   right_turn_free: 'Conversão à direita livre',
   box_occupied: 'Caixa ocupada',
   exit_blocked: 'Saída bloqueada',
+  roundabout_yield: 'Aguardando rotatória',
 } as const;
 
 const trafficLightPhaseLabel = {
@@ -40,6 +41,11 @@ const switchReasonLabel = {
 export function DetailsPanel({ world, className = '', onClose }: { world: GameWorld; className?: string; onClose?: () => void }) {
   const selected = useGameStore((s) => s.selected);
   const car = selected.kind === 'car' ? world.getCar(selected.carId) : undefined;
+  const buildingUpgrade = selected.kind === 'building' ? world.getBuildingUpgradeStatus(selected.building) : undefined;
+  const buildingLevelConfig = selected.kind === 'building' ? getBuildingLevelConfig(selected.building.type, selected.building.level) : undefined;
+  const nextBuildingLevelConfig = selected.kind === 'building' && buildingUpgrade?.nextLevel
+    ? getBuildingLevelConfig(selected.building.type, buildingUpgrade.nextLevel)
+    : undefined;
 
   return (
     <aside className={`details-panel ${className}`}>
@@ -62,13 +68,31 @@ export function DetailsPanel({ world, className = '', onClose }: { world: GameWo
 
       {selected.kind === 'building' && (
         <div className="detail-card">
-          <h3><Building2 size={15} /> {BUILDING_CONFIG[selected.building.type].label}</h3>
+          <h3><Building2 size={15} /> {buildingLevelConfig?.label ?? BUILDING_CONFIG[selected.building.type].label}</h3>
           <p><span>Status</span><strong className={selected.building.connected ? 'good' : 'bad'}>{selected.building.connected ? 'Conectado' : 'Desconectado'}</strong></p>
+          <p><span>Nível da construção</span><strong>{selected.building.level}/3</strong></p>
           <p><span>População</span><strong>{selected.building.population}</strong></p>
           <p><span>Empregos</span><strong>{selected.building.jobs}</strong></p>
           <p><span>Atração</span><strong>{selected.building.attraction}</strong></p>
           <p><span>Viagens hoje</span><strong>{selected.building.tripsToday}</strong></p>
           <p><span>Posição</span><strong>{selected.building.x}, {selected.building.y}</strong></p>
+          <div className="upgrade-box">
+            <div>
+              <span>Melhoria</span>
+              <strong className={buildingUpgrade?.canUpgrade ? 'good' : selected.building.level === 3 ? 'good' : 'warn'}>
+                {buildingUpgrade?.reason ?? 'Avaliando'}
+              </strong>
+            </div>
+            {nextBuildingLevelConfig ? (
+              <>
+                <p><span>Próximo nível</span><strong>{nextBuildingLevelConfig.label}</strong></p>
+                <p><span>Benefício</span><strong>+{Math.max(0, nextBuildingLevelConfig.population - selected.building.population)} pop · +{Math.max(0, nextBuildingLevelConfig.jobs - selected.building.jobs)} emp · +{Math.max(0, nextBuildingLevelConfig.attraction - selected.building.attraction)} atr</strong></p>
+                <p><span>Atividade</span><strong>{buildingUpgrade ? `${buildingUpgrade.score.toFixed(1)} pts` : '-'}</strong></p>
+              </>
+            ) : (
+              <p><span>Próximo nível</span><strong>Máximo</strong></p>
+            )}
+          </div>
         </div>
       )}
 

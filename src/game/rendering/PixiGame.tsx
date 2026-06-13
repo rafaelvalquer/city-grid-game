@@ -11,6 +11,7 @@ import type { Tool } from '../../types/game.types';
 import { MAP_COLORS, congestionColor } from './visualTheme';
 import { getDirection, getLaneOffset, isIntersection } from '../systems/trafficRules';
 import { getTrafficLightSignal, TRAFFIC_LIGHT_BUILD_COST } from '../systems/trafficLights';
+import { canPlaceRoundabout, findRoundaboutCenterForTile, getRoundaboutCenter, getRoundaboutRing, isRoundaboutCenter, isRoundaboutTile } from '../systems/roundabouts';
 
 type ActionPreview = HoverPreview & {
   reason?: string;
@@ -26,6 +27,12 @@ type CarRenderPose = {
   turningAmount: number;
 };
 
+type RoadLineDrag = {
+  startTile: Vec2;
+  currentTile: Vec2;
+  tool: 'road' | 'avenue';
+};
+
 const TURN_IN_START = 0.64;
 const TURN_OUT_END = 0.36;
 const SIGNAL_RED = 0xef4444;
@@ -39,6 +46,7 @@ export function PixiGame({ world }: { world: GameWorld }) {
   const stageRef = useRef<Container | null>(null);
   const isDrawingRef = useRef(false);
   const lastTileRef = useRef<string>('');
+  const roadLineDragRef = useRef<RoadLineDrag | null>(null);
   const cameraRef = useRef({ x: 56, y: 42, scale: 0.75 });
   const panningRef = useRef<{ active: boolean; x: number; y: number }>({ active: false, x: 0, y: 0 });
   const hoverPreview = useGameStore((s) => s.hoverPreview);
@@ -112,6 +120,12 @@ export function PixiGame({ world }: { world: GameWorld }) {
       const updateHover = (clientX: number, clientY: number) => {
         const state = useGameStore.getState();
         const tile = toWorldTile(clientX, clientY);
+        const drag = roadLineDragRef.current;
+        if (drag) {
+          drag.currentTile = tile;
+          state.setHoverPreview(getLineBuildPreview(world, getLineTiles(drag.startTile, tile), drag.tool, state.stats.money));
+          return;
+        }
         state.setHoverPreview({ ...getActionPreview(world, tile.x, tile.y, state.selectedTool, state.stats.money), tool: state.selectedTool });
       };
 
@@ -123,11 +137,30 @@ export function PixiGame({ world }: { world: GameWorld }) {
         isDrawingRef.current = true;
         lastTileRef.current = '';
         const tile = toWorldTile(event.clientX, event.clientY);
+        const state = useGameStore.getState();
+        if (isRoadLineTool(state.selectedTool)) {
+          roadLineDragRef.current = { startTile: tile, currentTile: tile, tool: state.selectedTool };
+          state.setHoverPreview(getLineBuildPreview(world, [tile], state.selectedTool, state.stats.money));
+          state.setActionFeedback(null);
+          return;
+        }
         updateHover(event.clientX, event.clientY);
         applyTool(tile.x, tile.y);
       }, { signal: abortController.signal });
 
       window.addEventListener('pointerup', () => {
+        const drag = roadLineDragRef.current;
+        if (drag) {
+          const state = useGameStore.getState();
+          const lineTiles = getLineTiles(drag.startTile, drag.currentTile);
+          const preview = getLineBuildPreview(world, lineTiles, drag.tool, state.stats.money);
+          const result = world.buildRoadLine(lineTiles, drag.tool);
+          state.setActionFeedback(result.success
+            ? `${ROAD_CONFIG[drag.tool].label} construída: ${result.built} tiles por $ ${result.cost}.`
+            : result.reason ?? preview.reason ?? 'Não foi possível construir a linha.');
+          state.setHoverPreview(null);
+        }
+        roadLineDragRef.current = null;
         isDrawingRef.current = false;
         panningRef.current.active = false;
         lastTileRef.current = '';
@@ -144,11 +177,13 @@ export function PixiGame({ world }: { world: GameWorld }) {
         }
         updateHover(event.clientX, event.clientY);
         if (!isDrawingRef.current) return;
+        if (roadLineDragRef.current) return;
         const tile = toWorldTile(event.clientX, event.clientY);
         applyTool(tile.x, tile.y);
       }, { signal: abortController.signal });
 
       app.canvas.addEventListener('pointerleave', () => {
+        if (roadLineDragRef.current) return;
         useGameStore.getState().setHoverPreview(null);
       }, { signal: abortController.signal });
 
@@ -185,7 +220,7 @@ export function PixiGame({ world }: { world: GameWorld }) {
       <div className="canvas-overlay top">
         <span>Alt + arrastar ou botão do meio: mover</span>
         <span>Scroll: zoom</span>
-        <span>Clique/arraste: construir</span>
+        <span>Clique e arraste: traçar rua/avenida</span>
       </div>
       {hoverPreview && (
         <div className={`tile-preview ${hoverPreview.valid ? 'valid' : 'invalid'}`}>
@@ -230,13 +265,15 @@ function draw(
       if (tile.type === 'empty') drawLotDecoration(graphics, x, y, ts);
       if (tile.type === 'road') drawRoad(graphics, world.grid, x, y, ts, 'road');
       if (tile.type === 'avenue') drawRoad(graphics, world.grid, x, y, ts, 'avenue');
+      if (tile.type === 'roundabout') drawRoad(graphics, world.grid, x, y, ts, 'roundabout');
+      if (tile.type === 'roundaboutCenter') drawRoundaboutIsland(graphics, world.grid, x, y, ts);
     }
   }
 
   for (let y = 0; y < GAME_CONFIG.gridHeight; y++) {
     for (let x = 0; x < GAME_CONFIG.gridWidth; x++) {
       const tile = world.grid[y][x];
-      if (isRoadType(tile.type)) drawRoadSignage(graphics, world, x, y, ts);
+      if (isRoadType(tile.type) && tile.type !== 'roundabout') drawRoadSignage(graphics, world, x, y, ts);
     }
   }
 
@@ -352,11 +389,12 @@ function lotDecorAt(x: number, y: number): LotDecor {
 
 function drawRoad(graphics: Graphics, grid: Tile[][], x: number, y: number, ts: number, type: RoadType): void {
   const isAvenue = type === 'avenue';
+  const isRoundabout = type === 'roundabout';
   const px = x * ts;
   const py = y * ts;
   const roadColor = isAvenue ? MAP_COLORS.avenue : MAP_COLORS.road;
   const edgeColor = isAvenue ? MAP_COLORS.avenueEdge : MAP_COLORS.roadEdge;
-  const roadW = isAvenue ? 34 : 24;
+  const roadW = isAvenue ? 34 : isRoundabout ? 28 : 24;
   const walkW = Math.min(ts - 4, roadW + 8);
   const halfRoad = roadW / 2;
   const halfWalk = walkW / 2;
@@ -375,7 +413,43 @@ function drawRoad(graphics: Graphics, grid: Tile[][], x: number, y: number, ts: 
   drawRoadConnectors(graphics, px, py, ts, halfRoad, roadColor, neighbors);
   graphics.circle(px + center, py + center, halfRoad).fill(roadColor).stroke({ color: edgeColor, width: 1, alpha: 0.75 });
 
-  drawLaneMarkings(graphics, px, py, ts, isAvenue, neighbors);
+  if (isRoundabout) {
+    drawRoundaboutMarkings(graphics, grid, x, y, ts);
+  } else {
+    drawLaneMarkings(graphics, px, py, ts, isAvenue, neighbors);
+  }
+}
+
+function drawRoundaboutIsland(graphics: Graphics, grid: Tile[][], x: number, y: number, ts: number): void {
+  const px = x * ts;
+  const py = y * ts;
+  const center = ts / 2;
+  graphics.circle(px + center + 2, py + center + 3, 15).fill({ color: MAP_COLORS.shadow, alpha: 0.22 });
+  graphics.circle(px + center, py + center, 16).fill(MAP_COLORS.sidewalk);
+  graphics.circle(px + center, py + center, 12).fill({ color: MAP_COLORS.park, alpha: 0.9 });
+  graphics.circle(px + center - 4, py + center - 2, 3).fill(MAP_COLORS.tree);
+  graphics.circle(px + center + 5, py + center + 4, 2.6).fill(MAP_COLORS.treeLight);
+
+  for (const ring of getRoundaboutRing({ x, y })) {
+    if (!isRoundaboutTile(grid[ring.y]?.[ring.x])) continue;
+    const rx = ring.x * ts + center;
+    const ry = ring.y * ts + center;
+    const angle = Math.atan2(ry - (py + center), rx - (px + center)) - Math.PI / 2;
+    drawTurnArrow(graphics, rx, ry, angle);
+  }
+}
+
+function drawRoundaboutMarkings(graphics: Graphics, grid: Tile[][], x: number, y: number, ts: number): void {
+  const center = getRoundaboutCenter(grid, { x, y });
+  if (!center) return;
+  const px = x * ts;
+  const py = y * ts;
+  const localCenterX = center.x * ts + ts / 2;
+  const localCenterY = center.y * ts + ts / 2;
+  const cx = px + ts / 2;
+  const cy = py + ts / 2;
+  const angle = Math.atan2(cy - localCenterY, cx - localCenterX) - Math.PI / 2;
+  drawTurnArrow(graphics, cx, cy, angle);
 }
 
 function drawRoadSignage(graphics: Graphics, world: GameWorld, x: number, y: number, ts: number): void {
@@ -388,32 +462,43 @@ function drawRoadSignage(graphics: Graphics, world: GameWorld, x: number, y: num
   const neighbors = roadNeighbors(world.grid, x, y);
   const markColor = MAP_COLORS.laneSoft;
 
-  if (neighbors.west) drawCrosswalk(graphics, px + 4, py + center - 14, false, markColor);
-  if (neighbors.east) drawCrosswalk(graphics, px + ts - 10, py + center - 14, false, markColor);
-  if (neighbors.north) drawCrosswalk(graphics, px + center - 14, py + 4, true, markColor);
-  if (neighbors.south) drawCrosswalk(graphics, px + center - 14, py + ts - 10, true, markColor);
+  drawIntersectionBox(graphics, px, py, ts);
 
-  if (neighbors.west) drawStopMark(graphics, px + 7, py + center + 8, true);
-  if (neighbors.east) drawStopMark(graphics, px + ts - 15, py + center - 11, true);
-  if (neighbors.north) drawStopMark(graphics, px + center - 11, py + 7, false);
-  if (neighbors.south) drawStopMark(graphics, px + center + 8, py + ts - 15, false);
+  if (neighbors.west) {
+    drawCrosswalk(graphics, px + 5, py + center - 15, false, markColor);
+    drawStopMark(graphics, px + 8, py + center + 10, true);
+  }
+  if (neighbors.east) {
+    drawCrosswalk(graphics, px + ts - 11, py + center - 15, false, markColor);
+    drawStopMark(graphics, px + ts - 17, py + center - 12, true);
+  }
+  if (neighbors.north) {
+    drawCrosswalk(graphics, px + center - 15, py + 5, true, markColor);
+    drawStopMark(graphics, px + center - 12, py + 8, false);
+  }
+  if (neighbors.south) {
+    drawCrosswalk(graphics, px + center - 15, py + ts - 11, true, markColor);
+    drawStopMark(graphics, px + center + 10, py + ts - 17, false);
+  }
+}
 
-  if (neighbors.west) drawTurnArrow(graphics, px + 9, py + center - 3, 0);
-  if (neighbors.east) drawTurnArrow(graphics, px + ts - 9, py + center + 3, Math.PI);
-  if (neighbors.north) drawTurnArrow(graphics, px + center + 3, py + 9, Math.PI / 2);
-  if (neighbors.south) drawTurnArrow(graphics, px + center - 3, py + ts - 9, -Math.PI / 2);
+function drawIntersectionBox(graphics: Graphics, px: number, py: number, ts: number): void {
+  const inset = 11;
+  graphics.roundRect(px + inset, py + inset, ts - inset * 2, ts - inset * 2, 5)
+    .fill({ color: MAP_COLORS.laneSoft, alpha: 0.08 })
+    .stroke({ color: MAP_COLORS.laneSoft, width: 1, alpha: 0.16 });
 }
 
 function drawCrosswalk(graphics: Graphics, x: number, y: number, horizontal: boolean, color: number): void {
   for (let i = 0; i < 4; i += 1) {
-    if (horizontal) graphics.rect(x + i * 7, y, 4, 2).fill({ color, alpha: 0.68 });
-    else graphics.rect(x, y + i * 7, 2, 4).fill({ color, alpha: 0.68 });
+    if (horizontal) graphics.roundRect(x + i * 7, y, 4, 2, 1).fill({ color, alpha: 0.52 });
+    else graphics.roundRect(x, y + i * 7, 2, 4, 1).fill({ color, alpha: 0.52 });
   }
 }
 
 function drawStopMark(graphics: Graphics, x: number, y: number, horizontal: boolean): void {
-  if (horizontal) graphics.rect(x, y, 8, 2).fill({ color: MAP_COLORS.laneSoft, alpha: 0.72 });
-  else graphics.rect(x, y, 2, 8).fill({ color: MAP_COLORS.laneSoft, alpha: 0.72 });
+  if (horizontal) graphics.roundRect(x, y, 9, 2, 1).fill({ color: MAP_COLORS.laneSoft, alpha: 0.58 });
+  else graphics.roundRect(x, y, 2, 9, 1).fill({ color: MAP_COLORS.laneSoft, alpha: 0.58 });
 }
 
 function drawTurnArrow(graphics: Graphics, x: number, y: number, angle: number): void {
@@ -530,18 +615,26 @@ function drawBuildingVariant(graphics: Graphics, building: Building, ts: number)
   const py = y * ts;
   const variant = hash2(x, y, type.length);
   const activity = Math.min(1, (building.population + building.jobs + building.attraction) / 16);
-  const growth = activity > 0.72 ? 2 : activity > 0.38 ? 1 : 0;
+  const growth = building.level - 1;
   graphics.roundRect(px + 7, py + 8, ts - 7, ts - 7, 5).fill({ color: MAP_COLORS.buildingShadow, alpha: 0.22 + activity * 0.16 });
   if (type === 'house') {
     const roofShift = variant % 2 === 0 ? 0 : 3;
-    const bodyInset = growth === 2 ? 4 : 6;
+    const bodyInset = growth === 2 ? 3 : growth === 1 ? 5 : 6;
     const roofTop = growth === 2 ? py + 2 : py + 4;
-    graphics.poly([px + bodyInset - 1, py + 14, px + ts / 2 + roofShift, roofTop, px + ts - bodyInset + 1, py + 14]).fill(MAP_COLORS.houseRoof);
-    graphics.poly([px + ts - bodyInset + 1, py + 14, px + ts / 2 + roofShift, roofTop, px + ts / 2 + roofShift + 5, py + 15]).fill({ color: MAP_COLORS.shadow, alpha: 0.16 });
-    graphics.roundRect(px + bodyInset, py + 13, ts - bodyInset * 2, ts - 16 + growth, 3).fill(MAP_COLORS.house);
+    if (growth < 2) {
+      graphics.poly([px + bodyInset - 1, py + 14, px + ts / 2 + roofShift, roofTop, px + ts - bodyInset + 1, py + 14]).fill(MAP_COLORS.houseRoof);
+      graphics.poly([px + ts - bodyInset + 1, py + 14, px + ts / 2 + roofShift, roofTop, px + ts / 2 + roofShift + 5, py + 15]).fill({ color: MAP_COLORS.shadow, alpha: 0.16 });
+    } else {
+      graphics.roundRect(px + bodyInset, py + 5, ts - bodyInset * 2, 7, 2).fill(MAP_COLORS.houseRoof);
+    }
+    graphics.roundRect(px + bodyInset, py + (growth === 2 ? 9 : 13), ts - bodyInset * 2, ts - 16 + growth * 2, 3).fill(MAP_COLORS.house);
     graphics.rect(px + bodyInset + 6, py + 21, 5, 7).fill({ color: MAP_COLORS.carWindow, alpha: 0.42 + activity * 0.34 });
     graphics.rect(px + ts - bodyInset - 11, py + 18, 6, 5).fill({ color: MAP_COLORS.laneSoft, alpha: 0.34 + activity * 0.42 });
     if (growth > 0) graphics.rect(px + ts / 2 - 4, py + 25, 8, 7).fill({ color: MAP_COLORS.houseTrim, alpha: 0.72 });
+    if (growth === 2) {
+      graphics.rect(px + 11, py + 13, 4, 3).fill({ color: MAP_COLORS.laneSoft, alpha: 0.75 });
+      graphics.rect(px + 25, py + 13, 4, 3).fill({ color: MAP_COLORS.laneSoft, alpha: 0.75 });
+    }
   } else if (type === 'shop') {
     const heightBoost = growth * 2;
     graphics.roundRect(px + 5, py + 6 - heightBoost, ts - 10, ts - 10 + heightBoost, 3).fill(MAP_COLORS.shop);
@@ -566,7 +659,17 @@ function drawBuildingVariant(graphics: Graphics, building: Building, ts: number)
     }
     graphics.rect(px + 7, py + ts - 8, ts - 14, 2).fill({ color: MAP_COLORS.officeDark, alpha: 0.5 });
   }
+  drawBuildingLevelBadge(graphics, px, py, building.level);
   graphics.roundRect(px + 4, py + 4, ts - 8, ts - 8, 4).stroke({ color: connected ? MAP_COLORS.lotStroke : MAP_COLORS.disconnected, width: connected ? 1 : 3, alpha: connected ? 0.8 : 1 });
+}
+
+function drawBuildingLevelBadge(graphics: Graphics, px: number, py: number, level: number): void {
+  const badgeX = px + 7;
+  const badgeY = py + 31;
+  graphics.roundRect(badgeX - 2, badgeY - 2, 14, 6, 3).fill({ color: MAP_COLORS.shadow, alpha: 0.32 });
+  for (let i = 0; i < level; i += 1) {
+    graphics.rect(badgeX + i * 4, badgeY, 2, 3).fill({ color: MAP_COLORS.laneSoft, alpha: 0.9 });
+  }
 }
 
 function drawCar(graphics: Graphics, car: Car, world: GameWorld, ts: number, timeSeconds: number): void {
@@ -689,7 +792,9 @@ function laneOffsetForSegment(car: Car, grid: Tile[][], from: Vec2, to: Vec2): V
 }
 
 function roadTypeAt(grid: Tile[][], pos: Vec2): RoadType {
-  return grid[pos.y]?.[pos.x]?.type === 'avenue' ? 'avenue' : 'road';
+  const type = grid[pos.y]?.[pos.x]?.type;
+  if (type === 'avenue' || type === 'roundabout') return type;
+  return 'road';
 }
 
 function isRouteTurn(from: Vec2, corner: Vec2, to: Vec2): boolean {
@@ -836,13 +941,109 @@ function idPhase(id: string): number {
   return (total % 997) / 997;
 }
 
+function isRoadLineTool(tool: Tool): tool is 'road' | 'avenue' {
+  return tool === 'road' || tool === 'avenue';
+}
+
+function getLineTiles(start: Vec2, end: Vec2): Vec2[] {
+  const horizontal = Math.abs(end.x - start.x) >= Math.abs(end.y - start.y);
+  const tiles: Vec2[] = [];
+  if (horizontal) {
+    const step = end.x >= start.x ? 1 : -1;
+    for (let x = start.x; step > 0 ? x <= end.x : x >= end.x; x += step) tiles.push({ x, y: start.y });
+    return tiles;
+  }
+
+  const step = end.y >= start.y ? 1 : -1;
+  for (let y = start.y; step > 0 ? y <= end.y : y >= end.y; y += step) tiles.push({ x: start.x, y });
+  return tiles;
+}
+
+function getLineBuildPreview(world: GameWorld, tiles: Vec2[], tool: 'road' | 'avenue', money: number): ActionPreview {
+  const uniqueTiles = dedupePreviewTiles(tiles);
+  const invalidTiles: Vec2[] = [];
+  let buildableTiles = 0;
+  let reason: string | undefined;
+
+  for (const pos of uniqueTiles) {
+    if (!inBounds(pos.x, pos.y)) {
+      invalidTiles.push(pos);
+      reason ??= 'A linha sai do mapa.';
+      continue;
+    }
+
+    const tile = world.grid[pos.y][pos.x];
+    if (tile.type === 'building') {
+      invalidTiles.push(pos);
+      reason ??= 'A linha passa por um prédio.';
+      continue;
+    }
+    if (isRoundaboutTile(tile) || isRoundaboutCenter(tile)) {
+      invalidTiles.push(pos);
+      reason ??= 'A linha passa por uma rotatória.';
+      continue;
+    }
+    if (tile.type !== tool) buildableTiles += 1;
+  }
+
+  const cost = buildableTiles * ROAD_CONFIG[tool].buildCost;
+  if (!reason && buildableTiles === 0) reason = 'Essa via já existe em toda a linha.';
+  if (!reason && money < cost) reason = `Faltam $ ${cost - money} para construir.`;
+
+  const label = `${tool === 'road' ? 'Construir rua' : 'Construir avenida'}: ${uniqueTiles.length} tiles`;
+  return {
+    x: uniqueTiles[uniqueTiles.length - 1]?.x ?? 0,
+    y: uniqueTiles[uniqueTiles.length - 1]?.y ?? 0,
+    label,
+    cost,
+    valid: !reason,
+    reason,
+    tool,
+    lineTiles: uniqueTiles,
+    invalidTiles,
+    buildableTiles,
+    successMessage: `${tool === 'road' ? 'Rua' : 'Avenida'} construída: ${buildableTiles} tiles por $ ${cost}.`,
+  };
+}
+
+function dedupePreviewTiles(tiles: Vec2[]): Vec2[] {
+  const seen = new Set<string>();
+  const result: Vec2[] = [];
+  for (const tile of tiles) {
+    const key = `${tile.x},${tile.y}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(tile);
+  }
+  return result;
+}
+
 function drawConstructionPreview(graphics: Graphics, world: GameWorld, preview: HoverPreview, ts: number, timeSeconds: number): void {
   const { x, y, valid, tool } = preview;
+  if (preview.lineTiles?.length && tool && isRoadLineTool(tool)) {
+    drawRoadLinePreview(graphics, preview, tool, ts, timeSeconds);
+    return;
+  }
   if (!inBounds(x, y)) return;
   const color = valid ? MAP_COLORS.previewValid : MAP_COLORS.previewInvalid;
   const px = x * ts;
   const py = y * ts;
   const previewPulse = pulse(timeSeconds, valid ? 1.2 : 1.75, x * 0.19 + y * 0.13);
+
+  if (tool === 'roundabout') {
+    const areaPx = (x - 1) * ts;
+    const areaPy = (y - 1) * ts;
+    graphics.roundRect(areaPx + 2, areaPy + 2, ts * 3 - 4, ts * 3 - 4, 10)
+      .fill({ color, alpha: valid ? 0.08 + previewPulse * 0.06 : 0.15 + previewPulse * 0.06 })
+      .stroke({ color, width: 2 + previewPulse, alpha: valid ? 0.76 : 0.88 });
+    graphics.circle(px + ts / 2, py + ts / 2, ts * 0.44).fill({ color: MAP_COLORS.park, alpha: valid ? 0.42 : 0.2 });
+    graphics.circle(px + ts / 2, py + ts / 2, ts * 1.05).stroke({ color: valid ? MAP_COLORS.road : color, width: 12, alpha: valid ? 0.34 : 0.22 });
+    if (!valid && preview.reason) {
+      graphics.rect(areaPx + 9, areaPy + ts * 3 - 13, ts * 3 - 18, 4).fill({ color: MAP_COLORS.previewInvalid, alpha: 0.86 });
+    }
+    return;
+  }
+
   const outerInset = 2 - previewPulse * 1.2;
   graphics.roundRect(px + outerInset, py + outerInset, ts - outerInset * 2, ts - outerInset * 2, 5)
     .fill({ color, alpha: valid ? 0.1 + previewPulse * 0.07 : 0.16 + previewPulse * 0.06 })
@@ -870,6 +1071,54 @@ function drawConstructionPreview(graphics: Graphics, world: GameWorld, preview: 
   }
 }
 
+function drawRoadLinePreview(graphics: Graphics, preview: HoverPreview, tool: 'road' | 'avenue', ts: number, timeSeconds: number): void {
+  const lineTiles = preview.lineTiles ?? [];
+  const visibleTiles = lineTiles.filter((tile) => inBounds(tile.x, tile.y));
+  if (!visibleTiles.length) return;
+
+  const previewPulse = pulse(timeSeconds, preview.valid ? 1.15 : 1.7, (preview.x * 0.19) + (preview.y * 0.13));
+  const color = preview.valid ? MAP_COLORS.previewValid : MAP_COLORS.previewInvalid;
+  const roadColor = preview.valid ? (tool === 'avenue' ? MAP_COLORS.avenue : MAP_COLORS.road) : MAP_COLORS.previewInvalid;
+  const roadW = tool === 'avenue' ? 32 : 23;
+  const minX = Math.min(...visibleTiles.map((tile) => tile.x));
+  const maxX = Math.max(...visibleTiles.map((tile) => tile.x));
+  const minY = Math.min(...visibleTiles.map((tile) => tile.y));
+  const maxY = Math.max(...visibleTiles.map((tile) => tile.y));
+  const horizontal = minY === maxY;
+
+  graphics.roundRect(
+    minX * ts + 2,
+    minY * ts + 2,
+    (maxX - minX + 1) * ts - 4,
+    (maxY - minY + 1) * ts - 4,
+    9,
+  ).fill({ color, alpha: preview.valid ? 0.08 + previewPulse * 0.05 : 0.13 + previewPulse * 0.06 })
+    .stroke({ color, width: 1.5 + previewPulse, alpha: preview.valid ? 0.56 + previewPulse * 0.28 : 0.72 + previewPulse * 0.2 });
+
+  if (horizontal) {
+    const y = minY * ts + ts / 2 - roadW / 2;
+    graphics.roundRect(minX * ts + 4, y, (maxX - minX + 1) * ts - 8, roadW, 9)
+      .fill({ color: roadColor, alpha: preview.valid ? 0.45 + previewPulse * 0.12 : 0.28 + previewPulse * 0.08 });
+  } else {
+    const x = minX * ts + ts / 2 - roadW / 2;
+    graphics.roundRect(x, minY * ts + 4, roadW, (maxY - minY + 1) * ts - 8, 9)
+      .fill({ color: roadColor, alpha: preview.valid ? 0.45 + previewPulse * 0.12 : 0.28 + previewPulse * 0.08 });
+  }
+
+  const invalidKeys = new Set((preview.invalidTiles ?? []).map((tile) => keyOf(tile.x, tile.y)));
+  for (const tile of visibleTiles) {
+    const px = tile.x * ts;
+    const py = tile.y * ts;
+    const invalid = invalidKeys.has(keyOf(tile.x, tile.y));
+    graphics.roundRect(px + 5, py + 5, ts - 10, ts - 10, 5)
+      .stroke({ color: invalid ? MAP_COLORS.previewInvalid : MAP_COLORS.previewValid, width: invalid ? 2 : 1, alpha: invalid ? 0.92 : 0.44 });
+    if (invalid) {
+      graphics.moveTo(px + 12, py + 12).lineTo(px + ts - 12, py + ts - 12).stroke({ color: MAP_COLORS.previewInvalid, width: 2.5, alpha: 0.9 });
+      graphics.moveTo(px + ts - 12, py + 12).lineTo(px + 12, py + ts - 12).stroke({ color: MAP_COLORS.previewInvalid, width: 2.5, alpha: 0.9 });
+    }
+  }
+}
+
 function getActionPreview(world: GameWorld, x: number, y: number, tool: Tool, money: number): ActionPreview {
   if (!inBounds(x, y)) {
     return { x, y, label: 'Fora do mapa', valid: false, reason: 'Fora do mapa.', successMessage: '' };
@@ -883,15 +1132,25 @@ function getActionPreview(world: GameWorld, x: number, y: number, tool: Tool, mo
   if (tool === 'road' || tool === 'avenue') {
     const cost = ROAD_CONFIG[tool].buildCost;
     if (tile.type === 'building') return { x, y, label: 'Prédio ocupa o tile', cost, valid: false, reason: 'Não é possível construir sobre prédio.', successMessage: '' };
+    if (isRoundaboutTile(tile) || isRoundaboutCenter(tile)) return { x, y, label: 'Rotatória ocupa o tile', cost, valid: false, reason: 'Remova a rotatória antes de construir outra via.', successMessage: '' };
     if (tile.type === tool) return { x, y, label: 'Via já construída', cost, valid: false, reason: 'Essa via já existe aqui.', successMessage: '' };
     if (money < cost) return { x, y, label: 'Dinheiro insuficiente', cost, valid: false, reason: `Faltam $ ${cost - money} para construir.`, successMessage: '' };
     return { x, y, label: tool === 'road' ? 'Construir rua' : 'Construir avenida', cost, valid: true, successMessage: `${tool === 'road' ? 'Rua' : 'Avenida'} construída por $ ${cost}.` };
+  }
+
+  if (tool === 'roundabout') {
+    const cost = ROAD_CONFIG.roundabout.buildCost;
+    const placement = canPlaceRoundabout(world.grid, { x, y });
+    if (!placement.valid) return { x, y, label: 'Rotatória indisponível', cost, valid: false, reason: placement.reason, successMessage: '' };
+    if (money < cost) return { x, y, label: 'Dinheiro insuficiente', cost, valid: false, reason: `Faltam $ ${cost - money} para construir.`, successMessage: '' };
+    return { x, y, label: 'Construir rotatória', cost, valid: true, successMessage: `Rotatória construída por $ ${cost}.` };
   }
 
   if (tool === 'trafficLight') {
     const cost = TRAFFIC_LIGHT_BUILD_COST;
     const key = keyOf(x, y);
     if (!isRoadType(tile.type)) return { x, y, label: 'Semáforo indisponível', cost, valid: false, reason: 'Semáforos só podem ser adicionados em ruas e avenidas.', successMessage: '' };
+    if (isRoundaboutTile(tile)) return { x, y, label: 'Semáforo indisponível', cost, valid: false, reason: 'Rotatórias já controlam a prioridade de entrada.', successMessage: '' };
     if (!isIntersection(world.grid, { x, y })) return { x, y, label: 'Não é cruzamento', cost, valid: false, reason: 'Coloque o semáforo apenas em cruzamentos ou cruzamentos em T.', successMessage: '' };
     if (world.trafficLights.has(key)) return { x, y, label: 'Semáforo já instalado', cost, valid: false, reason: 'Este cruzamento já possui semáforo.', successMessage: '' };
     if (money < cost) return { x, y, label: 'Dinheiro insuficiente', cost, valid: false, reason: `Faltam $ ${cost - money} para instalar o semáforo.`, successMessage: '' };
@@ -899,8 +1158,9 @@ function getActionPreview(world: GameWorld, x: number, y: number, tool: Tool, mo
   }
 
   if (tool === 'remove') {
-    if (!isRoadType(tile.type)) return { x, y, label: 'Nada para remover', valid: false, reason: 'Só é possível remover ruas e avenidas.', successMessage: '' };
-    const roadType = tile.type as RoadType;
+    const roundaboutCenter = findRoundaboutCenterForTile(world.grid, { x, y });
+    if (!isRoadType(tile.type) && !roundaboutCenter) return { x, y, label: 'Nada para remover', valid: false, reason: 'Só é possível remover ruas e avenidas.', successMessage: '' };
+    const roadType = roundaboutCenter ? 'roundabout' : tile.type as RoadType;
     const cost = ROAD_CONFIG[roadType].removeCost;
     if (money < cost) return { x, y, label: 'Dinheiro insuficiente', cost, valid: false, reason: `Faltam $ ${cost - money} para remover.`, successMessage: '' };
     const hasSignal = world.trafficLights.has(keyOf(x, y));

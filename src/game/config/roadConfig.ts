@@ -15,4 +15,14 @@ export const ROAD_CONFIG = {
     removeCost: 8,
     pathCost: 6,
   },
+  roundabout: {
+    label: 'Rotatória',
+    speed: 0.85,
+    capacity: 10,
+    buildCost: 90,
+    removeCost: 18,
+    pathCost: 5,
+  },
 } as const;
+
+export const ROUNDABOUT_CONFIG = ROAD_CONFIG.roundabout;

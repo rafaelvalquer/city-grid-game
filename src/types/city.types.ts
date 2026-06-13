@@ -1,6 +1,7 @@
-export type TileType = 'empty' | 'road' | 'avenue' | 'building';
+export type TileType = 'empty' | 'road' | 'avenue' | 'roundabout' | 'roundaboutCenter' | 'building';
 export type BuildingType = 'house' | 'shop' | 'office';
-export type RoadType = 'road' | 'avenue';
+export type BuildingLevel = 1 | 2 | 3;
+export type RoadType = 'road' | 'avenue' | 'roundabout';
 
 export type Vec2 = { x: number; y: number };
 
@@ -14,6 +15,7 @@ export type Tile = {
 export type Building = {
   id: string;
   type: BuildingType;
+  level: BuildingLevel;
   x: number;
   y: number;
   width: number;
@@ -24,6 +26,7 @@ export type Building = {
   connected: boolean;
   nearestRoad?: Vec2;
   tripsToday: number;
+  upgradedAtDay?: number;
 };
 
 export type TrafficCell = {
@@ -66,6 +69,7 @@ export type CityStats = {
   completedTrips: number;
   failedTrips: number;
   cityLevel: number;
+  day: number;
   timeLabel: string;
   dayPeriod: string;
 };

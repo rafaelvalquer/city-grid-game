@@ -1,4 +1,4 @@
-import { CircleDot, Eye, Gauge, Hammer, Pause, Play, Radar, Route, Trash2, X } from 'lucide-react';
+import { Circle, CircleDot, Eye, Gauge, Hammer, Pause, Play, Radar, Route, Trash2, X } from 'lucide-react';
 import { useGameStore, type HeatmapMode } from '../store/gameStore';
 import type { Tool, SimulationSpeed } from '../types/game.types';
 import { ROAD_CONFIG } from '../game/config/roadConfig';
@@ -7,6 +7,7 @@ import { TRAFFIC_LIGHT_BUILD_COST } from '../game/systems/trafficLights';
 const tools: Array<{ id: Tool; label: string; cost?: number; Icon: typeof Route }> = [
   { id: 'road', label: 'Rua', cost: ROAD_CONFIG.road.buildCost, Icon: Route },
   { id: 'avenue', label: 'Avenida', cost: ROAD_CONFIG.avenue.buildCost, Icon: Gauge },
+  { id: 'roundabout', label: 'Rotatória', cost: ROAD_CONFIG.roundabout.buildCost, Icon: Circle },
   { id: 'trafficLight', label: 'Semáforo', cost: TRAFFIC_LIGHT_BUILD_COST, Icon: CircleDot },
   { id: 'remove', label: 'Remover', cost: ROAD_CONFIG.road.removeCost, Icon: Trash2 },
   { id: 'inspect', label: 'Inspecionar', Icon: Eye },

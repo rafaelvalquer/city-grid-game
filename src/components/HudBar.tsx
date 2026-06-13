@@ -45,7 +45,7 @@ export function HudBar() {
         </div>
         <div className="hud-item"><TrendingUp size={16} /><span>{stats.averageTravelTime}s</span><small>tempo médio</small></div>
       </div>
-      <div className="hud-item time"><Clock3 size={16} /><span>{stats.timeLabel}</span><small>{periodLabel[stats.dayPeriod] ?? stats.dayPeriod}</small></div>
+      <div className="hud-item time"><Clock3 size={16} /><span>Dia {stats.day} · {stats.timeLabel}</span><small>{periodLabel[stats.dayPeriod] ?? stats.dayPeriod}</small></div>
     </header>
   );
 }
