@@ -3,7 +3,7 @@ import type { CityStats, RoadDirection, SelectedEntity } from '../types/city.typ
 import type { Vec2 } from '../types/city.types';
 import type { SimulationSpeed, Tool } from '../types/game.types';
 
-export type HeatmapMode = 'traffic' | 'satisfaction' | 'flow' | 'disconnected' | 'off';
+export type HeatmapMode = 'traffic' | 'satisfaction' | 'flow' | 'off';
 
 export type HoverPreview = {
   x: number;

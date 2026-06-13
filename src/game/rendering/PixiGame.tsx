@@ -619,14 +619,6 @@ function drawHeatmapMode(graphics: Graphics, world: GameWorld, mode: HeatmapMode
     return;
   }
 
-  if (mode === 'disconnected') {
-    for (const building of world.buildings) {
-      if (building.connected) continue;
-      graphics.roundRect(building.x * ts + 3, building.y * ts + 3, ts - 6, ts - 6, 6).fill({ color: MAP_COLORS.disconnected, alpha: 0.34 });
-    }
-    return;
-  }
-
   const citySatisfaction = world.getSnapshot().satisfaction;
   const cityColor = citySatisfaction >= 70 ? MAP_COLORS.treeLight : citySatisfaction >= 40 ? MAP_COLORS.lane : MAP_COLORS.disconnected;
   for (const building of world.buildings) {
@@ -650,7 +642,6 @@ function heatmapLabel(mode: HeatmapMode): string {
   if (mode === 'traffic') return 'Trânsito';
   if (mode === 'satisfaction') return 'Satisfação';
   if (mode === 'flow') return 'Fluxo';
-  if (mode === 'disconnected') return 'Conexões';
   return 'Heatmap';
 }
 

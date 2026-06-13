@@ -18,7 +18,6 @@ const heatmapModes: Array<{ id: HeatmapMode; label: string }> = [
   { id: 'traffic', label: 'Trânsito' },
   { id: 'satisfaction', label: 'Satisfação' },
   { id: 'flow', label: 'Fluxo' },
-  { id: 'disconnected', label: 'Conexões' },
   { id: 'off', label: 'Off' },
 ];
 

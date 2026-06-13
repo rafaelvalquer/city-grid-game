@@ -6,15 +6,20 @@ import { HudBar } from './components/HudBar';
 import { ToolPanel } from './components/ToolPanel';
 import { DetailsPanel } from './components/DetailsPanel';
 import { BottomBar } from './components/BottomBar';
+import { MainMenu } from './components/MainMenu';
 import { useGameStore } from './store/gameStore';
 
+type AppScreen = 'menu' | 'sandbox';
+
 export default function App() {
-  const world = useMemo(() => new GameWorld(), []);
+  const [screen, setScreen] = useState<AppScreen>('menu');
+  const world = useMemo(() => (screen === 'sandbox' ? new GameWorld() : null), [screen]);
   const [mobilePanel, setMobilePanel] = useState<'tools' | 'details' | null>(null);
   const setStats = useGameStore((s) => s.setStats);
   const setSelected = useGameStore((s) => s.setSelected);
 
   useEffect(() => {
+    if (!world) return undefined;
     setStats(world.getSnapshot());
     setSelected(world.selected);
     return world.subscribe(() => {
@@ -22,6 +27,10 @@ export default function App() {
       setSelected(world.selected);
     });
   }, [world, setStats, setSelected]);
+
+  if (screen === 'menu' || !world) {
+    return <MainMenu onStartSandbox={() => setScreen('sandbox')} />;
+  }
 
   return (
     <div className="app-shell">
