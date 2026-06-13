@@ -8,12 +8,15 @@ import { DetailsPanel } from './components/DetailsPanel';
 import { BottomBar } from './components/BottomBar';
 import { MainMenu } from './components/MainMenu';
 import { useGameStore } from './store/gameStore';
+import type { GameSetupOptions } from './game/config/gameSetup';
+import { DEFAULT_GAME_SETUP } from './game/config/gameSetup';
 
 type AppScreen = 'menu' | 'sandbox';
 
 export default function App() {
   const [screen, setScreen] = useState<AppScreen>('menu');
-  const world = useMemo(() => (screen === 'sandbox' ? new GameWorld() : null), [screen]);
+  const [setupOptions, setSetupOptions] = useState<GameSetupOptions>(DEFAULT_GAME_SETUP);
+  const world = useMemo(() => (screen === 'sandbox' ? new GameWorld(setupOptions) : null), [screen, setupOptions]);
   const [mobilePanel, setMobilePanel] = useState<'tools' | 'details' | null>(null);
   const setStats = useGameStore((s) => s.setStats);
   const setSelected = useGameStore((s) => s.setSelected);
@@ -29,7 +32,10 @@ export default function App() {
   }, [world, setStats, setSelected]);
 
   if (screen === 'menu' || !world) {
-    return <MainMenu onStartSandbox={() => setScreen('sandbox')} />;
+    return <MainMenu onStartSandbox={(options) => {
+      setSetupOptions(options);
+      setScreen('sandbox');
+    }} />;
   }
 
   return (

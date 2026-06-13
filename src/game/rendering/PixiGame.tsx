@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { Application, Container, Graphics } from 'pixi.js';
 import { GameWorld } from '../engine/simulation';
+import type { DayPeriod } from '../engine/timeSystem';
 import { GAME_CONFIG } from '../config/gameConfig';
 import { ROAD_CONFIG } from '../config/roadConfig';
 import { useGameStore, type HeatmapMode, type HoverPreview } from '../../store/gameStore';
@@ -19,6 +20,15 @@ type ActionPreview = HoverPreview & {
 };
 
 type LotDecor = 'trees' | 'park' | 'parking' | 'garden' | 'plaza' | 'plain';
+
+type Atmosphere = {
+  period: DayPeriod;
+  overlayColor: number;
+  overlayAlpha: number;
+  lightAlpha: number;
+  pedestrianAlpha: number;
+  motion: number;
+};
 
 type CarRenderPose = {
   x: number;
@@ -295,6 +305,8 @@ function draw(
 ): void {
   const ts = GAME_CONFIG.tileSize;
   const timeSeconds = performance.now() / 1000;
+  const snapshot = world.getSnapshot();
+  const atmosphere = getAtmosphere(snapshot.dayPeriod, timeSeconds);
   graphics.clear();
   labels.removeChildren();
   graphics.position.set(camX, camY);
@@ -322,16 +334,19 @@ function draw(
     }
   }
 
-  drawTrafficLights(graphics, world, ts, timeSeconds);
-
   drawHeatmapMode(graphics, world, heatmapMode, ts);
 
   for (const building of world.buildings) {
-    drawBuildingVariant(graphics, building, ts);
+    drawBuildingVariant(graphics, building, ts, timeSeconds, atmosphere);
     if (!building.connected) {
       graphics.circle(building.x * ts + ts - 5, building.y * ts + 5, 4).fill(MAP_COLORS.disconnected);
     }
   }
+
+  drawStreetFurniture(graphics, world, ts, timeSeconds, atmosphere);
+  drawAtmosphereOverlay(graphics, atmosphere, heatmapMode, ts);
+  drawBuildingLife(graphics, world, ts, timeSeconds, atmosphere);
+  drawTrafficLights(graphics, world, ts, timeSeconds);
 
   const route = world.getSelectedCarRoute();
   if (route.length) {
@@ -358,6 +373,72 @@ function draw(
 
 function drawSelection(graphics: Graphics, x: number, y: number, ts: number): void {
   graphics.roundRect(x * ts + 1, y * ts + 1, ts - 2, ts - 2, 5).stroke({ color: MAP_COLORS.selection, width: 2 });
+}
+
+function getAtmosphere(rawPeriod: string, timeSeconds: number): Atmosphere {
+  const period = normalizePeriod(rawPeriod);
+  const reducedMotion = prefersReducedMotion();
+  const softPulse = reducedMotion ? 0.5 : pulse(timeSeconds, 0.055, 0.17);
+  if (period === 'night') {
+    return {
+      period,
+      overlayColor: MAP_COLORS.nightOverlay,
+      overlayAlpha: 0.31 + softPulse * 0.03,
+      lightAlpha: 1,
+      pedestrianAlpha: 0.32,
+      motion: reducedMotion ? 0 : 0.35,
+    };
+  }
+  if (period === 'evening') {
+    return {
+      period,
+      overlayColor: MAP_COLORS.eveningOverlay,
+      overlayAlpha: 0.14 + softPulse * 0.025,
+      lightAlpha: 0.74,
+      pedestrianAlpha: 0.9,
+      motion: reducedMotion ? 0 : 0.85,
+    };
+  }
+  if (period === 'morning') {
+    return {
+      period,
+      overlayColor: MAP_COLORS.morningOverlay,
+      overlayAlpha: 0.075,
+      lightAlpha: 0.24,
+      pedestrianAlpha: 0.72,
+      motion: reducedMotion ? 0 : 0.65,
+    };
+  }
+  if (period === 'noon') {
+    return {
+      period,
+      overlayColor: MAP_COLORS.morningOverlay,
+      overlayAlpha: 0.025,
+      lightAlpha: 0.08,
+      pedestrianAlpha: 0.82,
+      motion: reducedMotion ? 0 : 0.75,
+    };
+  }
+  return {
+    period,
+    overlayColor: MAP_COLORS.eveningOverlay,
+    overlayAlpha: 0.055,
+    lightAlpha: 0.18,
+    pedestrianAlpha: 0.62,
+    motion: reducedMotion ? 0 : 0.55,
+  };
+}
+
+function normalizePeriod(period: string): DayPeriod {
+  if (period === 'morning' || period === 'noon' || period === 'afternoon' || period === 'evening' || period === 'night') return period;
+  return 'morning';
+}
+
+function drawAtmosphereOverlay(graphics: Graphics, atmosphere: Atmosphere, heatmapMode: HeatmapMode, ts: number): void {
+  if (atmosphere.overlayAlpha <= 0) return;
+  const heatmapFactor = heatmapMode === 'off' ? 1 : 0.55;
+  graphics.rect(0, 0, GAME_CONFIG.gridWidth * ts, GAME_CONFIG.gridHeight * ts)
+    .fill({ color: atmosphere.overlayColor, alpha: atmosphere.overlayAlpha * heatmapFactor });
 }
 
 function drawBaseTile(graphics: Graphics, tile: Tile, x: number, y: number, ts: number): void {
@@ -461,7 +542,7 @@ function drawRoad(graphics: Graphics, grid: Tile[][], x: number, y: number, ts: 
   if (isRoundabout) {
     drawRoundaboutMarkings(graphics, grid, x, y, ts);
   } else {
-    drawLaneMarkings(graphics, px, py, ts, isAvenue, neighbors);
+    drawLaneMarkings(graphics, px, py, ts, isAvenue, neighbors, grid[y]?.[x]?.oneWay);
   }
 }
 
@@ -645,7 +726,7 @@ function heatmapLabel(mode: HeatmapMode): string {
   return 'Heatmap';
 }
 
-function drawBuildingVariant(graphics: Graphics, building: Building, ts: number): void {
+function drawBuildingVariant(graphics: Graphics, building: Building, ts: number, timeSeconds: number, atmosphere: Atmosphere): void {
   const { type, x, y, connected } = building;
   const px = x * ts;
   const py = y * ts;
@@ -664,21 +745,23 @@ function drawBuildingVariant(graphics: Graphics, building: Building, ts: number)
       graphics.roundRect(px + bodyInset, py + 5, ts - bodyInset * 2, 7, 2).fill(MAP_COLORS.houseRoof);
     }
     graphics.roundRect(px + bodyInset, py + (growth === 2 ? 9 : 13), ts - bodyInset * 2, ts - 16 + growth * 2, 3).fill(MAP_COLORS.house);
-    graphics.rect(px + bodyInset + 6, py + 21, 5, 7).fill({ color: MAP_COLORS.carWindow, alpha: 0.42 + activity * 0.34 });
-    graphics.rect(px + ts - bodyInset - 11, py + 18, 6, 5).fill({ color: MAP_COLORS.laneSoft, alpha: 0.34 + activity * 0.42 });
+    const homeLight = buildingLightAlpha(building, atmosphere, timeSeconds, 0);
+    graphics.rect(px + bodyInset + 6, py + 21, 5, 7).fill({ color: homeLight > 0.2 ? MAP_COLORS.windowLit : MAP_COLORS.carWindow, alpha: Math.max(0.42 + activity * 0.22, homeLight) });
+    graphics.rect(px + ts - bodyInset - 11, py + 18, 6, 5).fill({ color: homeLight > 0.2 ? MAP_COLORS.windowWarm : MAP_COLORS.laneSoft, alpha: Math.max(0.34 + activity * 0.3, homeLight * 0.88) });
     if (growth > 0) graphics.rect(px + ts / 2 - 4, py + 25, 8, 7).fill({ color: MAP_COLORS.houseTrim, alpha: 0.72 });
     if (growth === 2) {
-      graphics.rect(px + 11, py + 13, 4, 3).fill({ color: MAP_COLORS.laneSoft, alpha: 0.75 });
-      graphics.rect(px + 25, py + 13, 4, 3).fill({ color: MAP_COLORS.laneSoft, alpha: 0.75 });
+      graphics.rect(px + 11, py + 13, 4, 3).fill({ color: homeLight > 0.2 ? MAP_COLORS.windowLit : MAP_COLORS.laneSoft, alpha: Math.max(0.75, homeLight) });
+      graphics.rect(px + 25, py + 13, 4, 3).fill({ color: homeLight > 0.2 ? MAP_COLORS.windowLit : MAP_COLORS.laneSoft, alpha: Math.max(0.75, homeLight * 0.9) });
     }
   } else if (type === 'shop') {
     const heightBoost = growth * 2;
+    const shopLight = buildingLightAlpha(building, atmosphere, timeSeconds, 1);
     graphics.roundRect(px + 5, py + 6 - heightBoost, ts - 10, ts - 10 + heightBoost, 3).fill(MAP_COLORS.shop);
     graphics.rect(px + 7, py + 8 - heightBoost, ts - 14, 4).fill(MAP_COLORS.shopSign);
     for (let i = 0; i < 4; i += 1) {
       graphics.rect(px + 6 + i * 7, py + 12 - heightBoost, 5, 4).fill(i % 2 === 0 ? MAP_COLORS.shopAwning : MAP_COLORS.laneSoft);
     }
-    graphics.rect(px + 9, py + 18, ts - 18, 6).fill({ color: MAP_COLORS.shopGlass, alpha: 0.4 + activity * 0.35 });
+    graphics.rect(px + 9, py + 18, ts - 18, 6).fill({ color: shopLight > 0.15 ? MAP_COLORS.shopGlow : MAP_COLORS.shopGlass, alpha: Math.max(0.4 + activity * 0.35, shopLight * 0.9) });
     graphics.rect(px + 16, py + 26, 8, 7).fill({ color: MAP_COLORS.shadow, alpha: 0.22 });
     if (growth === 2) graphics.rect(px + 10, py + 28, ts - 20, 2).fill({ color: MAP_COLORS.shopAwning, alpha: 0.78 });
   } else {
@@ -689,9 +772,12 @@ function drawBuildingVariant(graphics: Graphics, building: Building, ts: number)
     graphics.rect(px + ts - 11, top + 4, 4, height - 8).fill({ color: MAP_COLORS.officeDark, alpha: 0.38 });
     for (let row = 0; row < floors; row += 1) {
       const yy = top + 4 + row * 5;
-      graphics.rect(px + 8, yy, 3, 2).fill({ color: MAP_COLORS.officeGlass, alpha: 0.55 + activity * 0.35 });
-      graphics.rect(px + 14, yy, 3, 2).fill({ color: MAP_COLORS.officeGlass, alpha: 0.55 + activity * 0.35 });
-      graphics.rect(px + 22, yy, 3, 2).fill({ color: MAP_COLORS.officeGlass, alpha: 0.45 + activity * 0.3 });
+      const litA = buildingLightAlpha(building, atmosphere, timeSeconds, row + 2);
+      const litB = buildingLightAlpha(building, atmosphere, timeSeconds, row + 7);
+      const litC = buildingLightAlpha(building, atmosphere, timeSeconds, row + 13);
+      graphics.rect(px + 8, yy, 3, 2).fill({ color: litA > 0.35 ? MAP_COLORS.windowLit : MAP_COLORS.officeGlass, alpha: Math.max(0.55 + activity * 0.25, litA) });
+      graphics.rect(px + 14, yy, 3, 2).fill({ color: litB > 0.35 ? MAP_COLORS.windowWarm : MAP_COLORS.officeGlass, alpha: Math.max(0.55 + activity * 0.25, litB) });
+      graphics.rect(px + 22, yy, 3, 2).fill({ color: litC > 0.35 ? MAP_COLORS.windowLit : MAP_COLORS.officeGlass, alpha: Math.max(0.45 + activity * 0.22, litC) });
     }
     graphics.rect(px + 7, py + ts - 8, ts - 14, 2).fill({ color: MAP_COLORS.officeDark, alpha: 0.5 });
   }
@@ -706,6 +792,94 @@ function drawBuildingLevelBadge(graphics: Graphics, px: number, py: number, leve
   for (let i = 0; i < level; i += 1) {
     graphics.rect(badgeX + i * 4, badgeY, 2, 3).fill({ color: MAP_COLORS.laneSoft, alpha: 0.9 });
   }
+}
+
+function buildingLightAlpha(building: Building, atmosphere: Atmosphere, timeSeconds: number, salt: number): number {
+  const base = atmosphere.lightAlpha;
+  if (base <= 0.04) return base;
+  const stable = (hash2(building.x, building.y, salt + 41) % 100) / 100;
+  const activity = Math.min(1, (building.tripsToday + building.population + building.jobs + building.attraction) / 18);
+  const flicker = atmosphere.motion > 0 ? pulse(timeSeconds, 0.12 + stable * 0.08, stable) : 0.5;
+  const periodBoost = building.type === 'house' && atmosphere.period === 'night' ? 0.18 : building.type === 'shop' && atmosphere.period === 'evening' ? 0.16 : 0;
+  return Math.min(0.95, base * (0.34 + stable * 0.28 + activity * 0.3 + flicker * 0.12 + periodBoost));
+}
+
+function drawStreetFurniture(graphics: Graphics, world: GameWorld, ts: number, timeSeconds: number, atmosphere: Atmosphere): void {
+  for (let y = 0; y < GAME_CONFIG.gridHeight; y++) {
+    for (let x = 0; x < GAME_CONFIG.gridWidth; x++) {
+      const tile = world.grid[y][x];
+      if (tile.type === 'empty') {
+        drawEmptyLotMicroDetails(graphics, x, y, ts, timeSeconds, atmosphere);
+        continue;
+      }
+      if ((tile.type === 'road' || tile.type === 'avenue') && hash2(x, y, 29) % 7 === 0) {
+        drawStreetLamp(graphics, x, y, ts, atmosphere, timeSeconds, false);
+      }
+    }
+  }
+}
+
+function drawEmptyLotMicroDetails(graphics: Graphics, x: number, y: number, ts: number, timeSeconds: number, atmosphere: Atmosphere): void {
+  const decor = lotDecorAt(x, y);
+  const px = x * ts;
+  const py = y * ts;
+  if (decor === 'park' || decor === 'plaza') {
+    graphics.roundRect(px + 12, py + 28, 13, 3, 1).fill({ color: MAP_COLORS.bench, alpha: 0.56 });
+    graphics.rect(px + 10, py + 28, 2, 5).fill({ color: MAP_COLORS.bench, alpha: 0.5 });
+    graphics.rect(px + 25, py + 28, 2, 5).fill({ color: MAP_COLORS.bench, alpha: 0.5 });
+    if (hash2(x, y, 31) % 2 === 0) drawPeopleCluster(graphics, px + 20, py + 18, 2 + (hash2(x, y, 33) % 2), timeSeconds, atmosphere, (hash2(x, y, 35) % 997) / 997);
+  }
+  if (decor === 'parking' || hash2(x, y, 37) % 18 === 0) {
+    graphics.roundRect(px + ts - 10, py + ts - 12, 4, 6, 1).fill({ color: MAP_COLORS.trashCan, alpha: 0.6 });
+    graphics.rect(px + ts - 11, py + ts - 13, 6, 1).fill({ color: MAP_COLORS.laneSoft, alpha: 0.42 });
+  }
+}
+
+function drawBuildingLife(graphics: Graphics, world: GameWorld, ts: number, timeSeconds: number, atmosphere: Atmosphere): void {
+  for (const building of world.buildings) {
+    const px = building.x * ts;
+    const py = building.y * ts;
+    const activity = Math.min(1, (building.tripsToday + building.population + building.jobs + building.attraction) / 18);
+    const lightAlpha = buildingLightAlpha(building, atmosphere, timeSeconds, 23);
+    if (lightAlpha > 0.12) {
+      const glowColor = building.type === 'shop' ? MAP_COLORS.shopGlow : MAP_COLORS.lightGlow;
+      graphics.circle(px + ts / 2, py + ts / 2 + 2, 13 + activity * 5).fill({ color: glowColor, alpha: lightAlpha * 0.08 });
+    }
+    if (building.type === 'shop' && building.connected && atmosphere.pedestrianAlpha > 0.2) {
+      const count = Math.min(5, 1 + building.level + Math.floor(activity * 2));
+      drawPeopleCluster(graphics, px + ts / 2, py + ts - 6, count, timeSeconds, atmosphere, (hash2(building.x, building.y, 61) % 997) / 997);
+      if (atmosphere.period === 'evening' || atmosphere.period === 'noon') {
+        graphics.roundRect(px + 9, py + ts - 5, ts - 18, 2, 1).fill({ color: MAP_COLORS.shopGlow, alpha: 0.2 + activity * 0.18 });
+      }
+    } else if (building.type === 'office' && building.connected && atmosphere.period === 'evening') {
+      drawPeopleCluster(graphics, px + ts / 2 + 4, py + ts - 5, 2 + building.level, timeSeconds, atmosphere, (hash2(building.x, building.y, 67) % 997) / 997);
+    }
+  }
+}
+
+function drawPeopleCluster(graphics: Graphics, x: number, y: number, count: number, timeSeconds: number, atmosphere: Atmosphere, phase: number): void {
+  const alpha = atmosphere.pedestrianAlpha;
+  if (alpha <= 0.05) return;
+  for (let i = 0; i < count; i += 1) {
+    const offset = i - (count - 1) / 2;
+    const bob = atmosphere.motion > 0 ? (pulse(timeSeconds, 0.28 + i * 0.03, phase + i * 0.21) - 0.5) * atmosphere.motion * 1.4 : 0;
+    const color = i % 2 === 0 ? MAP_COLORS.person : MAP_COLORS.personAlt;
+    graphics.circle(x + offset * 4.2, y + bob, 1.55).fill({ color, alpha: 0.66 * alpha });
+    graphics.rect(x + offset * 4.2 - 0.8, y + 1.6 + bob, 1.6, 2.2).fill({ color, alpha: 0.46 * alpha });
+  }
+}
+
+function drawStreetLamp(graphics: Graphics, x: number, y: number, ts: number, atmosphere: Atmosphere, timeSeconds: number, glowOnly: boolean): void {
+  const px = x * ts;
+  const py = y * ts;
+  const phase = (hash2(x, y, 71) % 100) / 100;
+  const glow = atmosphere.lightAlpha * (0.64 + (atmosphere.motion > 0 ? pulse(timeSeconds, 0.18, phase) * 0.16 : 0.08));
+  const lampX = px + (hash2(x, y, 73) % 2 === 0 ? 7 : ts - 7);
+  const lampY = py + (hash2(x, y, 79) % 2 === 0 ? 7 : ts - 7);
+  if (glow > 0.08) graphics.circle(lampX, lampY, 9).fill({ color: MAP_COLORS.streetLamp, alpha: glow * 0.1 });
+  if (glowOnly) return;
+  graphics.rect(lampX - 0.7, lampY - 4, 1.4, 8).fill({ color: MAP_COLORS.shadow, alpha: 0.48 });
+  graphics.circle(lampX, lampY - 4, 1.8).fill({ color: glow > 0.08 ? MAP_COLORS.streetLamp : MAP_COLORS.laneSoft, alpha: Math.max(0.42, glow) });
 }
 
 function drawCar(graphics: Graphics, car: Car, world: GameWorld, ts: number, timeSeconds: number): void {
@@ -890,13 +1064,20 @@ function smoothStep(t: number): number {
 }
 
 function laneOffsetForSegment(car: Car, grid: Tile[][], from: Vec2, to: Vec2): Vec2 {
-  return getLaneOffset(getDirection(from, to), roadTypeAt(grid, from), car.id).offset;
+  const direction = getDirection(from, to);
+  return getLaneOffset(direction, roadTypeAt(grid, from), car.id, oneWayAt(grid, from, direction)).offset;
 }
 
 function roadTypeAt(grid: Tile[][], pos: Vec2): RoadType {
   const type = grid[pos.y]?.[pos.x]?.type;
   if (type === 'avenue' || type === 'roundabout') return type;
   return 'road';
+}
+
+function oneWayAt(grid: Tile[][], pos: Vec2, direction: RoadDirection): RoadDirection | undefined {
+  const tile = grid[pos.y]?.[pos.x];
+  if ((tile?.type !== 'road' && tile?.type !== 'avenue') || tile.oneWay !== direction) return undefined;
+  return tile.oneWay;
 }
 
 function isRouteTurn(from: Vec2, corner: Vec2, to: Vec2): boolean {
@@ -994,10 +1175,21 @@ function drawLaneMarkings(
   ts: number,
   isAvenue: boolean,
   neighbors: Record<'north' | 'south' | 'east' | 'west', boolean>,
+  oneWayDirection?: RoadDirection,
 ): void {
-  const horizontal = neighbors.east || neighbors.west;
-  const vertical = neighbors.north || neighbors.south;
+  const oneWayHorizontal = oneWayDirection === 'east' || oneWayDirection === 'west';
+  const oneWayVertical = oneWayDirection === 'north' || oneWayDirection === 'south';
+  const horizontal = oneWayDirection ? oneWayHorizontal : neighbors.east || neighbors.west;
+  const vertical = oneWayDirection ? oneWayVertical : neighbors.north || neighbors.south;
   const center = ts / 2;
+  if (oneWayDirection) {
+    const offsets = isAvenue ? [-10, 0, 10] : [0];
+    for (const offset of offsets) {
+      if (horizontal) drawDashedLine(graphics, px + 6, py + center + offset - 1, ts - 12, true, MAP_COLORS.laneSoft, isAvenue ? 0.58 : 0.66);
+      if (vertical) drawDashedLine(graphics, px + center + offset - 1, py + 6, ts - 12, false, MAP_COLORS.laneSoft, isAvenue ? 0.58 : 0.66);
+    }
+    return;
+  }
   if (horizontal) drawDashedLine(graphics, px + 5, py + center - 1, ts - 10, true, MAP_COLORS.lane);
   if (vertical) drawDashedLine(graphics, px + center - 1, py + 5, ts - 10, false, MAP_COLORS.lane);
   if (isAvenue && horizontal) {
@@ -1041,6 +1233,12 @@ function idPhase(id: string): number {
   let total = 0;
   for (let i = 0; i < id.length; i += 1) total += id.charCodeAt(i) * (i + 1);
   return (total % 997) / 997;
+}
+
+function prefersReducedMotion(): boolean {
+  return typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
 
 function isRoadLineTool(tool: Tool): tool is 'road' | 'avenue' {

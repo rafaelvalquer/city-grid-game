@@ -1,5 +1,5 @@
 import type { Car, IntersectionReason, TrafficState, TravelDirection } from '../../types/agent.types';
-import type { RoadType, Tile, Vec2 } from '../../types/city.types';
+import type { RoadDirection, RoadType, Tile, Vec2 } from '../../types/city.types';
 import { ROAD_CONFIG } from '../config/roadConfig';
 import { getNeighbors4, isRoadType, keyOf } from '../city/grid';
 import { getTrafficLightSignal, isTrafficLightControlling, type TrafficLightMap } from './trafficLights';
@@ -102,13 +102,24 @@ export function getLaneOffset(
   direction: TravelDirection,
   roadType: RoadType,
   carId: string,
+  oneWayDirection?: RoadDirection,
 ): { offset: Vec2; laneIndex: number; laneCount: number; laneSide: -1 | 1 } {
   if (roadType === 'roundabout') {
     return { offset: { x: 0, y: 0 }, laneIndex: 0, laneCount: 1, laneSide: 1 };
   }
 
   const isAvenue = roadType === 'avenue';
-  const laneIndex = isAvenue ? hashLane(carId) : 0;
+  if (oneWayDirection === direction) {
+    const laneCount = isAvenue ? 4 : 2;
+    const laneIndex = hashLane(carId, laneCount);
+    const offsets = isAvenue ? [-0.33, -0.12, 0.12, 0.33] : [-0.14, 0.14];
+    const signed = offsets[laneIndex] ?? 0;
+    const laneSide: -1 | 1 = signed >= 0 ? 1 : -1;
+    if (direction === 'east' || direction === 'west') return { laneIndex, laneCount, laneSide, offset: { x: 0, y: signed } };
+    return { laneIndex, laneCount, laneSide, offset: { x: -signed, y: 0 } };
+  }
+
+  const laneIndex = isAvenue ? hashLane(carId, 2) : 0;
   const laneCount = isAvenue ? 4 : 2;
   const laneSide: -1 | 1 = direction === 'east' || direction === 'south' ? 1 : -1;
   const base = isAvenue ? (laneIndex === 0 ? 0.14 : 0.32) : 0.2;
@@ -196,7 +207,7 @@ export function computeTrafficDecision(
   const direction = getDirection(current, next);
   const insideIntersection = isIntersection(grid, { x: car.currentTileX, y: car.currentTileY });
   const roadType = getRoadType(grid, current);
-  const { offset, laneIndex, laneCount, laneSide } = getLaneOffset(direction, roadType, car.id);
+  const { offset, laneIndex, laneCount, laneSide } = getLaneOffset(direction, roadType, car.id, getOneWayDirection(grid, current, direction));
   const desiredSpeed = (BASE_SPEED * ROAD_CONFIG[roadType].speed) / (1 + Math.max(0, congestion - 0.25));
   const turning = isTurningSoon(car);
   let targetSpeed = desiredSpeed * (turning ? CURVE_SLOWDOWN : 1);
@@ -641,7 +652,7 @@ function isTIntersectionByKey(grid: Tile[][], key: string): boolean {
 function isExitBlocked(grid: Tile[][], car: Car, cars: Car[], exitTile: Vec2 | undefined, exitDirection: TravelDirection): boolean {
   if (!exitTile) return false;
   const exitRoadType = getRoadType(grid, exitTile);
-  const exitLane = getLaneOffset(exitDirection, exitRoadType, car.id);
+  const exitLane = getLaneOffset(exitDirection, exitRoadType, car.id, getOneWayDirection(grid, exitTile, exitDirection));
   const exitLanePosition = {
     x: exitTile.x + exitLane.offset.x,
     y: exitTile.y + exitLane.offset.y,
@@ -719,6 +730,12 @@ function getRoadType(grid: Tile[][], pos: Vec2): RoadType {
   return 'road';
 }
 
+function getOneWayDirection(grid: Tile[][], pos: Vec2, direction: TravelDirection): RoadDirection | undefined {
+  const tile = grid[pos.y]?.[pos.x];
+  if ((tile?.type !== 'road' && tile?.type !== 'avenue') || tile.oneWay !== direction) return undefined;
+  return tile.oneWay;
+}
+
 function getRoadRank(grid: Tile[][], pos: Vec2): number {
   return getRoadType(grid, pos) === 'avenue' ? 2 : 1;
 }
@@ -760,10 +777,10 @@ function travelScalar(car: Car, direction: TravelDirection): number {
   return direction === 'east' ? car.x : car.y;
 }
 
-function hashLane(id: string): number {
+function hashLane(id: string, laneCount = 2): number {
   let total = 0;
   for (let i = 0; i < id.length; i += 1) total += id.charCodeAt(i);
-  return total % 2;
+  return total % laneCount;
 }
 
 function isTrafficDebugEnabled(): boolean {

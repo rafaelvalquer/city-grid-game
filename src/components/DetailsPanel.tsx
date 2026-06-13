@@ -60,6 +60,7 @@ export function DetailsPanel({ world, className = '', onClose }: { world: GameWo
   const nextBuildingLevelConfig = selected.kind === 'building' && buildingUpgrade?.nextLevel
     ? getBuildingLevelConfig(selected.building.type, buildingUpgrade.nextLevel)
     : undefined;
+  const carLaneDisplayTotal = car ? getCarLaneDisplayTotal(world, car.currentTileX, car.currentTileY, car.laneCount) : 1;
 
   return (
     <aside className={`details-panel ${className}`}>
@@ -150,7 +151,7 @@ export function DetailsPanel({ world, className = '', onClose }: { world: GameWo
           <p><span>Atraso</span><strong>{Math.round(car.delay)}s</strong></p>
           <p><span>Velocidade atual</span><strong>{car.currentSpeed.toFixed(1)} tiles/s</strong></p>
           <p><span>Velocidade alvo</span><strong>{car.targetSpeed.toFixed(1)} tiles/s</strong></p>
-          <p><span>Faixa</span><strong>{car.laneIndex + 1}/{Math.max(1, car.laneCount / 2)}</strong></p>
+          <p><span>Faixa</span><strong>{car.laneIndex + 1}/{carLaneDisplayTotal}</strong></p>
           {car.intersectionWaitSeconds > 0 && (
             <p><span>Espera cruzamento</span><strong>{car.intersectionWaitSeconds.toFixed(1)}s</strong></p>
           )}
@@ -182,4 +183,10 @@ export function DetailsPanel({ world, className = '', onClose }: { world: GameWo
       </div>
     </aside>
   );
+}
+
+function getCarLaneDisplayTotal(world: GameWorld, x: number, y: number, laneCount: number): number {
+  const tile = world.grid[y]?.[x];
+  if ((tile?.type === 'road' || tile?.type === 'avenue') && tile.oneWay) return Math.max(1, laneCount);
+  return Math.max(1, laneCount / 2);
 }

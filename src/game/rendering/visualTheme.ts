@@ -50,6 +50,18 @@ export const MAP_COLORS = {
   previewInvalid: 0xf04461,
   shadow: 0x263143,
   buildingShadow: 0x29334a,
+  morningOverlay: 0xffe8b8,
+  eveningOverlay: 0xffb36b,
+  nightOverlay: 0x16233d,
+  windowLit: 0xfff0a6,
+  windowWarm: 0xffc76f,
+  streetLamp: 0xffe18a,
+  shopGlow: 0x7df4ff,
+  person: 0x2f405c,
+  personAlt: 0xff6f8f,
+  bench: 0x8a6f55,
+  trashCan: 0x5d7f78,
+  lightGlow: 0xfff2b6,
 };
 
 export function congestionColor(value: number): number {

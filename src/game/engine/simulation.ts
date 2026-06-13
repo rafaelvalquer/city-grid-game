@@ -3,6 +3,7 @@ import type { Building, BuildingLevel, CityStats, RoadDirection, RoadType, Selec
 import type { Car } from '../../types/agent.types';
 import type { Tool } from '../../types/game.types';
 import { GAME_CONFIG } from '../config/gameConfig';
+import type { GameSetupOptions } from '../config/gameSetup';
 import { ROAD_CONFIG } from '../config/roadConfig';
 import { createGrid, inBounds, isRoadType, keyOf } from '../city/grid';
 import { CityGenerator } from '../city/cityGenerator';
@@ -53,7 +54,7 @@ export class GameWorld {
   averageTravelTime = 0;
   cityLevel = 1;
   time = new TimeSystem();
-  generator = new CityGenerator();
+  generator: CityGenerator;
 
   private buildingTimer = 0;
   private buildingUpgradeTimer = 0;
@@ -66,7 +67,8 @@ export class GameWorld {
   private nextPriorityToken = 1;
   private trafficLightDebugTimers = new Map<string, number>();
 
-  constructor() {
+  constructor(options: Partial<GameSetupOptions> = {}) {
+    this.generator = new CityGenerator(options);
     this.seedInitialCity();
     this.updateConnections();
     this.updateTrafficMap();
@@ -525,7 +527,7 @@ export class GameWorld {
       const initialDirection = getDirection(route[0], route[1]);
       const initialRoadType = this.getRoadTypeAt(route[0]);
       const carId = nanoid(8);
-      const lane = getLaneOffset(initialDirection, initialRoadType, carId);
+      const lane = getLaneOffset(initialDirection, initialRoadType, carId, this.getOneWayAt(route[0], initialDirection));
       if (this.isSpawnLaneBlocked(route[0], lane.offset, initialDirection)) {
         this.debugSpawnBlocked(route[0], initialDirection);
         continue;
@@ -779,7 +781,7 @@ export class GameWorld {
 
     const direction = getDirection(newRoute[0], newRoute[1]);
     const roadType = this.getRoadTypeAt(newRoute[0]);
-    const lane = getLaneOffset(direction, roadType, car.id);
+    const lane = getLaneOffset(direction, roadType, car.id, this.getOneWayAt(newRoute[0], direction));
 
     car.route = newRoute;
     car.routeIndex = 0;
@@ -842,7 +844,7 @@ export class GameWorld {
 
       const direction = getDirection(newRoute[0], newRoute[1]);
       const roadType = this.getRoadTypeAt(newRoute[0]);
-      const lane = getLaneOffset(direction, roadType, car.id);
+      const lane = getLaneOffset(direction, roadType, car.id, this.getOneWayAt(newRoute[0], direction));
       car.route = newRoute;
       car.routeIndex = 0;
       car.progressToNext = 0;
@@ -994,6 +996,12 @@ export class GameWorld {
   private getRoadTypeAt(pos: Vec2): RoadType {
     const type = this.grid[pos.y]?.[pos.x]?.type;
     return type === 'avenue' || type === 'roundabout' ? type : 'road';
+  }
+
+  private getOneWayAt(pos: Vec2, direction: RoadDirection): RoadDirection | undefined {
+    const tile = this.grid[pos.y]?.[pos.x];
+    if ((tile?.type !== 'road' && tile?.type !== 'avenue') || tile.oneWay !== direction) return undefined;
+    return tile.oneWay;
   }
 
   private updateEconomyAndSatisfaction(): void {
