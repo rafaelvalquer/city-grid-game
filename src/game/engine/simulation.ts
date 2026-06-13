@@ -36,6 +36,8 @@ const BUILDING_UPGRADE_EVERY_SECONDS = 10;
 const BUILDING_UPGRADE_MIN_SATISFACTION = 45;
 const BUILDING_UPGRADE_MAX_CONGESTION = 140;
 const BUILDING_UPGRADE_MIN_SCORE = 3.2;
+const CAR_SPAWN_EXIT_SECONDS = 0.65;
+const CAR_DESTINATION_ENTRY_SECONDS = 0.75;
 
 export class GameWorld {
   grid: Tile[][] = createGrid();
@@ -413,6 +415,7 @@ export class GameWorld {
 
     for (const car of this.cars) {
       if (car.status === 'arrived') continue;
+      if (car.lifecyclePhase !== 'driving') continue;
       const current = car.route[car.routeIndex];
       const next = car.route[car.routeIndex + 1];
 
@@ -445,6 +448,7 @@ export class GameWorld {
 
   private prepareTrafficForNewSignal(key: string, x: number, y: number): void {
     for (const car of this.cars) {
+      if (car.lifecyclePhase !== 'driving') continue;
       const current = car.route[car.routeIndex];
       const next = car.route[car.routeIndex + 1];
       const after = car.route[car.routeIndex + 2];
@@ -484,6 +488,7 @@ export class GameWorld {
       }
     }
     for (const car of this.cars) {
+      if (car.lifecyclePhase !== 'driving') continue;
       const k = keyOf(car.currentTileX, car.currentTileY);
       const info = map.get(k);
       if (info) {
@@ -553,6 +558,8 @@ export class GameWorld {
         insideIntersectionSeconds: 0,
         turnSlowdown: 0,
         trafficState: 'moving',
+        lifecyclePhase: 'spawnExit',
+        lifecycleProgress: 0,
         direction: initialDirection,
         status: 'moving',
         travelTime: 0,
@@ -571,11 +578,43 @@ export class GameWorld {
 
   private updateCars(dt: number): void {
     const arrived: Car[] = [];
-    const intersectionControls = buildIntersectionControls(this.grid, this.cars);
+    const drivingCars = this.cars.filter((car) => car.lifecyclePhase === 'driving');
+    const intersectionControls = buildIntersectionControls(this.grid, drivingCars);
     const sortedCars = [...this.cars].sort((a, b) => this.carUpdatePriority(b) - this.carUpdatePriority(a));
 
     for (const car of sortedCars) {
       car.travelTime += dt;
+      if (car.lifecyclePhase === 'spawnExit') {
+        car.lifecycleProgress += dt / CAR_SPAWN_EXIT_SECONDS;
+        car.currentSpeed = Math.min(car.desiredSpeed, car.currentSpeed + car.acceleration * dt);
+        car.targetSpeed = car.desiredSpeed;
+        car.trafficState = 'moving';
+        car.status = 'moving';
+        if (car.lifecycleProgress >= 1) {
+          car.lifecyclePhase = 'driving';
+          car.lifecycleProgress = 1;
+          car.progressToNext = 0;
+          car.x = car.route[0].x + car.laneOffset.x;
+          car.y = car.route[0].y + car.laneOffset.y;
+          car.currentTileX = car.route[0].x;
+          car.currentTileY = car.route[0].y;
+        }
+        continue;
+      }
+
+      if (car.lifecyclePhase === 'destinationEntry') {
+        car.lifecycleProgress += dt / CAR_DESTINATION_ENTRY_SECONDS;
+        car.currentSpeed = Math.max(0, car.currentSpeed - car.braking * dt);
+        car.targetSpeed = 0;
+        car.trafficState = 'moving';
+        car.status = 'moving';
+        if (car.lifecycleProgress >= 1) {
+          car.status = 'arrived';
+          arrived.push(car);
+        }
+        continue;
+      }
+
       if (car.rerouteCooldownSeconds > 0) car.rerouteCooldownSeconds = Math.max(0, car.rerouteCooldownSeconds - dt);
       if (car.signalTransitionGraceSeconds > 0) {
         car.signalTransitionGraceSeconds = Math.max(0, car.signalTransitionGraceSeconds - dt);
@@ -584,7 +623,7 @@ export class GameWorld {
 
       const traffic = this.traffic.get(keyOf(car.currentTileX, car.currentTileY));
       const congestion = traffic?.congestion ?? 0;
-      const decision = computeTrafficDecision(this.grid, car, this.cars, intersectionControls, this.trafficLights, congestion);
+      const decision = computeTrafficDecision(this.grid, car, drivingCars, intersectionControls, this.trafficLights, congestion);
       car.desiredSpeed = decision.desiredSpeed;
       car.targetSpeed = decision.targetSpeed;
       car.laneOffset = decision.laneOffset;
@@ -664,8 +703,11 @@ export class GameWorld {
         car.y = pos.y;
       }
       if (car.routeIndex >= car.route.length - 1) {
-        car.status = 'arrived';
-        arrived.push(car);
+        car.lifecyclePhase = 'destinationEntry';
+        car.lifecycleProgress = 0;
+        car.currentSpeed = Math.min(car.currentSpeed, 0.5);
+        car.targetSpeed = 0;
+        car.status = 'moving';
       } else {
         const current = car.route[car.routeIndex];
         const next = car.route[car.routeIndex + 1];
@@ -698,6 +740,7 @@ export class GameWorld {
 
     return this.cars.some((car) => {
       if (car.status === 'arrived') return false;
+      if (car.lifecyclePhase !== 'driving') return false;
       if (Math.abs(car[laneAxis] - (laneAxis === 'x' ? spawnX : spawnY)) > 0.18) return false;
       return Math.hypot(car.x - spawnX, car.y - spawnY) < SPAWN_LANE_CLEAR_DISTANCE;
     });
@@ -765,6 +808,7 @@ export class GameWorld {
   private rerouteCarsAffectedBy(area: Vec2[]): void {
     const affectedKeys = new Set(area.map((pos) => keyOf(pos.x, pos.y)));
     for (const car of this.cars) {
+      if (car.lifecyclePhase !== 'driving') continue;
       const remainingRoute = car.route.slice(car.routeIndex);
       if (!remainingRoute.some((pos) => affectedKeys.has(keyOf(pos.x, pos.y)))) continue;
 
@@ -839,6 +883,7 @@ export class GameWorld {
 
     for (const car of this.cars) {
       if (car.id === carToReroute.id || car.status === 'arrived') continue;
+      if (car.lifecyclePhase !== 'driving') continue;
       const pressure = car.status === 'stopped' || car.stuckSeconds > 2 ? 3.5 : 0.8;
       addTrafficPenalty(map, car.currentTileX, car.currentTileY, pressure);
       const next = car.route[car.routeIndex + 1];

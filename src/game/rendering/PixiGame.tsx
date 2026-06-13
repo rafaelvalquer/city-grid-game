@@ -25,6 +25,7 @@ type CarRenderPose = {
   y: number;
   angle: number;
   turningAmount: number;
+  alpha: number;
 };
 
 type RoadLineDrag = {
@@ -349,7 +350,7 @@ function draw(
   if (world.selected.kind === 'car') {
     const car = world.getCar(world.selected.carId);
     if (car) {
-      const pose = getCarRenderPose(car, world.grid);
+      const pose = getCarRenderPose(car, world);
       graphics.circle(pose.x * ts + ts / 2, pose.y * ts + ts / 2, 9).stroke({ color: MAP_COLORS.selection, width: 2 });
     }
   }
@@ -717,7 +718,7 @@ function drawBuildingLevelBadge(graphics: Graphics, px: number, py: number, leve
 }
 
 function drawCar(graphics: Graphics, car: Car, world: GameWorld, ts: number, timeSeconds: number): void {
-  const pose = getCarRenderPose(car, world.grid);
+  const pose = getCarRenderPose(car, world);
   const cx = pose.x * ts + ts / 2;
   const cy = pose.y * ts + ts / 2;
   const length = 13;
@@ -727,17 +728,17 @@ function drawCar(graphics: Graphics, car: Car, world: GameWorld, ts: number, tim
     : car.trafficState === 'queued'
       ? blendCarStateColor(carDestinationColor(world, car), MAP_COLORS.carAltA)
       : carDestinationColor(world, car);
-  if (car.trafficState === 'queued' || car.trafficState === 'intersection') {
+  if (car.lifecyclePhase === 'driving' && (car.trafficState === 'queued' || car.trafficState === 'intersection')) {
     const halo = car.trafficState === 'queued' ? MAP_COLORS.carTail : MAP_COLORS.lane;
     graphics.circle(cx, cy, 7.5).fill({ color: halo, alpha: car.trafficState === 'queued' ? 0.16 : 0.2 });
   }
-  drawCapsule(graphics, cx + 3, cy + 4, length, width, pose.angle, MAP_COLORS.shadow, 0.28);
-  drawCapsule(graphics, cx, cy, length, width, pose.angle, color, 1, MAP_COLORS.roadEdge);
-  drawRotatedRect(graphics, cx + Math.cos(pose.angle) * 1.8, cy + Math.sin(pose.angle) * 1.8, 4.2, 3.2, pose.angle, MAP_COLORS.carWindow, 0.88);
-  drawCarLights(graphics, car, cx, cy, length, width, pose.angle, timeSeconds);
+  drawCapsule(graphics, cx + 3, cy + 4, length, width, pose.angle, MAP_COLORS.shadow, 0.28 * pose.alpha);
+  drawCapsule(graphics, cx, cy, length, width, pose.angle, color, pose.alpha, MAP_COLORS.roadEdge);
+  drawRotatedRect(graphics, cx + Math.cos(pose.angle) * 1.8, cy + Math.sin(pose.angle) * 1.8, 4.2, 3.2, pose.angle, MAP_COLORS.carWindow, 0.88 * pose.alpha);
+  drawCarLights(graphics, car, cx, cy, length, width, pose.angle, timeSeconds, pose.alpha);
 }
 
-function drawCarLights(graphics: Graphics, car: Car, cx: number, cy: number, length: number, width: number, angle: number, timeSeconds: number): void {
+function drawCarLights(graphics: Graphics, car: Car, cx: number, cy: number, length: number, width: number, angle: number, timeSeconds: number, alpha = 1): void {
   const dx = Math.cos(angle);
   const dy = Math.sin(angle);
   const px = -dy;
@@ -747,8 +748,8 @@ function drawCarLights(graphics: Graphics, car: Car, cx: number, cy: number, len
   const backX = cx - dx * (length / 2 - 1.5);
   const backY = cy - dy * (length / 2 - 1.5);
   const queuedPulse = car.trafficState === 'queued' ? pulse(timeSeconds, 1.15, idPhase(car.id)) : 1;
-  const lightAlpha = car.trafficState === 'queued' ? 0.55 + queuedPulse * 0.45 : 0.88;
-  const tailAlpha = car.trafficState === 'queued' ? 0.5 + queuedPulse * 0.5 : 0.86;
+  const lightAlpha = (car.trafficState === 'queued' ? 0.55 + queuedPulse * 0.45 : 0.88) * alpha;
+  const tailAlpha = (car.trafficState === 'queued' ? 0.5 + queuedPulse * 0.5 : 0.86) * alpha;
   const lightRadius = car.trafficState === 'queued' ? 1.05 + queuedPulse * 0.45 : 1.15;
   const tailRadius = car.trafficState === 'queued' ? 0.85 + queuedPulse * 0.3 : 0.95;
   graphics.circle(frontX + px * (width * 0.22), frontY + py * (width * 0.22), lightRadius).fill({ color: MAP_COLORS.carLight, alpha: lightAlpha });
@@ -777,10 +778,20 @@ function blendCarStateColor(base: number, overlay: number): number {
     | Math.round(bb * 0.65 + ob * 0.35));
 }
 
-function getCarRenderPose(car: Car, grid: Tile[][]): CarRenderPose {
+function getCarRenderPose(car: Car, world: GameWorld): CarRenderPose {
+  const grid = world.grid;
+  if (car.lifecyclePhase === 'spawnExit') {
+    const pose = getLifecyclePose(car, world, 'spawnExit');
+    if (pose) return pose;
+  }
+  if (car.lifecyclePhase === 'destinationEntry') {
+    const pose = getLifecyclePose(car, world, 'destinationEntry');
+    if (pose) return pose;
+  }
+
   const current = car.route[car.routeIndex];
   const next = car.route[car.routeIndex + 1];
-  if (!current || !next) return { x: car.x, y: car.y, angle: directionAngle(car.direction), turningAmount: 0 };
+  if (!current || !next) return { x: car.x, y: car.y, angle: directionAngle(car.direction), turningAmount: 0, alpha: 1 };
 
   const after = car.route[car.routeIndex + 2];
   if (after && isRouteTurn(current, next, after) && car.progressToNext >= TURN_IN_START) {
@@ -802,7 +813,59 @@ function getCarRenderPose(car: Car, grid: Tile[][]): CarRenderPose {
     y: current.y + (next.y - current.y) * car.progressToNext + offset.y,
     angle: Math.atan2(next.y - current.y, next.x - current.x),
     turningAmount: 0,
+    alpha: 1,
   };
+}
+
+function getLifecyclePose(car: Car, world: GameWorld, phase: 'spawnExit' | 'destinationEntry'): CarRenderPose | undefined {
+  const building = world.getBuilding(phase === 'spawnExit' ? car.originBuildingId : car.destinationBuildingId);
+  if (!building) return undefined;
+
+  const t = smoothStep(Math.max(0, Math.min(1, car.lifecycleProgress)));
+  if (phase === 'spawnExit') {
+    const from = buildingPoint(building);
+    const routeStart = car.route[0];
+    const routeNext = car.route[1];
+    if (!routeStart || !routeNext) return undefined;
+    const roadPoint = {
+      x: routeStart.x + car.laneOffset.x,
+      y: routeStart.y + car.laneOffset.y,
+    };
+    const direction = getDirection(routeStart, routeNext);
+    const curve = {
+      p0: from,
+      p1: {
+        x: roadPoint.x - Math.cos(directionAngle(direction)) * 0.3,
+        y: roadPoint.y - Math.sin(directionAngle(direction)) * 0.3,
+      },
+      p2: roadPoint,
+    };
+    return { ...poseOnCurve(curve, t), alpha: 0.65 + t * 0.35 };
+  }
+
+  const routeEnd = car.route[car.route.length - 1];
+  const routePrevious = car.route[car.route.length - 2];
+  if (!routeEnd || !routePrevious) return undefined;
+  const offset = laneOffsetForSegment(car, world.grid, routePrevious, routeEnd);
+  const roadPoint = {
+    x: routeEnd.x + offset.x,
+    y: routeEnd.y + offset.y,
+  };
+  const to = buildingPoint(building);
+  const approachAngle = Math.atan2(routeEnd.y - routePrevious.y, routeEnd.x - routePrevious.x);
+  const curve = {
+    p0: roadPoint,
+    p1: {
+      x: roadPoint.x + Math.cos(approachAngle) * 0.24,
+      y: roadPoint.y + Math.sin(approachAngle) * 0.24,
+    },
+    p2: to,
+  };
+  return { ...poseOnCurve(curve, t), alpha: 1 - t * 0.25 };
+}
+
+function buildingPoint(building: Building): Vec2 {
+  return { x: building.x, y: building.y };
 }
 
 function buildTurnCurve(car: Car, grid: Tile[][], from: Vec2, corner: Vec2, to: Vec2): { p0: Vec2; p1: Vec2; p2: Vec2 } {
@@ -828,7 +891,11 @@ function poseOnCurve(curve: { p0: Vec2; p1: Vec2; p2: Vec2 }, rawT: number): Car
   const y = mt * mt * curve.p0.y + 2 * mt * t * curve.p1.y + t * t * curve.p2.y;
   const dx = 2 * mt * (curve.p1.x - curve.p0.x) + 2 * t * (curve.p2.x - curve.p1.x);
   const dy = 2 * mt * (curve.p1.y - curve.p0.y) + 2 * t * (curve.p2.y - curve.p1.y);
-  return { x, y, angle: Math.atan2(dy, dx), turningAmount: Math.sin(Math.PI * t) };
+  return { x, y, angle: Math.atan2(dy, dx), turningAmount: Math.sin(Math.PI * t), alpha: 1 };
+}
+
+function smoothStep(t: number): number {
+  return t * t * (3 - 2 * t);
 }
 
 function laneOffsetForSegment(car: Car, grid: Tile[][], from: Vec2, to: Vec2): Vec2 {

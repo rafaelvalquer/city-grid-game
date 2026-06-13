@@ -13,6 +13,12 @@ const trafficStateLabel = {
   turning: 'Reduzindo na curva',
 } as const;
 
+const lifecyclePhaseLabel = {
+  spawnExit: 'Saindo do estabelecimento',
+  driving: '',
+  destinationEntry: 'Entrando no destino',
+} as const;
+
 const intersectionReasonLabel = {
   signal_red: 'Semáforo vermelho',
   signal_yellow: 'Semáforo amarelo',
@@ -136,7 +142,7 @@ export function DetailsPanel({ world, className = '', onClose }: { world: GameWo
       {selected.kind === 'car' && car && (
         <div className="detail-card">
           <h3><Car size={15} /> Carro #{car.id}</h3>
-          <p><span>Status</span><strong>{trafficStateLabel[car.trafficState]}</strong></p>
+          <p><span>Status</span><strong>{car.lifecyclePhase === 'driving' ? trafficStateLabel[car.trafficState] : lifecyclePhaseLabel[car.lifecyclePhase]}</strong></p>
           {car.intersectionReason && <p><span>Motivo parada</span><strong>{intersectionReasonLabel[car.intersectionReason]}</strong></p>}
           <p><span>Origem</span><strong>{world.getBuilding(car.originBuildingId)?.type ?? '-'}</strong></p>
           <p><span>Destino</span><strong>{world.getBuilding(car.destinationBuildingId)?.type ?? '-'}</strong></p>

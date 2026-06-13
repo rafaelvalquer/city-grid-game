@@ -129,7 +129,7 @@ export function buildIntersectionControls(grid: Tile[][], cars: Car[]): Intersec
   const controls: IntersectionControls = new Map();
 
   for (const car of cars) {
-    if (car.status === 'arrived') continue;
+    if (car.status === 'arrived' || car.lifecyclePhase !== 'driving') continue;
 
     const current = { x: car.currentTileX, y: car.currentTileY };
     if (isIntersection(grid, current)) {
@@ -514,7 +514,7 @@ function computeRoundaboutEntryDecision(
   let nearestConflictCarId: string | undefined;
 
   for (const other of cars) {
-    if (other.id === car.id || other.status === 'arrived') continue;
+    if (other.id === car.id || other.status === 'arrived' || other.lifecyclePhase !== 'driving') continue;
     if (!isInsideRoundabout(grid, { x: other.currentTileX, y: other.currentTileY })) continue;
     const otherCenter = getRoundaboutCenter(grid, { x: other.currentTileX, y: other.currentTileY });
     if (!otherCenter || otherCenter.x !== center.x || otherCenter.y !== center.y) continue;
@@ -648,7 +648,7 @@ function isExitBlocked(grid: Tile[][], car: Car, cars: Car[], exitTile: Vec2 | u
   };
 
   for (const other of cars) {
-    if (other.id === car.id || other.status === 'arrived') continue;
+    if (other.id === car.id || other.status === 'arrived' || other.lifecyclePhase !== 'driving') continue;
     const sameTile = other.currentTileX === exitTile.x && other.currentTileY === exitTile.y;
     const nearCenter = Math.hypot(other.x - exitTile.x, other.y - exitTile.y) <= 0.58;
     if (!sameTile && !nearCenter) continue;
@@ -739,7 +739,7 @@ function findLeaderAhead(car: Car, cars: Car[], direction: TravelDirection, lane
   let leader: { car: Car; distance: number } | undefined;
 
   for (const other of cars) {
-    if (other.id === car.id || other.status === 'arrived') continue;
+    if (other.id === car.id || other.status === 'arrived' || other.lifecyclePhase !== 'driving') continue;
     if (other.direction !== direction || other.laneIndex !== laneIndex) continue;
     if (Math.round(other[lineAxis]) !== laneLine) continue;
     const rawDistance = travelScalar(other, direction) - scalar;

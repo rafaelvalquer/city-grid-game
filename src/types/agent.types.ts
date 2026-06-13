@@ -2,6 +2,7 @@ import type { Vec2 } from './city.types';
 
 export type CarStatus = 'moving' | 'stopped' | 'arrived' | 'no_route';
 export type TrafficState = 'moving' | 'queued' | 'intersection' | 'turning';
+export type CarLifecyclePhase = 'spawnExit' | 'driving' | 'destinationEntry';
 export type TravelDirection = 'north' | 'south' | 'east' | 'west';
 export type IntersectionReason = 'signal_red' | 'signal_yellow' | 'unsignalized_queue' | 'right_turn_free' | 'box_occupied' | 'exit_blocked' | 'roundabout_yield' | 'roundabout_gap';
 
@@ -39,6 +40,8 @@ export type Car = {
   turnSlowdown: number;
   blockedByCarId?: string;
   trafficState: TrafficState;
+  lifecyclePhase: CarLifecyclePhase;
+  lifecycleProgress: number;
   direction: TravelDirection;
   status: CarStatus;
   travelTime: number;
