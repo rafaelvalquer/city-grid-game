@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { CityStats, SelectedEntity } from '../types/city.types';
+import type { CityStats, RoadDirection, SelectedEntity } from '../types/city.types';
 import type { Vec2 } from '../types/city.types';
 import type { SimulationSpeed, Tool } from '../types/game.types';
 
@@ -16,6 +16,7 @@ export type HoverPreview = {
   lineTiles?: Vec2[];
   invalidTiles?: Vec2[];
   buildableTiles?: number;
+  oneWayDirection?: RoadDirection;
 };
 
 export type GameStore = {

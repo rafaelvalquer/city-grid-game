@@ -1,4 +1,5 @@
-import type { Tile, Vec2 } from '../../types/city.types';
+import type { Car } from '../../types/agent.types';
+import type { RoadDirection, Tile, Vec2 } from '../../types/city.types';
 import { getNeighbors4, inBounds, isRoadType, keyOf } from '../city/grid';
 
 const RING_OFFSETS: Vec2[] = [
@@ -82,6 +83,54 @@ export function getRoundaboutNext(grid: Tile[][], pos: Vec2): Vec2 | undefined {
   return ring[(index + 1) % ring.length];
 }
 
+export function getRoundaboutPrevious(grid: Tile[][], pos: Vec2): Vec2 | undefined {
+  const center = getRoundaboutCenter(grid, pos);
+  if (!center) return undefined;
+
+  const ring = getRoundaboutRing(center);
+  const index = getRoundaboutRingIndex(grid, pos);
+  if (index < 0) return undefined;
+  return ring[(index + ring.length - 1) % ring.length];
+}
+
+export function getRoundaboutRingIndex(grid: Tile[][], pos: Vec2): number {
+  const center = getRoundaboutCenter(grid, pos);
+  if (!center) return -1;
+
+  return getRoundaboutRing(center).findIndex((tile) => tile.x === pos.x && tile.y === pos.y);
+}
+
+export function getRoundaboutDistanceAlongRing(grid: Tile[][], from: Vec2, to: Vec2): number {
+  const fromCenter = getRoundaboutCenter(grid, from);
+  const toCenter = getRoundaboutCenter(grid, to);
+  if (!fromCenter || !toCenter || fromCenter.x !== toCenter.x || fromCenter.y !== toCenter.y) return Infinity;
+
+  const ring = getRoundaboutRing(fromCenter);
+  const fromIndex = getRoundaboutRingIndex(grid, from);
+  const toIndex = getRoundaboutRingIndex(grid, to);
+  if (fromIndex < 0 || toIndex < 0) return Infinity;
+  return (toIndex - fromIndex + ring.length) % ring.length;
+}
+
+export function isRoundaboutSideTile(grid: Tile[][], pos: Vec2): boolean {
+  const center = getRoundaboutCenter(grid, pos);
+  if (!center) return false;
+  return Math.abs(pos.x - center.x) + Math.abs(pos.y - center.y) === 1;
+}
+
+export function willExitBeforeEntry(grid: Tile[][], car: Car, entryTile: Vec2): boolean {
+  const current = car.route[car.routeIndex];
+  if (!current || !isInsideRoundabout(grid, current)) return false;
+
+  for (let index = car.routeIndex + 1; index < car.route.length; index += 1) {
+    const next = car.route[index];
+    if (next.x === entryTile.x && next.y === entryTile.y) return false;
+    if (!isInsideRoundabout(grid, next)) return true;
+  }
+
+  return false;
+}
+
 export function isValidRoundaboutInternalMove(grid: Tile[][], from: Vec2, to: Vec2): boolean {
   const next = getRoundaboutNext(grid, from);
   return Boolean(next && next.x === to.x && next.y === to.y);
@@ -93,7 +142,10 @@ export function getDrivableNeighbors(grid: Tile[][], current: Vec2): Vec2[] {
 
   const neighbors = getNeighbors4(current).filter((next) => isRoadType(grid[next.y]?.[next.x]?.type));
   if (!isRoundaboutTile(tile)) {
-    return neighbors.filter((next) => !isRoundaboutTile(grid[next.y]?.[next.x]) || isEntrySide(grid, current, next));
+    return neighbors.filter((next) => {
+      if (tile.oneWay && movementDirection(current, next) !== tile.oneWay) return false;
+      return !isRoundaboutTile(grid[next.y]?.[next.x]) || isEntrySide(grid, current, next);
+    });
   }
 
   const allowed = new Map<string, Vec2>();
@@ -107,6 +159,13 @@ export function getDrivableNeighbors(grid: Tile[][], current: Vec2): Vec2[] {
     allowed.set(keyOf(next.x, next.y), next);
   }
   return [...allowed.values()];
+}
+
+function movementDirection(from: Vec2, to: Vec2): RoadDirection {
+  if (to.x > from.x) return 'east';
+  if (to.x < from.x) return 'west';
+  if (to.y > from.y) return 'south';
+  return 'north';
 }
 
 function isEntrySide(grid: Tile[][], from: Vec2, to: Vec2): boolean {

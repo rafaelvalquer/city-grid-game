@@ -1,5 +1,5 @@
 import { nanoid } from 'nanoid';
-import type { Building, BuildingLevel, CityStats, RoadType, SelectedEntity, Tile, TrafficCell, TrafficLightAxis, TrafficLightState, Vec2 } from '../../types/city.types';
+import type { Building, BuildingLevel, CityStats, RoadDirection, RoadType, SelectedEntity, Tile, TrafficCell, TrafficLightAxis, TrafficLightState, Vec2 } from '../../types/city.types';
 import type { Car } from '../../types/agent.types';
 import type { Tool } from '../../types/game.types';
 import { GAME_CONFIG } from '../config/gameConfig';
@@ -200,7 +200,8 @@ export class GameWorld {
       const cost = ROAD_CONFIG[tool].buildCost;
       if (this.money < cost) return false;
       if (tile.type === tool) return false;
-      this.grid[y][x] = { x, y, type: tool };
+      const oneWay = tile.type === 'road' || tile.type === 'avenue' ? tile.oneWay : undefined;
+      this.grid[y][x] = { x, y, type: tool, oneWay };
       this.money -= cost;
       this.updateConnections();
       this.emit();
@@ -252,7 +253,9 @@ export class GameWorld {
 
     for (const pos of uniqueTiles) {
       if (this.grid[pos.y][pos.x].type !== roadType) {
-        this.grid[pos.y][pos.x] = { x: pos.x, y: pos.y, type: roadType };
+        const current = this.grid[pos.y][pos.x];
+        const oneWay = current.type === 'road' || current.type === 'avenue' ? current.oneWay : undefined;
+        this.grid[pos.y][pos.x] = { x: pos.x, y: pos.y, type: roadType, oneWay };
       }
     }
 
@@ -267,6 +270,59 @@ export class GameWorld {
     return { success: true, built, cost };
   }
 
+  setOneWayLine(tiles: Vec2[], direction: RoadDirection): { success: boolean; changed: number; reason?: string } {
+    const uniqueTiles = dedupeTiles(tiles);
+    if (!uniqueTiles.length) return { success: false, changed: 0, reason: 'Nenhum tile selecionado.' };
+
+    for (const pos of uniqueTiles) {
+      if (!inBounds(pos.x, pos.y)) return { success: false, changed: 0, reason: 'A linha sai do mapa.' };
+      const tile = this.grid[pos.y][pos.x];
+      if (tile.type !== 'road' && tile.type !== 'avenue') {
+        return { success: false, changed: 0, reason: 'Mão única só pode ser aplicada em ruas e avenidas.' };
+      }
+    }
+
+    let changed = 0;
+    for (const pos of uniqueTiles) {
+      const tile = this.grid[pos.y][pos.x];
+      if (tile.oneWay !== direction) changed += 1;
+      this.grid[pos.y][pos.x] = { ...tile, oneWay: direction };
+    }
+
+    this.rerouteCarsAffectedBy(uniqueTiles);
+    this.refreshSelectedRoad();
+    this.emit();
+    return { success: true, changed };
+  }
+
+  toggleOneWayAt(x: number, y: number): { success: boolean; direction?: RoadDirection; cleared?: boolean; reason?: string } {
+    if (!inBounds(x, y)) return { success: false, reason: 'Fora do mapa.' };
+    const tile = this.grid[y][x];
+    if (tile.type !== 'road' && tile.type !== 'avenue') {
+      return { success: false, reason: 'Mão única só pode ser aplicada em ruas e avenidas.' };
+    }
+
+    const nextDirection = nextOneWayDirection(tile.oneWay);
+    this.grid[y][x] = { ...tile, oneWay: nextDirection };
+    this.rerouteCarsAffectedBy([{ x, y }]);
+    this.refreshSelectedRoad();
+    this.emit();
+    return nextDirection
+      ? { success: true, direction: nextDirection }
+      : { success: true, cleared: true };
+  }
+
+  clearOneWayAt(x: number, y: number): boolean {
+    if (!inBounds(x, y)) return false;
+    const tile = this.grid[y][x];
+    if ((tile.type !== 'road' && tile.type !== 'avenue') || !tile.oneWay) return false;
+    this.grid[y][x] = { ...tile, oneWay: undefined };
+    this.rerouteCarsAffectedBy([{ x, y }]);
+    this.refreshSelectedRoad();
+    this.emit();
+    return true;
+  }
+
   inspectAt(x: number, y: number): SelectedEntity {
     if (!inBounds(x, y)) return { kind: 'none' };
     const tile = this.grid[y][x];
@@ -275,7 +331,7 @@ export class GameWorld {
       if (building) this.selected = { kind: 'building', building };
     } else if (isRoadType(tile.type)) {
       const t = this.traffic.get(keyOf(x, y)) ?? { x, y, cars: 0, capacity: ROAD_CONFIG[tile.type as RoadType].capacity, congestion: 0 };
-      this.selected = { kind: 'road', x, y, roadType: tile.type as RoadType, traffic: t, trafficLight: this.trafficLights.get(getTrafficLightKey(x, y)) };
+      this.selected = { kind: 'road', x, y, roadType: tile.type as RoadType, traffic: t, trafficLight: this.trafficLights.get(getTrafficLightKey(x, y)), oneWay: tile.oneWay };
     } else {
       this.selected = { kind: 'tile', x, y, type: tile.type };
     }
@@ -885,6 +941,11 @@ export class GameWorld {
     if (building) this.selected = { kind: 'building', building };
   }
 
+  private refreshSelectedRoad(): void {
+    if (this.selected.kind !== 'road') return;
+    this.inspectAt(this.selected.x, this.selected.y);
+  }
+
   private getRoadTypeAt(pos: Vec2): RoadType {
     const type = this.grid[pos.y]?.[pos.x]?.type;
     return type === 'avenue' || type === 'roundabout' ? type : 'road';
@@ -975,6 +1036,14 @@ function dedupeTiles(tiles: Vec2[]): Vec2[] {
     result.push(tile);
   }
   return result;
+}
+
+function nextOneWayDirection(direction?: RoadDirection): RoadDirection | undefined {
+  if (!direction) return 'east';
+  if (direction === 'east') return 'south';
+  if (direction === 'south') return 'west';
+  if (direction === 'west') return 'north';
+  return undefined;
 }
 
 function isTrafficDebugEnabled(): boolean {

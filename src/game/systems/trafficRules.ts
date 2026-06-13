@@ -3,7 +3,14 @@ import type { RoadType, Tile, Vec2 } from '../../types/city.types';
 import { ROAD_CONFIG } from '../config/roadConfig';
 import { getNeighbors4, isRoadType, keyOf } from '../city/grid';
 import { getTrafficLightSignal, isTrafficLightControlling, type TrafficLightMap } from './trafficLights';
-import { getRoundaboutCenter, isEnteringRoundabout, isInsideRoundabout, isRoundaboutTile } from './roundabouts';
+import {
+  getRoundaboutCenter,
+  getRoundaboutDistanceAlongRing,
+  isEnteringRoundabout,
+  isInsideRoundabout,
+  willExitBeforeEntry,
+  isRoundaboutTile,
+} from './roundabouts';
 
 export type TrafficDecision = {
   targetSpeed: number;
@@ -67,6 +74,11 @@ const EXIT_LANE_CLEARANCE = 0.16;
 const RIGHT_TURN_YIELD_SPEED = 0.72;
 const RIGHT_TURN_DEBUG_SECONDS = 2.5;
 const OVERLAP_LEADER_DISTANCE = 0.08;
+const ROUNDABOUT_ENTRY_APPROACH_SPEED = 0.38;
+const ROUNDABOUT_ENTRY_FREE_SPEED = 0.62;
+const ROUNDABOUT_ENTRY_GAP_SPEED = 0.52;
+const ROUNDABOUT_BLOCK_DISTANCE = 1.15;
+const ROUNDABOUT_FREE_DISTANCE = 1.65;
 
 const rightTurnDebugTimers = new Map<string, number>();
 
@@ -191,6 +203,7 @@ export function computeTrafficDecision(
   let state: TrafficState = turning ? 'turning' : 'moving';
   let blockedByCarId: string | undefined;
   let hardStop = false;
+  let intersectionReason: IntersectionReason | undefined;
 
   const clearingIntersectionBox = shouldClearIntersectionBox(grid, car);
   const leader = findLeaderAhead(car, cars, direction, laneIndex);
@@ -220,12 +233,12 @@ export function computeTrafficDecision(
     state = turning ? 'turning' : 'moving';
     hardStop = false;
   } else if (isEnteringRoundabout(grid, current, next)) {
-    const blockedByRoundabout = findRoundaboutEntryBlocker(grid, car, cars, next);
-    if (blockedByRoundabout) {
-      targetSpeed = car.progressToNext >= TRAFFIC_LIGHT_STOP_AT ? 0 : Math.min(targetSpeed, INTERSECTION_APPROACH_SPEED);
+    const roundaboutDecision = computeRoundaboutEntryDecision(grid, car, cars, next);
+    if (roundaboutDecision.blockedByCarId) {
+      targetSpeed = car.progressToNext >= TRAFFIC_LIGHT_STOP_AT ? 0 : Math.min(targetSpeed, ROUNDABOUT_ENTRY_APPROACH_SPEED);
       state = 'intersection';
       hardStop = car.progressToNext >= TRAFFIC_LIGHT_STOP_AT;
-      blockedByCarId = blockedByRoundabout.id;
+      blockedByCarId = roundaboutDecision.blockedByCarId;
       return {
         targetSpeed,
         desiredSpeed,
@@ -237,14 +250,15 @@ export function computeTrafficDecision(
         state,
         blockedByCarId,
         intersectionStopKey: keyOf(next.x, next.y),
-        intersectionReason: 'roundabout_yield',
+        intersectionReason: roundaboutDecision.reason,
         turning,
         hardStop,
       };
     }
 
-    targetSpeed = Math.min(targetSpeed, 0.45);
+    targetSpeed = Math.min(targetSpeed, roundaboutDecision.targetSpeed);
     state = 'turning';
+    intersectionReason = roundaboutDecision.reason;
     hardStop = false;
   }
 
@@ -252,7 +266,6 @@ export function computeTrafficDecision(
   const enteringIntersection = !insideIntersection && isApproachingIntersection(grid, car, next);
   let intersectionQueuePosition: number | undefined;
   let intersectionQueueLength: number | undefined;
-  let intersectionReason: IntersectionReason | undefined;
 
   if (enteringIntersection) {
     const control = intersectionControls.get(intersectionKey);
@@ -487,9 +500,18 @@ function canReleaseIntoIntersection(intent: IntersectionIntent): boolean {
   return !intent.exitBlocked;
 }
 
-function findRoundaboutEntryBlocker(grid: Tile[][], car: Car, cars: Car[], entryTile: Vec2): Car | undefined {
+function computeRoundaboutEntryDecision(
+  grid: Tile[][],
+  car: Car,
+  cars: Car[],
+  entryTile: Vec2,
+): { blockedByCarId?: string; targetSpeed: number; reason?: IntersectionReason } {
   const center = getRoundaboutCenter(grid, entryTile);
-  if (!center) return undefined;
+  if (!center) return { targetSpeed: ROUNDABOUT_ENTRY_FREE_SPEED };
+
+  let hasExitingCarNearEntry = false;
+  let nearestConflictDistance = Infinity;
+  let nearestConflictCarId: string | undefined;
 
   for (const other of cars) {
     if (other.id === car.id || other.status === 'arrived') continue;
@@ -497,14 +519,43 @@ function findRoundaboutEntryBlocker(grid: Tile[][], car: Car, cars: Car[], entry
     const otherCenter = getRoundaboutCenter(grid, { x: other.currentTileX, y: other.currentTileY });
     if (!otherCenter || otherCenter.x !== center.x || otherCenter.y !== center.y) continue;
 
-    const distanceToEntry = Math.hypot(other.x - entryTile.x, other.y - entryTile.y);
-    if (distanceToEntry < 1.08) return other;
+    if (willExitBeforeEntry(grid, other, entryTile)) {
+      if (Math.hypot(other.x - entryTile.x, other.y - entryTile.y) < ROUNDABOUT_FREE_DISTANCE) {
+        hasExitingCarNearEntry = true;
+      }
+      continue;
+    }
 
+    const otherCurrent = { x: other.currentTileX, y: other.currentTileY };
     const otherNext = other.route[other.routeIndex + 1];
-    if (otherNext && otherNext.x === entryTile.x && otherNext.y === entryTile.y) return other;
+    if (otherCurrent.x === entryTile.x && otherCurrent.y === entryTile.y) {
+      return { blockedByCarId: other.id, targetSpeed: 0, reason: 'roundabout_yield' };
+    }
+    if (otherNext && otherNext.x === entryTile.x && otherNext.y === entryTile.y) {
+      return { blockedByCarId: other.id, targetSpeed: 0, reason: 'roundabout_yield' };
+    }
+
+    const ringDistance = getRoundaboutDistanceAlongRing(grid, otherCurrent, entryTile);
+    const adjustedDistance = ringDistance === Infinity ? Infinity : Math.max(0, ringDistance - other.progressToNext);
+    if (adjustedDistance < nearestConflictDistance) {
+      nearestConflictDistance = adjustedDistance;
+      nearestConflictCarId = other.id;
+    }
   }
 
-  return undefined;
+  if (nearestConflictCarId && nearestConflictDistance < ROUNDABOUT_BLOCK_DISTANCE) {
+    return { blockedByCarId: nearestConflictCarId, targetSpeed: 0, reason: 'roundabout_yield' };
+  }
+
+  if (hasExitingCarNearEntry) {
+    return { targetSpeed: ROUNDABOUT_ENTRY_GAP_SPEED, reason: 'roundabout_gap' };
+  }
+
+  if (!nearestConflictCarId || nearestConflictDistance > ROUNDABOUT_FREE_DISTANCE) {
+    return { targetSpeed: ROUNDABOUT_ENTRY_FREE_SPEED };
+  }
+
+  return { targetSpeed: ROUNDABOUT_ENTRY_GAP_SPEED, reason: 'roundabout_gap' };
 }
 
 function areMovementsCompatible(grid: Tile[][], intersectionKey: string, a: IntersectionIntent, b: IntersectionIntent): boolean {

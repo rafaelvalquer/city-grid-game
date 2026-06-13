@@ -3,7 +3,7 @@ import type { Vec2 } from './city.types';
 export type CarStatus = 'moving' | 'stopped' | 'arrived' | 'no_route';
 export type TrafficState = 'moving' | 'queued' | 'intersection' | 'turning';
 export type TravelDirection = 'north' | 'south' | 'east' | 'west';
-export type IntersectionReason = 'signal_red' | 'signal_yellow' | 'unsignalized_queue' | 'right_turn_free' | 'box_occupied' | 'exit_blocked' | 'roundabout_yield';
+export type IntersectionReason = 'signal_red' | 'signal_yellow' | 'unsignalized_queue' | 'right_turn_free' | 'box_occupied' | 'exit_blocked' | 'roundabout_yield' | 'roundabout_gap';
 
 export type Car = {
   id: string;

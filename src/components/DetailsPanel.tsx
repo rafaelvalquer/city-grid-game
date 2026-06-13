@@ -21,6 +21,7 @@ const intersectionReasonLabel = {
   box_occupied: 'Caixa ocupada',
   exit_blocked: 'Saída bloqueada',
   roundabout_yield: 'Aguardando rotatória',
+  roundabout_gap: 'Entrada liberada por saída próxima',
 } as const;
 
 const trafficLightPhaseLabel = {
@@ -36,6 +37,13 @@ const switchReasonLabel = {
   adaptive: 'Adaptativo',
   emergency: 'Emergência anti-travamento',
   startup: 'Instalação / amarelo piscante',
+} as const;
+
+const oneWayLabel = {
+  north: 'Sentido único: norte',
+  south: 'Sentido único: sul',
+  east: 'Sentido único: leste',
+  west: 'Sentido único: oeste',
 } as const;
 
 export function DetailsPanel({ world, className = '', onClose }: { world: GameWorld; className?: string; onClose?: () => void }) {
@@ -104,6 +112,7 @@ export function DetailsPanel({ world, className = '', onClose }: { world: GameWo
           <p><span>Carros atuais</span><strong>{selected.traffic.cars}</strong></p>
           <p><span>Congestionamento</span><strong>{Math.round(selected.traffic.congestion * 100)}%</strong></p>
           <p><span>Velocidade base</span><strong>{ROAD_CONFIG[selected.roadType].speed}x</strong></p>
+          <p><span>Sentido</span><strong>{selected.oneWay ? oneWayLabel[selected.oneWay] : 'Mão dupla'}</strong></p>
           {selected.trafficLight && (
             <>
               <p><span>Semáforo</span><strong>{trafficLightPhaseLabel[selected.trafficLight.phase]}</strong></p>

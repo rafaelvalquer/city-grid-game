@@ -2,6 +2,7 @@ export type TileType = 'empty' | 'road' | 'avenue' | 'roundabout' | 'roundaboutC
 export type BuildingType = 'house' | 'shop' | 'office';
 export type BuildingLevel = 1 | 2 | 3;
 export type RoadType = 'road' | 'avenue' | 'roundabout';
+export type RoadDirection = 'north' | 'south' | 'east' | 'west';
 
 export type Vec2 = { x: number; y: number };
 
@@ -10,6 +11,7 @@ export type Tile = {
   y: number;
   type: TileType;
   buildingId?: string;
+  oneWay?: RoadDirection;
 };
 
 export type Building = {
@@ -78,5 +80,5 @@ export type SelectedEntity =
   | { kind: 'none' }
   | { kind: 'tile'; x: number; y: number; type: TileType }
   | { kind: 'building'; building: Building }
-  | { kind: 'road'; x: number; y: number; roadType: RoadType; traffic: TrafficCell; trafficLight?: TrafficLightState }
+  | { kind: 'road'; x: number; y: number; roadType: RoadType; traffic: TrafficCell; trafficLight?: TrafficLightState; oneWay?: RoadDirection }
   | { kind: 'car'; carId: string };

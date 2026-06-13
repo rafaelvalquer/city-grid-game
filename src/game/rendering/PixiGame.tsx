@@ -6,7 +6,7 @@ import { ROAD_CONFIG } from '../config/roadConfig';
 import { useGameStore, type HeatmapMode, type HoverPreview } from '../../store/gameStore';
 import { inBounds, isRoadType, keyOf } from '../city/grid';
 import type { Car } from '../../types/agent.types';
-import type { Building, RoadType, Tile, TrafficLightState, Vec2 } from '../../types/city.types';
+import type { Building, RoadDirection, RoadType, Tile, TrafficLightState, Vec2 } from '../../types/city.types';
 import type { Tool } from '../../types/game.types';
 import { MAP_COLORS, congestionColor } from './visualTheme';
 import { getDirection, getLaneOffset, isIntersection } from '../systems/trafficRules';
@@ -33,6 +33,11 @@ type RoadLineDrag = {
   tool: 'road' | 'avenue';
 };
 
+type OneWayLineDrag = {
+  startTile: Vec2;
+  currentTile: Vec2;
+};
+
 const TURN_IN_START = 0.64;
 const TURN_OUT_END = 0.36;
 const SIGNAL_RED = 0xef4444;
@@ -47,6 +52,7 @@ export function PixiGame({ world }: { world: GameWorld }) {
   const isDrawingRef = useRef(false);
   const lastTileRef = useRef<string>('');
   const roadLineDragRef = useRef<RoadLineDrag | null>(null);
+  const oneWayLineDragRef = useRef<OneWayLineDrag | null>(null);
   const cameraRef = useRef({ x: 56, y: 42, scale: 0.75 });
   const panningRef = useRef<{ active: boolean; x: number; y: number }>({ active: false, x: 0, y: 0 });
   const hoverPreview = useGameStore((s) => s.hoverPreview);
@@ -126,6 +132,14 @@ export function PixiGame({ world }: { world: GameWorld }) {
           state.setHoverPreview(getLineBuildPreview(world, getLineTiles(drag.startTile, tile), drag.tool, state.stats.money));
           return;
         }
+        const oneWayDrag = oneWayLineDragRef.current;
+        if (oneWayDrag) {
+          oneWayDrag.currentTile = tile;
+          const lineTiles = getLineTiles(oneWayDrag.startTile, tile);
+          const direction = getLineDirection(oneWayDrag.startTile, tile);
+          state.setHoverPreview(getOneWayPreview(world, lineTiles, direction));
+          return;
+        }
         state.setHoverPreview({ ...getActionPreview(world, tile.x, tile.y, state.selectedTool, state.stats.money), tool: state.selectedTool });
       };
 
@@ -144,12 +158,19 @@ export function PixiGame({ world }: { world: GameWorld }) {
           state.setActionFeedback(null);
           return;
         }
+        if (state.selectedTool === 'oneWay') {
+          oneWayLineDragRef.current = { startTile: tile, currentTile: tile };
+          state.setHoverPreview(getOneWayPreview(world, [tile], 'east'));
+          state.setActionFeedback(null);
+          return;
+        }
         updateHover(event.clientX, event.clientY);
         applyTool(tile.x, tile.y);
       }, { signal: abortController.signal });
 
       window.addEventListener('pointerup', () => {
         const drag = roadLineDragRef.current;
+        const oneWayDrag = oneWayLineDragRef.current;
         if (drag) {
           const state = useGameStore.getState();
           const lineTiles = getLineTiles(drag.startTile, drag.currentTile);
@@ -160,7 +181,27 @@ export function PixiGame({ world }: { world: GameWorld }) {
             : result.reason ?? preview.reason ?? 'Não foi possível construir a linha.');
           state.setHoverPreview(null);
         }
+        if (oneWayDrag) {
+          const state = useGameStore.getState();
+          const sameTile = oneWayDrag.startTile.x === oneWayDrag.currentTile.x && oneWayDrag.startTile.y === oneWayDrag.currentTile.y;
+          if (sameTile) {
+            const result = world.toggleOneWayAt(oneWayDrag.startTile.x, oneWayDrag.startTile.y);
+            state.setActionFeedback(result.success
+              ? result.cleared ? 'Mão única removida.' : `Mão única aplicada para ${directionLabel(result.direction ?? 'east')}.`
+              : result.reason ?? 'Não foi possível alterar a mão única.');
+          } else {
+            const lineTiles = getLineTiles(oneWayDrag.startTile, oneWayDrag.currentTile);
+            const direction = getLineDirection(oneWayDrag.startTile, oneWayDrag.currentTile);
+            const preview = getOneWayPreview(world, lineTiles, direction);
+            const result = world.setOneWayLine(lineTiles, direction);
+            state.setActionFeedback(result.success
+              ? `Mão única aplicada: ${lineTiles.length} tiles para ${directionLabel(direction)}.`
+              : result.reason ?? preview.reason ?? 'Não foi possível aplicar mão única.');
+          }
+          state.setHoverPreview(null);
+        }
         roadLineDragRef.current = null;
+        oneWayLineDragRef.current = null;
         isDrawingRef.current = false;
         panningRef.current.active = false;
         lastTileRef.current = '';
@@ -178,12 +219,14 @@ export function PixiGame({ world }: { world: GameWorld }) {
         updateHover(event.clientX, event.clientY);
         if (!isDrawingRef.current) return;
         if (roadLineDragRef.current) return;
+        if (oneWayLineDragRef.current) return;
         const tile = toWorldTile(event.clientX, event.clientY);
         applyTool(tile.x, tile.y);
       }, { signal: abortController.signal });
 
       app.canvas.addEventListener('pointerleave', () => {
         if (roadLineDragRef.current) return;
+        if (oneWayLineDragRef.current) return;
         useGameStore.getState().setHoverPreview(null);
       }, { signal: abortController.signal });
 
@@ -274,6 +317,7 @@ function draw(
     for (let x = 0; x < GAME_CONFIG.gridWidth; x++) {
       const tile = world.grid[y][x];
       if (isRoadType(tile.type) && tile.type !== 'roundabout') drawRoadSignage(graphics, world, x, y, ts);
+      if ((tile.type === 'road' || tile.type === 'avenue') && tile.oneWay) drawOneWayArrow(graphics, x, y, ts, tile.oneWay, tile.type === 'avenue');
     }
   }
 
@@ -1024,6 +1068,10 @@ function drawConstructionPreview(graphics: Graphics, world: GameWorld, preview: 
     drawRoadLinePreview(graphics, preview, tool, ts, timeSeconds);
     return;
   }
+  if (preview.lineTiles?.length && tool === 'oneWay' && preview.oneWayDirection) {
+    drawOneWayLinePreview(graphics, preview, preview.oneWayDirection, ts, timeSeconds);
+    return;
+  }
   if (!inBounds(x, y)) return;
   const color = valid ? MAP_COLORS.previewValid : MAP_COLORS.previewInvalid;
   const px = x * ts;
@@ -1119,6 +1167,106 @@ function drawRoadLinePreview(graphics: Graphics, preview: HoverPreview, tool: 'r
   }
 }
 
+function drawOneWayLinePreview(graphics: Graphics, preview: HoverPreview, direction: RoadDirection, ts: number, timeSeconds: number): void {
+  const lineTiles = preview.lineTiles ?? [];
+  const visibleTiles = lineTiles.filter((tile) => inBounds(tile.x, tile.y));
+  if (!visibleTiles.length) return;
+
+  const previewPulse = pulse(timeSeconds, preview.valid ? 1.1 : 1.7, preview.x * 0.17 + preview.y * 0.11);
+  const color = preview.valid ? MAP_COLORS.previewValid : MAP_COLORS.previewInvalid;
+  const invalidKeys = new Set((preview.invalidTiles ?? []).map((tile) => keyOf(tile.x, tile.y)));
+
+  for (const tile of visibleTiles) {
+    const px = tile.x * ts;
+    const py = tile.y * ts;
+    const invalid = invalidKeys.has(keyOf(tile.x, tile.y));
+    graphics.roundRect(px + 4, py + 4, ts - 8, ts - 8, 7)
+      .fill({ color: invalid ? MAP_COLORS.previewInvalid : MAP_COLORS.previewValid, alpha: invalid ? 0.16 : 0.08 + previewPulse * 0.05 })
+      .stroke({ color: invalid ? MAP_COLORS.previewInvalid : color, width: invalid ? 2 : 1.4 + previewPulse * 0.7, alpha: invalid ? 0.9 : 0.58 + previewPulse * 0.22 });
+    drawOneWayArrow(graphics, tile.x, tile.y, ts, direction, false, invalid ? MAP_COLORS.previewInvalid : MAP_COLORS.previewValid, invalid ? 0.72 : 0.85);
+  }
+}
+
+function getOneWayPreview(world: GameWorld, tiles: Vec2[], direction: RoadDirection): ActionPreview {
+  const uniqueTiles = dedupePreviewTiles(tiles);
+  const invalidTiles: Vec2[] = [];
+  let reason: string | undefined;
+
+  for (const pos of uniqueTiles) {
+    if (!inBounds(pos.x, pos.y)) {
+      invalidTiles.push(pos);
+      reason ??= 'A linha sai do mapa.';
+      continue;
+    }
+    const tile = world.grid[pos.y][pos.x];
+    if (tile.type !== 'road' && tile.type !== 'avenue') {
+      invalidTiles.push(pos);
+      reason ??= 'Mão única só pode ser aplicada em ruas e avenidas.';
+    }
+  }
+
+  const label = `Mão única: ${uniqueTiles.length} tiles para ${directionLabel(direction)}`;
+  return {
+    x: uniqueTiles[uniqueTiles.length - 1]?.x ?? 0,
+    y: uniqueTiles[uniqueTiles.length - 1]?.y ?? 0,
+    label,
+    valid: !reason,
+    reason,
+    tool: 'oneWay',
+    lineTiles: uniqueTiles,
+    invalidTiles,
+    buildableTiles: uniqueTiles.length - invalidTiles.length,
+    oneWayDirection: direction,
+    successMessage: `Mão única aplicada: ${uniqueTiles.length} tiles para ${directionLabel(direction)}.`,
+  };
+}
+
+function drawOneWayArrow(
+  graphics: Graphics,
+  x: number,
+  y: number,
+  ts: number,
+  direction: RoadDirection,
+  isAvenue: boolean,
+  color = MAP_COLORS.lane,
+  alpha = 0.78,
+): void {
+  const cx = x * ts + ts / 2;
+  const cy = y * ts + ts / 2;
+  const angle = directionAngle(direction);
+  const length = isAvenue ? 14 : 11;
+  const head = isAvenue ? 5 : 4;
+  const dx = Math.cos(angle);
+  const dy = Math.sin(angle);
+  const px = -dy;
+  const py = dx;
+  const startX = cx - dx * length * 0.42;
+  const startY = cy - dy * length * 0.42;
+  const endX = cx + dx * length * 0.42;
+  const endY = cy + dy * length * 0.42;
+
+  graphics.moveTo(startX, startY).lineTo(endX, endY).stroke({ color, width: isAvenue ? 2.2 : 2, alpha });
+  graphics.poly([
+    endX + dx * head, endY + dy * head,
+    endX - dx * head * 0.8 + px * head * 0.8, endY - dy * head * 0.8 + py * head * 0.8,
+    endX - dx * head * 0.8 - px * head * 0.8, endY - dy * head * 0.8 - py * head * 0.8,
+  ]).fill({ color, alpha });
+}
+
+function getLineDirection(start: Vec2, end: Vec2): RoadDirection {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  if (Math.abs(dx) >= Math.abs(dy)) return dx < 0 ? 'west' : 'east';
+  return dy < 0 ? 'north' : 'south';
+}
+
+function directionLabel(direction: RoadDirection): string {
+  if (direction === 'north') return 'norte';
+  if (direction === 'south') return 'sul';
+  if (direction === 'west') return 'oeste';
+  return 'leste';
+}
+
 function getActionPreview(world: GameWorld, x: number, y: number, tool: Tool, money: number): ActionPreview {
   if (!inBounds(x, y)) {
     return { x, y, label: 'Fora do mapa', valid: false, reason: 'Fora do mapa.', successMessage: '' };
@@ -1155,6 +1303,19 @@ function getActionPreview(world: GameWorld, x: number, y: number, tool: Tool, mo
     if (world.trafficLights.has(key)) return { x, y, label: 'Semáforo já instalado', cost, valid: false, reason: 'Este cruzamento já possui semáforo.', successMessage: '' };
     if (money < cost) return { x, y, label: 'Dinheiro insuficiente', cost, valid: false, reason: `Faltam $ ${cost - money} para instalar o semáforo.`, successMessage: '' };
     return { x, y, label: 'Instalar semáforo', cost, valid: true, successMessage: `Semáforo instalado por $ ${cost}.` };
+  }
+
+  if (tool === 'oneWay') {
+    if (tile.type !== 'road' && tile.type !== 'avenue') {
+      return { x, y, label: 'Mão única indisponível', valid: false, reason: 'Use apenas em ruas e avenidas.', successMessage: '' };
+    }
+    return {
+      x,
+      y,
+      label: tile.oneWay ? 'Alternar mão única' : 'Aplicar mão única',
+      valid: true,
+      successMessage: tile.oneWay ? 'Mão única alterada.' : 'Mão única aplicada.',
+    };
   }
 
   if (tool === 'remove') {
