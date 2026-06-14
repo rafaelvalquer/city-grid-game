@@ -1,4 +1,4 @@
-import { Banknote, Car, Clock3, Gauge, HeartPulse, TrendingUp, Users } from 'lucide-react';
+import { Banknote, BusFront, Car, Clock3, Gauge, HeartPulse, TrendingUp, Users } from 'lucide-react';
 import { useGameStore } from '../store/gameStore';
 
 const periodLabel: Record<string, string> = {
@@ -35,6 +35,7 @@ export function HudBar() {
         <div className="hud-item money"><Banknote size={16} /><span>$ {stats.money}</span></div>
         <div className="hud-item"><Users size={16} /><span>{stats.population}</span><small>pop</small></div>
         <div className="hud-item"><Car size={16} /><span>{stats.activeCars}</span><small>carros</small></div>
+        <div className="hud-item"><BusFront size={16} /><span>{stats.activeBuses}</span><small>{stats.waitingPassengers} fila</small></div>
       </div>
       <div className="hud-cluster">
         <div className={`hud-item signal ${levelClass(stats.satisfaction, 62, 35)}`}>

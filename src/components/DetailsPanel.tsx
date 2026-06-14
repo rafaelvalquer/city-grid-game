@@ -1,4 +1,4 @@
-import { BarChart3, Building2, Car, CircleDot, MapPin, Route, X } from 'lucide-react';
+import { BarChart3, Building2, BusFront, Car, CircleDot, MapPin, Route, X } from 'lucide-react';
 import { GameWorld } from '../game/engine/simulation';
 import { useGameStore } from '../store/gameStore';
 import { BUILDING_CONFIG, getBuildingLevelConfig } from '../game/config/buildingConfig';
@@ -111,6 +111,18 @@ export function DetailsPanel({ world, className = '', onClose }: { world: GameWo
         </div>
       )}
 
+      {selected.kind === 'busStop' && (
+        <div className="detail-card">
+          <h3><BusFront size={15} /> Ponto de ônibus</h3>
+          <p><span>Posição</span><strong>{selected.stop.x}, {selected.stop.y}</strong></p>
+          <p><span>Via de acesso</span><strong>{selected.stop.accessRoad.x}, {selected.stop.accessRoad.y}</strong></p>
+          <p><span>Passageiros esperando</span><strong>{countPassengers(selected.stop.waiting)}</strong></p>
+          <p><span>Embarques</span><strong>{selected.stop.totalBoarded}</strong></p>
+          <p><span>Desembarques</span><strong>{selected.stop.totalAlighted}</strong></p>
+          <p><span>Linha</span><strong className={world.transitLine.active ? 'good' : 'warn'}>{world.transitLine.active ? 'Ativa' : world.transitLine.reason ?? 'Inativa'}</strong></p>
+        </div>
+      )}
+
       {selected.kind === 'road' && (
         <div className="detail-card">
           <h3><Route size={15} /> {ROAD_CONFIG[selected.roadType].label}</h3>
@@ -142,11 +154,13 @@ export function DetailsPanel({ world, className = '', onClose }: { world: GameWo
 
       {selected.kind === 'car' && car && (
         <div className="detail-card">
-          <h3><Car size={15} /> Carro #{car.id}</h3>
+          <h3>{car.vehicleType === 'bus' ? <BusFront size={15} /> : <Car size={15} />} {car.vehicleType === 'bus' ? 'Ônibus' : 'Carro'} #{car.id}</h3>
           <p><span>Status</span><strong>{car.lifecyclePhase === 'driving' ? trafficStateLabel[car.trafficState] : lifecyclePhaseLabel[car.lifecyclePhase]}</strong></p>
+          {car.vehicleType === 'bus' && <p><span>Passageiros</span><strong>{countPassengers(car.passengers ?? [])}/{car.capacity ?? 0}</strong></p>}
+          {car.vehicleType === 'bus' && (car.dwellSeconds ?? 0) > 0 && <p><span>Parada</span><strong>{car.dwellSeconds?.toFixed(1)}s</strong></p>}
           {car.intersectionReason && <p><span>Motivo parada</span><strong>{intersectionReasonLabel[car.intersectionReason]}</strong></p>}
-          <p><span>Origem</span><strong>{world.getBuilding(car.originBuildingId)?.type ?? '-'}</strong></p>
-          <p><span>Destino</span><strong>{world.getBuilding(car.destinationBuildingId)?.type ?? '-'}</strong></p>
+          {car.vehicleType !== 'bus' && <p><span>Origem</span><strong>{world.getBuilding(car.originBuildingId)?.type ?? '-'}</strong></p>}
+          {car.vehicleType !== 'bus' && <p><span>Destino</span><strong>{world.getBuilding(car.destinationBuildingId)?.type ?? '-'}</strong></p>}
           <p><span>Tempo viagem</span><strong>{Math.round(car.travelTime)}s</strong></p>
           <p><span>Atraso</span><strong>{Math.round(car.delay)}s</strong></p>
           <p><span>Velocidade atual</span><strong>{car.currentSpeed.toFixed(1)} tiles/s</strong></p>
@@ -190,4 +204,8 @@ function getCarLaneDisplayTotal(world: GameWorld, x: number, y: number, laneCoun
   if (tile?.type === 'roundabout') return Math.max(1, Math.ceil(laneCount));
   if ((tile?.type === 'road' || tile?.type === 'avenue') && tile.oneWay) return Math.max(1, Math.ceil(laneCount));
   return Math.max(1, Math.ceil(laneCount / 2));
+}
+
+function countPassengers(groups: Array<{ count: number }>): number {
+  return groups.reduce((sum, group) => sum + group.count, 0);
 }

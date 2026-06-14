@@ -1,6 +1,7 @@
 import type { LucideIcon } from 'lucide-react';
-import { ArrowRight, Circle, CircleDot, Eye, Gauge, Route, TrafficCone, Trash2, Wrench } from 'lucide-react';
+import { ArrowRight, BusFront, Circle, CircleDot, Eye, Gauge, Route, TrafficCone, Trash2, Wrench } from 'lucide-react';
 import { ROAD_CONFIG } from '../game/config/roadConfig';
+import { TRANSIT_CONFIG } from '../game/config/transitConfig';
 import { TRAFFIC_LIGHT_BUILD_COST } from '../game/systems/trafficLights';
 import type { Tool } from '../types/game.types';
 
@@ -36,6 +37,7 @@ export const toolGroups: ToolGroup[] = [
     tools: [
       { id: 'trafficLight', label: 'Semáforo', cost: TRAFFIC_LIGHT_BUILD_COST, Icon: CircleDot },
       { id: 'oneWay', label: 'Mão única', Icon: ArrowRight },
+      { id: 'busStop', label: 'Ponto de ônibus', cost: TRANSIT_CONFIG.busStopCost, Icon: BusFront },
     ],
   },
   {

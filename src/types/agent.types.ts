@@ -1,13 +1,15 @@
-import type { Vec2 } from './city.types';
+import type { TransitPassengerGroup, Vec2 } from './city.types';
 
 export type CarStatus = 'moving' | 'stopped' | 'arrived' | 'no_route';
 export type TrafficState = 'moving' | 'queued' | 'intersection' | 'turning';
 export type CarLifecyclePhase = 'spawnExit' | 'driving' | 'destinationEntry';
 export type TravelDirection = 'north' | 'south' | 'east' | 'west';
 export type IntersectionReason = 'signal_red' | 'signal_yellow' | 'unsignalized_queue' | 'right_turn_free' | 'box_occupied' | 'exit_blocked' | 'roundabout_yield' | 'roundabout_gap';
+export type VehicleType = 'car' | 'bus';
 
 export type Car = {
   id: string;
+  vehicleType?: VehicleType;
   originBuildingId: string;
   destinationBuildingId: string;
   x: number;
@@ -56,4 +58,11 @@ export type Car = {
   lastRerouteReason?: string;
   signalTransitionGraceSeconds: number;
   signalTransitionKey?: string;
+  transitLineId?: string;
+  capacity?: number;
+  passengers?: TransitPassengerGroup[];
+  nextStopIndex?: number;
+  dwellSeconds?: number;
+  dwellStopId?: string;
+  lastTransitStopTileKey?: string;
 };

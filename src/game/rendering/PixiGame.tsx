@@ -4,6 +4,7 @@ import { GameWorld } from '../engine/simulation';
 import type { DayPeriod } from '../engine/timeSystem';
 import { GAME_CONFIG } from '../config/gameConfig';
 import { ROAD_CONFIG } from '../config/roadConfig';
+import { TRANSIT_CONFIG } from '../config/transitConfig';
 import { useGameStore, type HeatmapMode, type HoverPreview } from '../../store/gameStore';
 import { CanvasToolDock } from '../../components/CanvasToolDock';
 import { inBounds, isRoadType, keyOf } from '../city/grid';
@@ -325,6 +326,7 @@ function draw(
       if (tile.type === 'avenue') drawRoad(graphics, world.grid, x, y, ts, 'avenue');
       if (tile.type === 'roundabout') drawRoad(graphics, world.grid, x, y, ts, 'roundabout');
       if (tile.type === 'roundaboutCenter') drawRoundaboutIsland(graphics, world.grid, x, y, ts);
+      if (tile.type === 'busStop') drawBusStop(graphics, world, x, y, ts, timeSeconds, atmosphere);
     }
   }
 
@@ -364,6 +366,10 @@ function draw(
   if (world.selected.kind === 'tile') drawSelection(graphics, world.selected.x, world.selected.y, ts);
   if (world.selected.kind === 'road') drawSelection(graphics, world.selected.x, world.selected.y, ts);
   if (world.selected.kind === 'building') drawSelection(graphics, world.selected.building.x, world.selected.building.y, ts);
+  if (world.selected.kind === 'busStop') {
+    drawBusStopCoverage(graphics, world.selected.stop.x, world.selected.stop.y, ts, 0.09, 0.4);
+    drawSelection(graphics, world.selected.stop.x, world.selected.stop.y, ts);
+  }
   if (world.selected.kind === 'car') {
     const car = world.getCar(world.selected.carId);
     if (car) {
@@ -451,6 +457,81 @@ function drawBaseTile(graphics: Graphics, tile: Tile, x: number, y: number, ts: 
     const inset = 5 + (hash2(x, y, 5) % 2);
     graphics.roundRect(x * ts + inset, y * ts + inset, ts - inset * 2, ts - inset * 2, 6).stroke({ width: 1, color: MAP_COLORS.lotStroke, alpha: 0.18 + (tone % 3) * 0.035 });
   }
+}
+
+function drawBusStop(graphics: Graphics, world: GameWorld, x: number, y: number, ts: number, timeSeconds: number, atmosphere: Atmosphere): void {
+  const stop = world.transitStops.find((candidate) => candidate.x === x && candidate.y === y);
+  const px = x * ts;
+  const py = y * ts;
+  const pulseAlpha = stop ? pulse(timeSeconds, 1.6, idPhase(stop.id)) * stop.arrivalPulse : 0;
+  const access = stop?.accessRoad;
+  const dx = access ? Math.sign(access.x - x) : 0;
+  const dy = access ? Math.sign(access.y - y) : 1;
+  const horizontalAccess = dx !== 0;
+  const platformX = px + (dx > 0 ? ts - 9 : dx < 0 ? 5 : 8);
+  const platformY = py + (dy > 0 ? ts - 9 : dy < 0 ? 5 : 8);
+
+  graphics.roundRect(px + 5, py + 6, ts - 10, ts - 12, 8)
+    .fill({ color: 0xf1fbf8, alpha: 0.92 })
+    .stroke({ color: 0x1d5f72, width: 1.2, alpha: 0.5 });
+  if (horizontalAccess) {
+    graphics.roundRect(platformX, py + 10, 4, ts - 18, 2).fill({ color: 0x24a0b7, alpha: 0.65 });
+  } else {
+    graphics.roundRect(px + 9, platformY, ts - 18, 4, 2).fill({ color: 0x24a0b7, alpha: 0.65 });
+  }
+  graphics.roundRect(px + 7, py + 7, ts - 14, 9, 4)
+    .fill({ color: 0x24a0b7, alpha: 0.98 })
+    .stroke({ color: MAP_COLORS.roadEdge, width: 1, alpha: 0.38 });
+  graphics.rect(px + 11, py + 16, 3, 14).fill({ color: MAP_COLORS.roadEdge, alpha: 0.48 });
+  graphics.rect(px + ts - 16, py + 16, 3, 14).fill({ color: MAP_COLORS.roadEdge, alpha: 0.48 });
+  graphics.roundRect(px + 13, py + 25, ts - 24, 4, 2).fill({ color: MAP_COLORS.bench, alpha: 0.85 });
+  graphics.rect(px + 15, py + 29, 2, 4).fill({ color: MAP_COLORS.bench, alpha: 0.7 });
+  graphics.rect(px + ts - 17, py + 29, 2, 4).fill({ color: MAP_COLORS.bench, alpha: 0.7 });
+
+  const signX = px + ts - 7;
+  const signY = py + 8;
+  graphics.rect(signX - 1, signY + 4, 2, 16).fill({ color: MAP_COLORS.roadEdge, alpha: 0.55 });
+  graphics.circle(signX, signY, 6 + pulseAlpha * 2.2).fill({ color: 0x24a0b7, alpha: 0.18 + pulseAlpha * 0.16 });
+  graphics.circle(signX, signY, 5).fill({ color: 0x24a0b7, alpha: 0.98 }).stroke({ color: MAP_COLORS.laneSoft, width: 1, alpha: 0.75 });
+  drawTinyBusIcon(graphics, signX, signY, 0.78, MAP_COLORS.laneSoft, 0.96);
+
+  const waiting = stop ? passengerGroupCount(stop.waiting) : 0;
+  const visiblePeople = Math.min(8, waiting);
+  for (let index = 0; index < visiblePeople; index += 1) {
+    const row = Math.floor(index / 4);
+    const col = index % 4;
+    const phase = ((hash2(x, y, 120 + index) % 997) / 997);
+    const bob = atmosphere.motion > 0 ? Math.sin((timeSeconds + phase) * 4.2) * 0.7 : 0;
+    const personX = px + 7 + col * 4.7;
+    const personY = py + ts - 5 - row * 4.8 + bob;
+    const color = index % 2 === 0 ? MAP_COLORS.person : MAP_COLORS.personAlt;
+    graphics.circle(personX, personY - 2.5, 1.4).fill({ color, alpha: atmosphere.pedestrianAlpha });
+    graphics.rect(personX - 0.9, personY - 1.2, 1.8, 3.6).fill({ color, alpha: atmosphere.pedestrianAlpha });
+  }
+
+  if (waiting > visiblePeople) {
+    graphics.roundRect(px + ts - 18, py + ts - 12, 12, 6, 3).fill({ color: MAP_COLORS.roadEdge, alpha: 0.58 });
+    graphics.circle(px + ts - 14, py + ts - 9, 1.2).fill({ color: MAP_COLORS.laneSoft, alpha: 0.9 });
+    graphics.circle(px + ts - 10, py + ts - 9, 1.2).fill({ color: MAP_COLORS.laneSoft, alpha: 0.9 });
+  }
+}
+
+function drawBusStopCoverage(graphics: Graphics, x: number, y: number, ts: number, fillAlpha = 0.08, strokeAlpha = 0.34): void {
+  const cx = x * ts + ts / 2;
+  const cy = y * ts + ts / 2;
+  const radius = TRANSIT_CONFIG.coverageRadius * ts + ts / 2;
+  graphics.circle(cx, cy, radius).fill({ color: 0x24a0b7, alpha: fillAlpha });
+  graphics.circle(cx, cy, radius).stroke({ color: 0x24a0b7, width: 2, alpha: strokeAlpha });
+  graphics.circle(cx, cy, ts * 0.55).stroke({ color: MAP_COLORS.laneSoft, width: 1, alpha: 0.28 });
+}
+
+function drawTinyBusIcon(graphics: Graphics, cx: number, cy: number, scale: number, color: number, alpha: number): void {
+  const w = 7 * scale;
+  const h = 4.6 * scale;
+  graphics.roundRect(cx - w / 2, cy - h / 2, w, h, 1.4 * scale).fill({ color, alpha });
+  graphics.rect(cx - w * 0.32, cy - h * 0.22, w * 0.64, h * 0.28).fill({ color: 0x24a0b7, alpha: 0.8 });
+  graphics.circle(cx - w * 0.28, cy + h * 0.38, 0.75 * scale).fill({ color: MAP_COLORS.roadEdge, alpha: 0.74 });
+  graphics.circle(cx + w * 0.28, cy + h * 0.38, 0.75 * scale).fill({ color: MAP_COLORS.roadEdge, alpha: 0.74 });
 }
 
 function drawLotDecoration(graphics: Graphics, x: number, y: number, ts: number): void {
@@ -897,20 +978,37 @@ function drawCar(graphics: Graphics, car: Car, world: GameWorld, ts: number, tim
   const pose = getCarRenderPose(car, world);
   const cx = pose.x * ts + ts / 2;
   const cy = pose.y * ts + ts / 2;
-  const length = 13;
-  const width = 7;
+  const isBus = car.vehicleType === 'bus';
+  const length = isBus ? 22 : 13;
+  const width = isBus ? 10 : 7;
+  const baseColor = isBus ? 0x24a0b7 : carDestinationColor(world, car);
   const color = car.trafficState === 'intersection'
-    ? blendCarStateColor(carDestinationColor(world, car), MAP_COLORS.carAltC)
+    ? blendCarStateColor(baseColor, MAP_COLORS.carAltC)
     : car.trafficState === 'queued'
-      ? blendCarStateColor(carDestinationColor(world, car), MAP_COLORS.carAltA)
-      : carDestinationColor(world, car);
+      ? blendCarStateColor(baseColor, MAP_COLORS.carAltA)
+      : baseColor;
   if (car.lifecyclePhase === 'driving' && (car.trafficState === 'queued' || car.trafficState === 'intersection')) {
     const halo = car.trafficState === 'queued' ? MAP_COLORS.carTail : MAP_COLORS.lane;
     graphics.circle(cx, cy, 7.5).fill({ color: halo, alpha: car.trafficState === 'queued' ? 0.16 : 0.2 });
   }
   drawCapsule(graphics, cx + 3, cy + 4, length, width, pose.angle, MAP_COLORS.shadow, 0.28 * pose.alpha);
   drawCapsule(graphics, cx, cy, length, width, pose.angle, color, pose.alpha, MAP_COLORS.roadEdge);
-  drawRotatedRect(graphics, cx + Math.cos(pose.angle) * 1.8, cy + Math.sin(pose.angle) * 1.8, 4.2, 3.2, pose.angle, MAP_COLORS.carWindow, 0.88 * pose.alpha);
+  if (isBus) {
+    for (let index = -2; index <= 2; index += 1) {
+      drawRotatedRect(
+        graphics,
+        cx + Math.cos(pose.angle) * (index * 3.2) - Math.sin(pose.angle) * 1.1,
+        cy + Math.sin(pose.angle) * (index * 3.2) + Math.cos(pose.angle) * 1.1,
+        2.5,
+        2.4,
+        pose.angle,
+        MAP_COLORS.shopGlass,
+        0.86 * pose.alpha,
+      );
+    }
+  } else {
+    drawRotatedRect(graphics, cx + Math.cos(pose.angle) * 1.8, cy + Math.sin(pose.angle) * 1.8, 4.2, 3.2, pose.angle, MAP_COLORS.carWindow, 0.88 * pose.alpha);
+  }
   drawCarLights(graphics, car, cx, cy, length, width, pose.angle, timeSeconds, pose.alpha);
 }
 
@@ -1292,6 +1390,11 @@ function getLineBuildPreview(world: GameWorld, tiles: Vec2[], tool: 'road' | 'av
     }
 
     const tile = world.grid[pos.y][pos.x];
+    if (tile.type === 'busStop') {
+      invalidTiles.push(pos);
+      reason ??= 'A linha passa por um ponto de ônibus.';
+      continue;
+    }
     if (tile.type === 'building') {
       invalidTiles.push(pos);
       reason ??= 'A linha passa por um prédio.';
@@ -1353,6 +1456,10 @@ function drawConstructionPreview(graphics: Graphics, world: GameWorld, preview: 
   const py = y * ts;
   const previewPulse = pulse(timeSeconds, valid ? 1.2 : 1.75, x * 0.19 + y * 0.13);
 
+  if (tool === 'busStop' && valid) {
+    drawBusStopCoverage(graphics, x, y, ts, 0.075 + previewPulse * 0.018, 0.42 + previewPulse * 0.18);
+  }
+
   if (tool === 'roundabout') {
     const areaPx = (x - 1) * ts;
     const areaPy = (y - 1) * ts;
@@ -1381,6 +1488,16 @@ function drawConstructionPreview(graphics: Graphics, world: GameWorld, preview: 
     graphics.circle(px + ts / 2, py + ts / 2, 8.5 + previewPulse * 1.6).fill({ color, alpha: 0.1 + previewPulse * 0.1 });
     graphics.circle(px + ts / 2, py + ts / 2, 7).fill({ color: valid ? SIGNAL_GREEN : SIGNAL_RED, alpha: 0.68 + previewPulse * 0.18 });
     graphics.circle(px + ts / 2, py + ts / 2, 3).fill(SIGNAL_OFF);
+  } else if (tool === 'busStop') {
+    graphics.roundRect(px + 6, py + 7, ts - 12, ts - 14, 8).fill({ color: valid ? 0xe8f7f4 : MAP_COLORS.previewInvalid, alpha: valid ? 0.62 : 0.22 });
+    graphics.roundRect(px + 8, py + 8, ts - 16, 8, 4).fill({ color: valid ? 0x24a0b7 : MAP_COLORS.previewInvalid, alpha: valid ? 0.86 : 0.42 });
+    graphics.roundRect(px + 13, py + 25, ts - 24, 4, 2).fill({ color: valid ? MAP_COLORS.bench : MAP_COLORS.previewInvalid, alpha: valid ? 0.72 : 0.34 });
+    graphics.circle(px + ts - 8, py + 8, 6).fill({ color: valid ? 0x24a0b7 : MAP_COLORS.previewInvalid, alpha: 0.84 });
+    drawTinyBusIcon(graphics, px + ts - 8, py + 8, 0.8, MAP_COLORS.laneSoft, valid ? 0.95 : 0.55);
+    const access = valid ? busStopPreviewAccess(world.grid, x, y) : undefined;
+    if (access) {
+      graphics.roundRect(access.x * ts + 7, access.y * ts + 7, ts - 14, ts - 14, 6).stroke({ color: 0x24a0b7, width: 3, alpha: 0.55 });
+    }
   } else if (tool === 'remove') {
     graphics.moveTo(px + 10, py + 10).lineTo(px + ts - 10, py + ts - 10).stroke({ color, width: 3, alpha: 0.85 });
     graphics.moveTo(px + ts - 10, py + 10).lineTo(px + 10, py + ts - 10).stroke({ color, width: 3, alpha: 0.85 });
@@ -1554,6 +1671,7 @@ function getActionPreview(world: GameWorld, x: number, y: number, tool: Tool, mo
 
   if (tool === 'road' || tool === 'avenue') {
     const cost = ROAD_CONFIG[tool].buildCost;
+    if (tile.type === 'busStop') return { x, y, label: 'Ponto ocupa o tile', cost, valid: false, reason: 'Remova o ponto de ônibus antes de construir uma via.', successMessage: '' };
     if (tile.type === 'building') return { x, y, label: 'Prédio ocupa o tile', cost, valid: false, reason: 'Não é possível construir sobre prédio.', successMessage: '' };
     if (isRoundaboutTile(tile) || isRoundaboutCenter(tile)) return { x, y, label: 'Rotatória ocupa o tile', cost, valid: false, reason: 'Remova a rotatória antes de construir outra via.', successMessage: '' };
     if (tile.type === tool) return { x, y, label: 'Via já construída', cost, valid: false, reason: 'Essa via já existe aqui.', successMessage: '' };
@@ -1580,6 +1698,15 @@ function getActionPreview(world: GameWorld, x: number, y: number, tool: Tool, mo
     return { x, y, label: 'Instalar semáforo', cost, valid: true, successMessage: `Semáforo instalado por $ ${cost}.` };
   }
 
+  if (tool === 'busStop') {
+    const cost = TRANSIT_CONFIG.busStopCost;
+    const access = busStopPreviewAccess(world.grid, x, y);
+    if (tile.type !== 'empty') return { x, y, label: 'Ponto indisponível', cost, valid: false, reason: 'Use um lote vazio ao lado de uma rua ou avenida.', successMessage: '' };
+    if (!access) return { x, y, label: 'Sem via de acesso', cost, valid: false, reason: 'O ponto precisa ficar em um lote vazio adjacente a rua ou avenida.', successMessage: '' };
+    if (money < cost) return { x, y, label: 'Dinheiro insuficiente', cost, valid: false, reason: `Faltam $ ${cost - money} para construir o ponto.`, successMessage: '' };
+    return { x, y, label: 'Construir ponto de ônibus', cost, valid: true, successMessage: `Ponto de ônibus construído por $ ${cost}.` };
+  }
+
   if (tool === 'oneWay') {
     if (tile.type !== 'road' && tile.type !== 'avenue') {
       return { x, y, label: 'Mão única indisponível', valid: false, reason: 'Use apenas em ruas e avenidas.', successMessage: '' };
@@ -1595,6 +1722,11 @@ function getActionPreview(world: GameWorld, x: number, y: number, tool: Tool, mo
 
   if (tool === 'remove') {
     const roundaboutCenter = findRoundaboutCenterForTile(world.grid, { x, y });
+    if (tile.type === 'busStop') {
+      const cost = Math.ceil(TRANSIT_CONFIG.busStopCost * TRANSIT_CONFIG.busStopRemoveCostRatio);
+      if (money < cost) return { x, y, label: 'Dinheiro insuficiente', cost, valid: false, reason: `Faltam $ ${cost - money} para remover.`, successMessage: '' };
+      return { x, y, label: 'Remover ponto de ônibus', cost, valid: true, successMessage: `Ponto de ônibus removido por $ ${cost}.` };
+    }
     if (!isRoadType(tile.type) && !roundaboutCenter) return { x, y, label: 'Nada para remover', valid: false, reason: 'Só é possível remover ruas e avenidas.', successMessage: '' };
     const roadType = roundaboutCenter ? 'roundabout' : tile.type as RoadType;
     const cost = ROAD_CONFIG[roadType].removeCost;
@@ -1604,6 +1736,29 @@ function getActionPreview(world: GameWorld, x: number, y: number, tool: Tool, mo
   }
 
   return { x, y, label: 'Ação indisponível', valid: false, reason: 'Ação indisponível.', successMessage: '' };
+}
+
+function busStopPreviewAccess(grid: Tile[][], x: number, y: number): Vec2 | undefined {
+  const neighbors = [
+    { x: x + 1, y },
+    { x: x - 1, y },
+    { x, y: y + 1 },
+    { x, y: y - 1 },
+  ].filter((pos) => inBounds(pos.x, pos.y));
+  return neighbors
+    .filter((pos) => {
+      const tile = grid[pos.y]?.[pos.x];
+      return tile?.type === 'road' || tile?.type === 'avenue';
+    })
+    .sort((a, b) => {
+      const aScore = grid[a.y][a.x].type === 'avenue' ? 0 : 1;
+      const bScore = grid[b.y][b.x].type === 'avenue' ? 0 : 1;
+      return aScore - bScore;
+    })[0];
+}
+
+function passengerGroupCount(groups: Array<{ count: number }>): number {
+  return groups.reduce((sum, group) => sum + group.count, 0);
 }
 
 function safelyDestroyPixiApp(app: Application): void {

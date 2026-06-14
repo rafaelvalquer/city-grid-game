@@ -1,10 +1,11 @@
 import { nanoid } from 'nanoid';
-import type { Building, BuildingLevel, CityStats, RoadDirection, RoadType, SelectedEntity, Tile, TrafficCell, TrafficLightAxis, TrafficLightState, Vec2 } from '../../types/city.types';
+import type { Building, BuildingLevel, CityStats, RoadDirection, RoadType, SelectedEntity, Tile, TrafficCell, TrafficLightAxis, TrafficLightState, TransitLine, TransitPassengerGroup, TransitStop, Vec2 } from '../../types/city.types';
 import type { Car } from '../../types/agent.types';
 import type { Tool } from '../../types/game.types';
 import { GAME_CONFIG } from '../config/gameConfig';
 import type { GameSetupOptions } from '../config/gameSetup';
 import { ROAD_CONFIG } from '../config/roadConfig';
+import { TRANSIT_CONFIG } from '../config/transitConfig';
 import { createGrid, inBounds, isRoadType, keyOf } from '../city/grid';
 import { CityGenerator } from '../city/cityGenerator';
 import { applyBuildingLevel, updateBuildingConnection } from '../city/buildings';
@@ -44,7 +45,6 @@ const IMMOBILE_REROUTE_SECONDS = 8;
 const IMMOBILE_ESCAPE_SECONDS = 20;
 const IMMOBILE_REMOVE_SECONDS = 45;
 const REPEATED_REROUTE_REMOVE_COUNT = 30;
-
 type RerouteOptions = {
   force?: boolean;
   reason?: string;
@@ -55,6 +55,8 @@ export class GameWorld {
   grid: Tile[][] = createGrid();
   buildings: Building[] = [];
   cars: Car[] = [];
+  transitStops: TransitStop[] = [];
+  transitLine: TransitLine = { id: 'bus-loop', stopIds: [], route: [], active: false, reason: 'Adicione ao menos dois pontos de ônibus.' };
   traffic = new Map<string, TrafficCell>();
   trafficLights = new Map<string, TrafficLightState>();
   selected: SelectedEntity = { kind: 'none' };
@@ -62,6 +64,8 @@ export class GameWorld {
   satisfaction = 100;
   completedTrips = 0;
   failedTrips = 0;
+  publicTripsCompleted = 0;
+  carTripsAvoided = 0;
   averageTravelTime = 0;
   cityLevel = 1;
   time = new TimeSystem();
@@ -76,6 +80,7 @@ export class GameWorld {
   private failedTripPressure = 0;
   private lastProcessedDay = 1;
   private nextPriorityToken = 1;
+  private nextTransitStopOrder = 1;
   private trafficLightDebugTimers = new Map<string, number>();
 
   constructor(options: Partial<GameSetupOptions> = {}) {
@@ -101,13 +106,17 @@ export class GameWorld {
     return {
       money: Math.floor(this.money),
       population: this.buildings.reduce((sum, b) => sum + b.population, 0),
-      activeCars: this.cars.length,
+      activeCars: this.cars.filter((car) => car.vehicleType !== 'bus').length,
       satisfaction: Math.round(this.satisfaction),
       averageCongestion: Math.round(Math.min(300, averageCongestion * 100)),
       averageTravelTime: Math.round(this.averageTravelTime),
       disconnectedBuildings,
       completedTrips: this.completedTrips,
       failedTrips: this.failedTrips,
+      publicTripsCompleted: this.publicTripsCompleted,
+      carTripsAvoided: this.carTripsAvoided,
+      waitingPassengers: this.getWaitingPassengerCount(),
+      activeBuses: this.getTransitBuses().length,
       cityLevel: this.cityLevel,
       day: this.time.getDay(),
       timeLabel: this.time.getLabel(),
@@ -139,6 +148,7 @@ export class GameWorld {
     this.tripTimer += dt;
     this.economyTimer += dt;
 
+    this.updateTransitStops(dt);
     this.updateConnections();
     this.refreshSelectedBuilding();
     this.updateTrafficMap();
@@ -186,6 +196,7 @@ export class GameWorld {
       this.rerouteCarsAffectedBy(getRoundaboutArea({ x, y }));
       this.money -= ROAD_CONFIG.roundabout.buildCost;
       this.updateConnections();
+      this.rebuildTransitLine();
       this.inspectAt(x, y - 1);
       this.emit();
       return true;
@@ -209,8 +220,35 @@ export class GameWorld {
       return true;
     }
 
+    if (tool === 'busStop') {
+      const accessRoad = this.findBusStopAccessRoad({ x, y });
+      if (tile.type !== 'empty') return false;
+      if (!accessRoad) return false;
+      if (this.money < TRANSIT_CONFIG.busStopCost) return false;
+
+      const stop: TransitStop = {
+        id: nanoid(8),
+        x,
+        y,
+        accessRoad,
+        waiting: [],
+        totalBoarded: 0,
+        totalAlighted: 0,
+        arrivalPulse: 0,
+        createdOrder: this.nextTransitStopOrder,
+      };
+      this.nextTransitStopOrder += 1;
+      this.transitStops.push(stop);
+      this.grid[y][x] = { x, y, type: 'busStop', buildingId: stop.id };
+      this.money -= TRANSIT_CONFIG.busStopCost;
+      this.rebuildTransitLine();
+      this.inspectAt(x, y);
+      this.emit();
+      return true;
+    }
+
     if (tool === 'road' || tool === 'avenue') {
-      if (tile.type === 'building') return false;
+      if (tile.type === 'building' || tile.type === 'busStop') return false;
       if (isRoundaboutTile(tile) || isRoundaboutCenter(tile)) return false;
       const cost = ROAD_CONFIG[tool].buildCost;
       if (this.money < cost) return false;
@@ -219,11 +257,19 @@ export class GameWorld {
       this.grid[y][x] = { x, y, type: tool, oneWay };
       this.money -= cost;
       this.updateConnections();
+      this.rebuildTransitLine();
       this.emit();
       return true;
     }
 
     if (tool === 'remove') {
+      if (tile.type === 'busStop') {
+        if (this.money < TRANSIT_CONFIG.busStopCost * TRANSIT_CONFIG.busStopRemoveCostRatio) return false;
+        this.removeTransitStopAt(x, y);
+        this.money -= Math.ceil(TRANSIT_CONFIG.busStopCost * TRANSIT_CONFIG.busStopRemoveCostRatio);
+        this.emit();
+        return true;
+      }
       if (!isRoadType(tile.type) && !isRoundaboutCenter(tile)) return false;
       const center = findRoundaboutCenterForTile(this.grid, { x, y });
       const roadType = center ? 'roundabout' : tile.type as RoadType;
@@ -241,6 +287,7 @@ export class GameWorld {
       }
       this.money -= cost;
       this.updateConnections();
+      this.rebuildTransitLine();
       this.emit();
       return true;
     }
@@ -256,6 +303,7 @@ export class GameWorld {
     for (const pos of uniqueTiles) {
       if (!inBounds(pos.x, pos.y)) return { success: false, built: 0, cost: 0, reason: 'A linha sai do mapa.' };
       const tile = this.grid[pos.y][pos.x];
+      if (tile.type === 'busStop') return { success: false, built: 0, cost: 0, reason: 'A linha passa por um ponto de ônibus.' };
       if (tile.type === 'building') return { success: false, built: 0, cost: 0, reason: 'A linha passa por um prédio.' };
       if (isRoundaboutTile(tile) || isRoundaboutCenter(tile)) return { success: false, built: 0, cost: 0, reason: 'A linha passa por uma rotatória.' };
       if (tile.type !== roadType) built += 1;
@@ -281,6 +329,7 @@ export class GameWorld {
     this.rerouteCarsAffectedBy(uniqueTiles);
     this.money -= cost;
     this.updateConnections();
+    this.rebuildTransitLine();
     this.emit();
     return { success: true, built, cost };
   }
@@ -305,6 +354,7 @@ export class GameWorld {
     }
 
     if (changed > 0) this.rerouteCarsAfterRoadRuleChange(uniqueTiles);
+    if (changed > 0) this.rebuildTransitLine();
     this.refreshSelectedRoad();
     this.emit();
     return { success: true, changed };
@@ -320,6 +370,7 @@ export class GameWorld {
     const nextDirection = nextOneWayDirection(tile.oneWay);
     this.grid[y][x] = { ...tile, oneWay: nextDirection };
     this.rerouteCarsAfterRoadRuleChange([{ x, y }]);
+    this.rebuildTransitLine();
     this.refreshSelectedRoad();
     this.emit();
     return nextDirection
@@ -333,6 +384,7 @@ export class GameWorld {
     if ((tile.type !== 'road' && tile.type !== 'avenue') || !tile.oneWay) return false;
     this.grid[y][x] = { ...tile, oneWay: undefined };
     this.rerouteCarsAfterRoadRuleChange([{ x, y }]);
+    this.rebuildTransitLine();
     this.refreshSelectedRoad();
     this.emit();
     return true;
@@ -344,6 +396,9 @@ export class GameWorld {
     if (tile.type === 'building' && tile.buildingId) {
       const building = this.buildings.find((b) => b.id === tile.buildingId);
       if (building) this.selected = { kind: 'building', building };
+    } else if (tile.type === 'busStop' && tile.buildingId) {
+      const stop = this.getTransitStop(tile.buildingId);
+      this.selected = stop ? { kind: 'busStop', stop } : { kind: 'tile', x, y, type: tile.type };
     } else if (isRoadType(tile.type)) {
       const t = this.traffic.get(keyOf(x, y)) ?? { x, y, cars: 0, capacity: ROAD_CONFIG[tile.type as RoadType].capacity, congestion: 0 };
       this.selected = { kind: 'road', x, y, roadType: tile.type as RoadType, traffic: t, trafficLight: this.trafficLights.get(getTrafficLightKey(x, y)), oneWay: tile.oneWay };
@@ -365,6 +420,309 @@ export class GameWorld {
 
   getBuilding(id: string): Building | undefined {
     return this.buildings.find((b) => b.id === id);
+  }
+
+  getTransitStop(id: string): TransitStop | undefined {
+    return this.transitStops.find((stop) => stop.id === id);
+  }
+
+  getTransitBuses(): Car[] {
+    return this.cars.filter((car) => car.vehicleType === 'bus');
+  }
+
+  private getWaitingPassengerCount(): number {
+    return this.transitStops.reduce((sum, stop) => sum + passengerGroupCount(stop.waiting), 0);
+  }
+
+  private findBusStopAccessRoad(pos: Vec2): Vec2 | undefined {
+    const neighbors = [
+      { x: pos.x + 1, y: pos.y },
+      { x: pos.x - 1, y: pos.y },
+      { x: pos.x, y: pos.y + 1 },
+      { x: pos.x, y: pos.y - 1 },
+    ].filter((next) => inBounds(next.x, next.y));
+
+    const roads = neighbors.filter((next) => {
+      const tile = this.grid[next.y]?.[next.x];
+      return tile?.type === 'road' || tile?.type === 'avenue';
+    });
+    return roads.sort((a, b) => {
+      const aScore = this.grid[a.y][a.x].type === 'avenue' ? 0 : 1;
+      const bScore = this.grid[b.y][b.x].type === 'avenue' ? 0 : 1;
+      return aScore - bScore;
+    })[0];
+  }
+
+  private removeTransitStopAt(x: number, y: number): void {
+    const tile = this.grid[y]?.[x];
+    const stopId = tile?.type === 'busStop' ? tile.buildingId : undefined;
+    this.transitStops = this.transitStops.filter((stop) => stop.id !== stopId);
+    this.grid[y][x] = { x, y, type: 'empty' };
+    this.rebuildTransitLine();
+    this.selected = { kind: 'tile', x, y, type: 'empty' };
+  }
+
+  private rebuildTransitLine(): void {
+    this.cars = this.cars.filter((car) => car.vehicleType !== 'bus');
+
+    const orderedStops = this.orderTransitStops();
+    if (orderedStops.length < 2) {
+      this.transitLine = {
+        id: 'bus-loop',
+        stopIds: orderedStops.map((stop) => stop.id),
+        route: [],
+        active: false,
+        reason: 'Adicione ao menos dois pontos de ônibus.',
+      };
+      return;
+    }
+
+    const route: Vec2[] = [];
+    for (let index = 0; index < orderedStops.length; index += 1) {
+      const from = orderedStops[index].accessRoad;
+      const to = orderedStops[(index + 1) % orderedStops.length].accessRoad;
+      const segment = keyOf(from.x, from.y) === keyOf(to.x, to.y)
+        ? [from]
+        : findFastestPath(this.grid, this.traffic, from, to);
+      if (segment.length < 2 && keyOf(from.x, from.y) !== keyOf(to.x, to.y)) {
+        this.transitLine = {
+          id: 'bus-loop',
+          stopIds: orderedStops.map((stop) => stop.id),
+          route,
+          active: false,
+          reason: 'Linha de ônibus interrompida: conecte as vias entre os pontos.',
+        };
+        return;
+      }
+      if (!route.length) route.push(...segment);
+      else route.push(...segment.slice(1));
+    }
+
+    this.transitLine = {
+      id: 'bus-loop',
+      stopIds: orderedStops.map((stop) => stop.id),
+      route,
+      active: route.length >= 2,
+    };
+    this.spawnTransitBuses();
+  }
+
+  private orderTransitStops(): TransitStop[] {
+    const remaining = [...this.transitStops].sort((a, b) => a.createdOrder - b.createdOrder);
+    const first = remaining.shift();
+    if (!first) return [];
+
+    const ordered = [first];
+    while (remaining.length) {
+      const current = ordered[ordered.length - 1];
+      let bestIndex = 0;
+      let bestDistance = Infinity;
+      for (let index = 0; index < remaining.length; index += 1) {
+        const candidate = remaining[index];
+        const distance = manhattan(current.accessRoad, candidate.accessRoad);
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          bestIndex = index;
+        }
+      }
+      ordered.push(remaining.splice(bestIndex, 1)[0]);
+    }
+    return ordered;
+  }
+
+  private spawnTransitBuses(): void {
+    if (!this.transitLine.active || this.transitLine.route.length < 2) return;
+    const busCount = this.transitLine.stopIds.length >= 5 ? 2 : 1;
+    for (let index = 0; index < busCount; index += 1) {
+      const stopIndex = Math.floor((index / busCount) * this.transitLine.stopIds.length);
+      const bus = this.createTransitBus(stopIndex);
+      if (bus) this.cars.push(bus);
+    }
+  }
+
+  private createTransitBus(stopIndex: number): Car | undefined {
+    const stopId = this.transitLine.stopIds[stopIndex];
+    const stop = stopId ? this.getTransitStop(stopId) : undefined;
+    if (!stop || this.transitLine.route.length < 2) return undefined;
+
+    const routeIndex = Math.max(0, this.transitLine.route.findIndex((pos) => samePos(pos, stop.accessRoad)));
+    const next = this.transitLine.route[routeIndex + 1] ?? this.transitLine.route[0];
+    const current = this.transitLine.route[routeIndex];
+    if (!current || !next || samePos(current, next)) return undefined;
+
+    const direction = getDirection(current, next);
+    const roadType = this.getRoadTypeAt(current);
+    const busId = `bus-${nanoid(6)}`;
+    const lane = getLaneOffset(direction, roadType, busId, this.getOneWayAt(current, direction));
+    return {
+      id: busId,
+      vehicleType: 'bus',
+      originBuildingId: '',
+      destinationBuildingId: '',
+      x: current.x + lane.offset.x,
+      y: current.y + lane.offset.y,
+      currentTileX: current.x,
+      currentTileY: current.y,
+      route: this.transitLine.route,
+      routeIndex,
+      progressToNext: 0,
+      baseSpeed: TRANSIT_CONFIG.busBaseSpeed,
+      currentSpeed: 0,
+      targetSpeed: 0,
+      acceleration: 1.25,
+      braking: 3.2,
+      desiredSpeed: TRANSIT_CONFIG.busBaseSpeed * ROAD_CONFIG[roadType].speed,
+      laneOffset: lane.offset,
+      laneIndex: lane.laneIndex,
+      laneCount: lane.laneCount,
+      laneSide: lane.laneSide,
+      waitTimer: 0,
+      intersectionWaitSeconds: 0,
+      priorityToken: 0,
+      gridlockEscapeSeconds: 0,
+      insideIntersectionSeconds: 0,
+      turnSlowdown: 0,
+      trafficState: 'queued',
+      lifecyclePhase: 'driving',
+      lifecycleProgress: 1,
+      direction,
+      status: 'stopped',
+      travelTime: 0,
+      estimatedTime: this.transitLine.route.length / TRANSIT_CONFIG.busBaseSpeed,
+      delay: 0,
+      stuckSeconds: 0,
+      immobileSeconds: 0,
+      rerouteCooldownSeconds: 0,
+      rerouteCount: 0,
+      repeatedRerouteCount: 0,
+      lastRouteSignature: routeSignature(this.transitLine.route),
+      signalTransitionGraceSeconds: 0,
+      transitLineId: this.transitLine.id,
+      capacity: TRANSIT_CONFIG.busCapacity,
+      passengers: [],
+      nextStopIndex: stopIndex,
+      dwellSeconds: 0,
+    };
+  }
+
+  private tryCreateTransitTrip(origin: Building, destination: Building): boolean {
+    if (!this.transitLine.active) return false;
+    if (Math.random() > TRANSIT_CONFIG.passengerConversionChance) return false;
+    const originStop = this.findNearbyTransitStop(origin);
+    const destinationStop = this.findNearbyTransitStop(destination);
+    if (!originStop || !destinationStop || originStop.id === destinationStop.id) return false;
+    if (!this.transitLine.stopIds.includes(originStop.id) || !this.transitLine.stopIds.includes(destinationStop.id)) return false;
+    if (passengerGroupCount(originStop.waiting) > TRANSIT_CONFIG.busCapacity * 3) return false;
+
+    addPassengerGroup(originStop.waiting, destinationStop.id, 1);
+    originStop.arrivalPulse = 1;
+    this.carTripsAvoided += 1;
+    return true;
+  }
+
+  private findNearbyTransitStop(building: Building): TransitStop | undefined {
+    return this.transitStops
+      .filter((stop) => manhattan(stop, building) <= TRANSIT_CONFIG.coverageRadius)
+      .sort((a, b) => manhattan(a, building) - manhattan(b, building))[0];
+  }
+
+  private updateTransitStops(dt: number): void {
+    for (const stop of this.transitStops) {
+      stop.arrivalPulse = Math.max(0, stop.arrivalPulse - dt * 1.8);
+    }
+  }
+
+  private updateTransitBusDwell(bus: Car, dt: number): boolean {
+    if (bus.vehicleType !== 'bus') return false;
+
+    if ((bus.dwellSeconds ?? 0) > 0) {
+      bus.dwellSeconds = Math.max(0, (bus.dwellSeconds ?? 0) - dt);
+      bus.currentSpeed = 0;
+      bus.targetSpeed = 0;
+      bus.status = 'stopped';
+      bus.trafficState = 'queued';
+      bus.stuckSeconds = 0;
+      bus.immobileSeconds = 0;
+      if (bus.dwellSeconds === 0) {
+        bus.dwellStopId = undefined;
+        bus.trafficState = 'moving';
+      }
+      return true;
+    }
+
+    return this.tryStopTransitBusAtCurrentTile(bus);
+  }
+
+  private tryStopTransitBusAtCurrentTile(bus: Car): boolean {
+    if (bus.vehicleType !== 'bus') return false;
+    if ((bus.dwellSeconds ?? 0) > 0) return true;
+
+    const stop = this.getNextTransitStopForBus(bus);
+    if (!stop) return false;
+    const currentTileKey = keyOf(bus.currentTileX, bus.currentTileY);
+    if (bus.lastTransitStopTileKey === currentTileKey) return false;
+    if (!samePos({ x: bus.currentTileX, y: bus.currentTileY }, stop.accessRoad)) return false;
+
+    this.serviceTransitStop(bus, stop);
+    bus.dwellSeconds = TRANSIT_CONFIG.busDwellSeconds;
+    bus.dwellStopId = stop.id;
+    bus.lastTransitStopTileKey = currentTileKey;
+    bus.progressToNext = 0;
+    bus.x = bus.currentTileX + bus.laneOffset.x;
+    bus.y = bus.currentTileY + bus.laneOffset.y;
+    bus.currentSpeed = 0;
+    bus.targetSpeed = 0;
+    bus.status = 'stopped';
+    bus.trafficState = 'queued';
+    bus.lastRerouteReason = 'Parada atendida: embarque/desembarque';
+    return true;
+  }
+
+  private getNextTransitStopForBus(bus: Car): TransitStop | undefined {
+    if (!this.transitLine.active || !this.transitLine.stopIds.length) return undefined;
+    const index = Math.max(0, Math.min(this.transitLine.stopIds.length - 1, bus.nextStopIndex ?? 0));
+    return this.getTransitStop(this.transitLine.stopIds[index]);
+  }
+
+  private serviceTransitStop(bus: Car, stop: TransitStop): void {
+    const passengers = bus.passengers ?? [];
+    const remainingPassengers: TransitPassengerGroup[] = [];
+    let alighted = 0;
+    for (const group of passengers) {
+      if (group.destinationStopId === stop.id) alighted += group.count;
+      else remainingPassengers.push(group);
+    }
+    if (alighted > 0) {
+      stop.totalAlighted += alighted;
+      this.publicTripsCompleted += alighted;
+      this.completedTrips += alighted;
+    }
+
+    const capacity = bus.capacity ?? TRANSIT_CONFIG.busCapacity;
+    let freeSeats = Math.max(0, capacity - passengerGroupCount(remainingPassengers));
+    const nextWaiting: TransitPassengerGroup[] = [];
+    let boarded = 0;
+    for (const group of stop.waiting) {
+      if (freeSeats <= 0) {
+        nextWaiting.push(group);
+        continue;
+      }
+      const taking = Math.min(group.count, freeSeats);
+      if (taking > 0) {
+        addPassengerGroup(remainingPassengers, group.destinationStopId, taking);
+        boarded += taking;
+        freeSeats -= taking;
+      }
+      if (group.count > taking) {
+        nextWaiting.push({ destinationStopId: group.destinationStopId, count: group.count - taking });
+      }
+    }
+
+    bus.passengers = remainingPassengers;
+    stop.waiting = nextWaiting;
+    stop.totalBoarded += boarded;
+    stop.arrivalPulse = Math.max(stop.arrivalPulse, 0.65);
+    bus.nextStopIndex = ((bus.nextStopIndex ?? 0) + 1) % Math.max(1, this.transitLine.stopIds.length);
   }
 
   private updateConnections(): void {
@@ -505,9 +863,10 @@ export class GameWorld {
       const k = keyOf(car.currentTileX, car.currentTileY);
       const info = map.get(k);
       if (info) {
-        info.cars += 1;
+        const vehicleWeight = car.vehicleType === 'bus' ? TRANSIT_CONFIG.busTrafficWeight : 1;
+        info.cars += vehicleWeight;
         if (car.trafficState === 'queued' || car.trafficState === 'intersection' || car.status === 'stopped') {
-          pressure.set(k, (pressure.get(k) ?? 0) + 1.35 + Math.min(2.5, car.stuckSeconds * 0.15));
+          pressure.set(k, (pressure.get(k) ?? 0) + vehicleWeight * 1.35 + Math.min(2.5, car.stuckSeconds * 0.15));
         }
       }
     }
@@ -528,6 +887,11 @@ export class GameWorld {
       const trip = chooseTrip(this.buildings, this.time.getPeriod());
       if (!trip || !trip.origin.nearestRoad || !trip.destination.nearestRoad) {
         this.recordFailedTrip();
+        continue;
+      }
+      if (this.tryCreateTransitTrip(trip.origin, trip.destination)) {
+        trip.origin.tripsToday += 1;
+        trip.destination.tripsToday += 1;
         continue;
       }
       const route = findFastestPath(this.grid, this.traffic, trip.origin.nearestRoad, trip.destination.nearestRoad);
@@ -632,6 +996,10 @@ export class GameWorld {
         continue;
       }
 
+      if (this.updateTransitBusDwell(car, dt)) {
+        continue;
+      }
+
       if (car.rerouteCooldownSeconds > 0) car.rerouteCooldownSeconds = Math.max(0, car.rerouteCooldownSeconds - dt);
       if (car.signalTransitionGraceSeconds > 0) {
         car.signalTransitionGraceSeconds = Math.max(0, car.signalTransitionGraceSeconds - dt);
@@ -641,6 +1009,10 @@ export class GameWorld {
       const currentRouteTile = car.route[car.routeIndex];
       const nextRouteTile = car.route[car.routeIndex + 1];
       if (currentRouteTile && nextRouteTile && !isLegalRoadMove(this.grid, currentRouteTile, nextRouteTile)) {
+        if (car.vehicleType === 'bus') {
+          this.rebuildTransitLine();
+          continue;
+        }
         const rerouted = car.rerouteCooldownSeconds <= 0
           && this.tryRerouteCar(car, {
             force: true,
@@ -744,8 +1116,26 @@ export class GameWorld {
         car.currentTileY = pos.y;
         car.x = pos.x;
         car.y = pos.y;
+        if (car.vehicleType === 'bus') {
+          const currentTileKey = keyOf(car.currentTileX, car.currentTileY);
+          if (car.lastTransitStopTileKey && car.lastTransitStopTileKey !== currentTileKey) {
+            car.lastTransitStopTileKey = undefined;
+          }
+          if (this.tryStopTransitBusAtCurrentTile(car)) break;
+        }
       }
-      if (car.routeIndex >= car.route.length - 1) {
+      if (car.routeIndex >= car.route.length - 1 && car.vehicleType === 'bus') {
+        car.routeIndex = 0;
+        car.progressToNext = 0;
+        const start = car.route[0];
+        if (start) {
+          car.currentTileX = start.x;
+          car.currentTileY = start.y;
+          car.x = start.x + car.laneOffset.x;
+          car.y = start.y + car.laneOffset.y;
+        }
+        this.tryStopTransitBusAtCurrentTile(car);
+      } else if (car.routeIndex >= car.route.length - 1) {
         car.lifecyclePhase = 'destinationEntry';
         car.lifecycleProgress = 0;
         car.currentSpeed = Math.min(car.currentSpeed, 0.5);
@@ -1269,6 +1659,24 @@ function isLegalRoadMove(grid: Tile[][], from: Vec2, to: Vec2): boolean {
 
 function routeSignature(route: Vec2[]): string {
   return route.slice(0, 6).map((pos) => keyOf(pos.x, pos.y)).join('|');
+}
+
+function passengerGroupCount(groups: TransitPassengerGroup[]): number {
+  return groups.reduce((sum, group) => sum + group.count, 0);
+}
+
+function addPassengerGroup(groups: TransitPassengerGroup[], destinationStopId: string, count: number): void {
+  const existing = groups.find((group) => group.destinationStopId === destinationStopId);
+  if (existing) existing.count += count;
+  else groups.push({ destinationStopId, count });
+}
+
+function manhattan(a: Vec2, b: Vec2): number {
+  return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
+}
+
+function samePos(a: Vec2 | undefined, b: Vec2 | undefined): boolean {
+  return Boolean(a && b && a.x === b.x && a.y === b.y);
 }
 
 function dedupeTiles(tiles: Vec2[]): Vec2[] {

@@ -233,7 +233,7 @@ export function computeTrafficDecision(
   const direction = getDirection(current, next);
   const insideIntersection = isIntersection(grid, { x: car.currentTileX, y: car.currentTileY });
   const roadType = getRoadType(grid, current);
-  const { offset, laneIndex, laneCount, laneSide } = getLaneOffsetForRouteSegment(grid, car, current, next);
+  let { offset, laneIndex, laneCount, laneSide } = getLaneOffsetForRouteSegment(grid, car, current, next);
   const desiredSpeed = (BASE_SPEED * ROAD_CONFIG[roadType].speed) / (1 + Math.max(0, congestion - 0.25));
   const turning = isTurningSoon(car);
   let targetSpeed = desiredSpeed * (turning ? CURVE_SLOWDOWN : 1);
@@ -243,7 +243,17 @@ export function computeTrafficDecision(
   let intersectionReason: IntersectionReason | undefined;
 
   const clearingIntersectionBox = shouldClearIntersectionBox(grid, car);
-  const leader = findLeaderAhead(car, cars, direction, laneIndex);
+  let leader = findLeaderAhead(car, cars, direction, laneIndex);
+  const passingLane = leader?.car.vehicleType === 'bus' && leader.car.status === 'stopped' && roadType === 'avenue'
+    ? findAvenuePassingLane(car, cars, direction, laneIndex)
+    : undefined;
+  if (passingLane) {
+    laneIndex = passingLane.laneIndex;
+    laneCount = passingLane.laneCount;
+    laneSide = passingLane.laneSide;
+    offset = passingLane.offset;
+    leader = findLeaderAhead(car, cars, direction, laneIndex);
+  }
   if (leader && !insideIntersection && !clearingIntersectionBox) {
     blockedByCarId = leader.car.id;
     if (leader.distance <= SAFE_DISTANCE) {
@@ -900,6 +910,42 @@ function findLeaderAhead(car: Car, cars: Car[], direction: TravelDirection, lane
   }
 
   return leader;
+}
+
+function findAvenuePassingLane(
+  car: Car,
+  cars: Car[],
+  direction: TravelDirection,
+  currentLaneIndex: number,
+): { offset: Vec2; laneIndex: number; laneCount: number; laneSide: -1 | 1 } | undefined {
+  const alternateLaneIndex = currentLaneIndex === 0 ? 1 : 0;
+  const axis = direction === 'east' || direction === 'west' ? 'x' : 'y';
+  const lineAxis = axis === 'x' ? 'y' : 'x';
+  const lane = getFixedAvenueLaneOffset(direction, alternateLaneIndex);
+  const alternateLine = Math.round((axis === 'x' ? car.y + lane.offset.y : car.x + lane.offset.x));
+  const scalar = travelScalar(car, direction);
+
+  for (const other of cars) {
+    if (other.id === car.id || other.status === 'arrived' || other.lifecyclePhase !== 'driving') continue;
+    if (other.direction !== direction || other.laneIndex !== alternateLaneIndex) continue;
+    if (Math.round(other[lineAxis]) !== alternateLine) continue;
+    const distance = travelScalar(other, direction) - scalar;
+    if (distance > -0.5 && distance < LOOK_AHEAD_DISTANCE * 0.72) return undefined;
+  }
+
+  return lane;
+}
+
+function getFixedAvenueLaneOffset(
+  direction: TravelDirection,
+  laneIndex: number,
+): { offset: Vec2; laneIndex: number; laneCount: number; laneSide: -1 | 1 } {
+  const laneCount = 2;
+  const laneSide: -1 | 1 = direction === 'east' || direction === 'south' ? 1 : -1;
+  const base = laneIndex === 0 ? 0.14 : 0.32;
+  const signed = laneSide * base;
+  if (direction === 'east' || direction === 'west') return { laneIndex, laneCount, laneSide, offset: { x: 0, y: signed } };
+  return { laneIndex, laneCount, laneSide, offset: { x: -signed, y: 0 } };
 }
 
 function travelScalar(car: Car, direction: TravelDirection): number {

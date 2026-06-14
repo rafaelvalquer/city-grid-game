@@ -1,4 +1,4 @@
-export type TileType = 'empty' | 'road' | 'avenue' | 'roundabout' | 'roundaboutCenter' | 'building';
+export type TileType = 'empty' | 'road' | 'avenue' | 'roundabout' | 'roundaboutCenter' | 'building' | 'busStop';
 export type BuildingType = 'house' | 'shop' | 'office';
 export type BuildingLevel = 1 | 2 | 3;
 export type RoadType = 'road' | 'avenue' | 'roundabout';
@@ -39,6 +39,31 @@ export type TrafficCell = {
   congestion: number;
 };
 
+export type TransitPassengerGroup = {
+  destinationStopId: string;
+  count: number;
+};
+
+export type TransitStop = {
+  id: string;
+  x: number;
+  y: number;
+  accessRoad: Vec2;
+  waiting: TransitPassengerGroup[];
+  totalBoarded: number;
+  totalAlighted: number;
+  arrivalPulse: number;
+  createdOrder: number;
+};
+
+export type TransitLine = {
+  id: string;
+  stopIds: string[];
+  route: Vec2[];
+  active: boolean;
+  reason?: string;
+};
+
 export type TrafficLightAxis = 'horizontal' | 'vertical';
 export type TrafficLightPhase = 'horizontalGreen' | 'horizontalYellow' | 'verticalGreen' | 'verticalYellow' | 'allRedClearance';
 export type TrafficLightSignal = 'green' | 'yellow' | 'red';
@@ -70,6 +95,10 @@ export type CityStats = {
   disconnectedBuildings: number;
   completedTrips: number;
   failedTrips: number;
+  publicTripsCompleted: number;
+  carTripsAvoided: number;
+  waitingPassengers: number;
+  activeBuses: number;
   cityLevel: number;
   day: number;
   timeLabel: string;
@@ -80,5 +109,6 @@ export type SelectedEntity =
   | { kind: 'none' }
   | { kind: 'tile'; x: number; y: number; type: TileType }
   | { kind: 'building'; building: Building }
+  | { kind: 'busStop'; stop: TransitStop }
   | { kind: 'road'; x: number; y: number; roadType: RoadType; traffic: TrafficCell; trafficLight?: TrafficLightState; oneWay?: RoadDirection }
   | { kind: 'car'; carId: string };
