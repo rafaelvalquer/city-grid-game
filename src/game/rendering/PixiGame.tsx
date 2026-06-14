@@ -5,12 +5,13 @@ import type { DayPeriod } from '../engine/timeSystem';
 import { GAME_CONFIG } from '../config/gameConfig';
 import { ROAD_CONFIG } from '../config/roadConfig';
 import { useGameStore, type HeatmapMode, type HoverPreview } from '../../store/gameStore';
+import { CanvasToolDock } from '../../components/CanvasToolDock';
 import { inBounds, isRoadType, keyOf } from '../city/grid';
 import type { Car } from '../../types/agent.types';
 import type { Building, RoadDirection, RoadType, Tile, TrafficLightState, Vec2 } from '../../types/city.types';
 import type { Tool } from '../../types/game.types';
 import { MAP_COLORS, congestionColor } from './visualTheme';
-import { getDirection, getLaneOffset, isIntersection } from '../systems/trafficRules';
+import { getDirection, getLaneOffsetForRouteSegment, isIntersection } from '../systems/trafficRules';
 import { getTrafficLightSignal, TRAFFIC_LIGHT_BUILD_COST } from '../systems/trafficLights';
 import { canPlaceRoundabout, findRoundaboutCenterForTile, getRoundaboutCenter, getRoundaboutRing, isRoundaboutCenter, isRoundaboutTile } from '../systems/roundabouts';
 
@@ -276,6 +277,7 @@ export function PixiGame({ world }: { world: GameWorld }) {
         <span>Scroll: zoom</span>
         <span>Clique e arraste: traçar rua/avenida</span>
       </div>
+      <CanvasToolDock />
       {hoverPreview && (
         <div className={`tile-preview ${hoverPreview.valid ? 'valid' : 'invalid'}`}>
           <strong>{hoverPreview.label}</strong>
@@ -575,6 +577,15 @@ function drawRoundaboutMarkings(graphics: Graphics, grid: Tile[][], x: number, y
   const cx = px + ts / 2;
   const cy = py + ts / 2;
   const angle = Math.atan2(cy - localCenterY, cx - localCenterX) - Math.PI / 2;
+  const radial = normalizeVec({ x: cx - localCenterX, y: cy - localCenterY });
+  const tangent = { x: -radial.y, y: radial.x };
+
+  for (const distance of [-5.5, 5.5]) {
+    const markX = cx + radial.x * distance;
+    const markY = cy + radial.y * distance;
+    drawShortDashedSegment(graphics, markX, markY, tangent, MAP_COLORS.laneSoft, 0.34);
+  }
+
   drawTurnArrow(graphics, cx, cy, angle);
 }
 
@@ -1064,20 +1075,7 @@ function smoothStep(t: number): number {
 }
 
 function laneOffsetForSegment(car: Car, grid: Tile[][], from: Vec2, to: Vec2): Vec2 {
-  const direction = getDirection(from, to);
-  return getLaneOffset(direction, roadTypeAt(grid, from), car.id, oneWayAt(grid, from, direction)).offset;
-}
-
-function roadTypeAt(grid: Tile[][], pos: Vec2): RoadType {
-  const type = grid[pos.y]?.[pos.x]?.type;
-  if (type === 'avenue' || type === 'roundabout') return type;
-  return 'road';
-}
-
-function oneWayAt(grid: Tile[][], pos: Vec2, direction: RoadDirection): RoadDirection | undefined {
-  const tile = grid[pos.y]?.[pos.x];
-  if ((tile?.type !== 'road' && tile?.type !== 'avenue') || tile.oneWay !== direction) return undefined;
-  return tile.oneWay;
+  return getLaneOffsetForRouteSegment(grid, car, from, to).offset;
 }
 
 function isRouteTurn(from: Vec2, corner: Vec2, to: Vec2): boolean {
@@ -1210,6 +1208,27 @@ function drawDashedLine(graphics: Graphics, x: number, y: number, length: number
     if (horizontal) graphics.rect(x + offset, y, size, 2).fill({ color, alpha });
     else graphics.rect(x, y + offset, 2, size).fill({ color, alpha });
   }
+}
+
+function drawShortDashedSegment(graphics: Graphics, x: number, y: number, direction: Vec2, color: number, alpha: number): void {
+  const dash = 4;
+  const gap = 3;
+  const total = 18;
+  const start = -total / 2;
+  for (let offset = 0; offset < total; offset += dash + gap) {
+    const segmentStart = start + offset;
+    const segmentEnd = Math.min(start + total, segmentStart + dash);
+    graphics
+      .moveTo(x + direction.x * segmentStart, y + direction.y * segmentStart)
+      .lineTo(x + direction.x * segmentEnd, y + direction.y * segmentEnd)
+      .stroke({ color, width: 1.4, alpha });
+  }
+}
+
+function normalizeVec(vec: Vec2): Vec2 {
+  const length = Math.hypot(vec.x, vec.y);
+  if (length <= 0.0001) return { x: 0, y: 0 };
+  return { x: vec.x / length, y: vec.y / length };
 }
 
 function carColor(id: string): number {

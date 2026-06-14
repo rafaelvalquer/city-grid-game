@@ -18,7 +18,7 @@ export const ROAD_CONFIG = {
   roundabout: {
     label: 'Rotatória',
     speed: 0.85,
-    capacity: 10,
+    capacity: 18,
     buildCost: 90,
     removeCost: 18,
     pathCost: 5,

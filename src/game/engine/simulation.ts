@@ -10,7 +10,7 @@ import { CityGenerator } from '../city/cityGenerator';
 import { applyBuildingLevel, updateBuildingConnection } from '../city/buildings';
 import { findFastestPath } from '../pathfinding/pathfinder';
 import { buildIntersectionControls, computeTrafficDecision, getDirection, getLaneOffset, isIntersection } from '../systems/trafficRules';
-import { canPlaceRoundabout, findRoundaboutCenterForTile, getRoundaboutArea, getRoundaboutRing, isRoundaboutCenter, isRoundaboutTile } from '../systems/roundabouts';
+import { canPlaceRoundabout, findRoundaboutCenterForTile, getDrivableNeighbors, getRoundaboutArea, getRoundaboutRing, isRoundaboutCenter, isRoundaboutTile } from '../systems/roundabouts';
 import {
   createTrafficLight,
   EMPTY_TRAFFIC_LIGHT_DEMAND,
@@ -39,6 +39,17 @@ const BUILDING_UPGRADE_MAX_CONGESTION = 140;
 const BUILDING_UPGRADE_MIN_SCORE = 3.2;
 const CAR_SPAWN_EXIT_SECONDS = 0.65;
 const CAR_DESTINATION_ENTRY_SECONDS = 0.75;
+const ROAD_RULE_REROUTE_COOLDOWN_SECONDS = 1.2;
+const IMMOBILE_REROUTE_SECONDS = 8;
+const IMMOBILE_ESCAPE_SECONDS = 20;
+const IMMOBILE_REMOVE_SECONDS = 45;
+const REPEATED_REROUTE_REMOVE_COUNT = 30;
+
+type RerouteOptions = {
+  force?: boolean;
+  reason?: string;
+  allowNeighborFallback?: boolean;
+};
 
 export class GameWorld {
   grid: Tile[][] = createGrid();
@@ -293,7 +304,7 @@ export class GameWorld {
       this.grid[pos.y][pos.x] = { ...tile, oneWay: direction };
     }
 
-    this.rerouteCarsAffectedBy(uniqueTiles);
+    if (changed > 0) this.rerouteCarsAfterRoadRuleChange(uniqueTiles);
     this.refreshSelectedRoad();
     this.emit();
     return { success: true, changed };
@@ -308,7 +319,7 @@ export class GameWorld {
 
     const nextDirection = nextOneWayDirection(tile.oneWay);
     this.grid[y][x] = { ...tile, oneWay: nextDirection };
-    this.rerouteCarsAffectedBy([{ x, y }]);
+    this.rerouteCarsAfterRoadRuleChange([{ x, y }]);
     this.refreshSelectedRoad();
     this.emit();
     return nextDirection
@@ -321,7 +332,7 @@ export class GameWorld {
     const tile = this.grid[y][x];
     if ((tile.type !== 'road' && tile.type !== 'avenue') || !tile.oneWay) return false;
     this.grid[y][x] = { ...tile, oneWay: undefined };
-    this.rerouteCarsAffectedBy([{ x, y }]);
+    this.rerouteCarsAfterRoadRuleChange([{ x, y }]);
     this.refreshSelectedRoad();
     this.emit();
     return true;
@@ -568,8 +579,11 @@ export class GameWorld {
         estimatedTime: route.length / 1.45,
         delay: 0,
         stuckSeconds: 0,
+        immobileSeconds: 0,
         rerouteCooldownSeconds: 0,
         rerouteCount: 0,
+        repeatedRerouteCount: 0,
+        lastRouteSignature: routeSignature(route),
         signalTransitionGraceSeconds: 0,
         intersectionReason: undefined,
       });
@@ -580,6 +594,7 @@ export class GameWorld {
 
   private updateCars(dt: number): void {
     const arrived: Car[] = [];
+    const failed: Car[] = [];
     const drivingCars = this.cars.filter((car) => car.lifecyclePhase === 'driving');
     const intersectionControls = buildIntersectionControls(this.grid, drivingCars);
     const sortedCars = [...this.cars].sort((a, b) => this.carUpdatePriority(b) - this.carUpdatePriority(a));
@@ -621,6 +636,21 @@ export class GameWorld {
       if (car.signalTransitionGraceSeconds > 0) {
         car.signalTransitionGraceSeconds = Math.max(0, car.signalTransitionGraceSeconds - dt);
         if (car.signalTransitionGraceSeconds === 0) car.signalTransitionKey = undefined;
+      }
+
+      const currentRouteTile = car.route[car.routeIndex];
+      const nextRouteTile = car.route[car.routeIndex + 1];
+      if (currentRouteTile && nextRouteTile && !isLegalRoadMove(this.grid, currentRouteTile, nextRouteTile)) {
+        const rerouted = car.rerouteCooldownSeconds <= 0
+          && this.tryRerouteCar(car, {
+            force: true,
+            reason: 'Mão única alterada: rota recalculada',
+            allowNeighborFallback: true,
+          });
+        if (!rerouted) {
+          this.holdCarForRoadRuleReroute(car, 'Mão única alterada: aguardando rota válida');
+          continue;
+        }
       }
 
       const traffic = this.traffic.get(keyOf(car.currentTileX, car.currentTileY));
@@ -683,7 +713,18 @@ export class GameWorld {
         car.stuckSeconds = Math.max(0, car.stuckSeconds - dt * 2.5);
       }
 
+      this.updateImmobileTimer(car, dt);
+
       if (car.currentSpeed < 0.25) car.delay += dt;
+
+      if (this.shouldRemoveStuckCar(car)) {
+        car.status = 'no_route';
+        car.lastRerouteReason = 'Removido por travamento prolongado';
+        failed.push(car);
+        continue;
+      }
+
+      this.runStuckWatchdog(car);
 
       const rerouteStuckSeconds = shouldDelayIntersectionReroute(car) ? INTERSECTION_REROUTE_STUCK_SECONDS : REROUTE_STUCK_SECONDS;
       if (car.stuckSeconds >= rerouteStuckSeconds && car.rerouteCooldownSeconds <= 0 && !insideIntersection) {
@@ -723,7 +764,14 @@ export class GameWorld {
         this.tripHistory.push(car.travelTime);
         if (this.tripHistory.length > TRAVEL_TIME_HISTORY_LIMIT) this.tripHistory.shift();
       }
-      this.cars = this.cars.filter((c) => c.status !== 'arrived');
+    }
+    if (failed.length) {
+      for (const car of failed) {
+        this.recordFailedTrip();
+      }
+    }
+    if (arrived.length || failed.length) {
+      this.cars = this.cars.filter((c) => c.status !== 'arrived' && c.status !== 'no_route');
       this.averageTravelTime = this.tripHistory.length ? this.tripHistory.reduce((a, b) => a + b, 0) / this.tripHistory.length : 0;
     }
   }
@@ -733,6 +781,61 @@ export class GameWorld {
     const transition = car.signalTransitionGraceSeconds > 0 ? 300 : 0;
     const wait = Math.max(car.intersectionWaitSeconds, car.stuckSeconds) * 10;
     return insideIntersection + transition + wait;
+  }
+
+  private updateImmobileTimer(car: Car, dt: number): void {
+    if (car.currentSpeed < 0.08) {
+      car.immobileSeconds += dt;
+      return;
+    }
+
+    if (car.currentSpeed > 0.25) {
+      car.immobileSeconds = Math.max(0, car.immobileSeconds - dt * 3);
+    }
+  }
+
+  private shouldRemoveStuckCar(car: Car): boolean {
+    if (car.immobileSeconds >= IMMOBILE_REMOVE_SECONDS) return true;
+    return car.immobileSeconds >= IMMOBILE_REROUTE_SECONDS
+      && car.repeatedRerouteCount >= REPEATED_REROUTE_REMOVE_COUNT;
+  }
+
+  private runStuckWatchdog(car: Car): void {
+    if (car.immobileSeconds < IMMOBILE_REROUTE_SECONDS) return;
+    if (car.rerouteCooldownSeconds > 0) return;
+
+    if (car.immobileSeconds >= IMMOBILE_ESCAPE_SECONDS) {
+      this.clearCarBlockingState(car);
+      const escaped = this.tryRerouteCar(car, {
+        force: true,
+        reason: 'Resgate anti-travamento',
+        allowNeighborFallback: true,
+      });
+      if (!escaped) this.holdCarForRoadRuleReroute(car, 'Aguardando rota válida');
+      return;
+    }
+
+    this.tryRerouteCar(car, {
+      force: true,
+      reason: 'Resgate anti-travamento',
+      allowNeighborFallback: true,
+    });
+  }
+
+  private clearCarBlockingState(car: Car): void {
+    car.currentSpeed = 0;
+    car.targetSpeed = 0;
+    car.blockedByCarId = undefined;
+    car.intersectionStopKey = undefined;
+    car.intersectionWaitSeconds = 0;
+    car.waitTimer = 0;
+    car.gridlockEscapeSeconds = 0;
+    car.insideIntersectionSeconds = 0;
+    car.intersectionQueuePosition = undefined;
+    car.intersectionQueueLength = undefined;
+    car.intersectionReason = undefined;
+    car.trafficState = 'queued';
+    car.status = 'stopped';
   }
 
   private isSpawnLaneBlocked(origin: Vec2, laneOffset: Vec2, direction: Car['direction']): boolean {
@@ -757,7 +860,7 @@ export class GameWorld {
     });
   }
 
-  private tryRerouteCar(car: Car): boolean {
+  private tryRerouteCar(car: Car, options: RerouteOptions = {}): boolean {
     const destination = this.getBuilding(car.destinationBuildingId)?.nearestRoad;
     if (!destination) return false;
 
@@ -766,7 +869,10 @@ export class GameWorld {
     if (keyOf(start.x, start.y) === keyOf(destination.x, destination.y)) return false;
 
     const trafficForReroute = this.buildRerouteTraffic(car);
-    const newRoute = findFastestPath(this.grid, trafficForReroute, start, destination);
+    let newRoute = findFastestPath(this.grid, trafficForReroute, start, destination);
+    if (newRoute.length < 2 && options.allowNeighborFallback) {
+      newRoute = this.findBestFallbackRouteFromLegalNeighbor(start, destination, trafficForReroute);
+    }
     if (newRoute.length < 2) return false;
 
     const oldRemaining = car.route.slice(car.routeIndex);
@@ -776,35 +882,130 @@ export class GameWorld {
       ? keyOf(oldRemaining[1].x, oldRemaining[1].y) !== keyOf(newRoute[1].x, newRoute[1].y)
       : true;
 
-    if (!differentNext && car.stuckSeconds < REROUTE_FORCE_SECONDS) return false;
-    if (newScore > oldScore * 0.94 && car.stuckSeconds < REROUTE_FORCE_SECONDS) return false;
+    if (!options.force && !differentNext && car.stuckSeconds < REROUTE_FORCE_SECONDS) return false;
+    if (!options.force && newScore > oldScore * 0.94 && car.stuckSeconds < REROUTE_FORCE_SECONDS) return false;
 
-    const direction = getDirection(newRoute[0], newRoute[1]);
-    const roadType = this.getRoadTypeAt(newRoute[0]);
-    const lane = getLaneOffset(direction, roadType, car.id, this.getOneWayAt(newRoute[0], direction));
+    this.applyRouteToCar(car, newRoute, {
+      reason: options.reason ?? (newScore < oldScore ? 'Rota alternativa mais livre' : 'Destravamento por espera prolongada'),
+      cooldownSeconds: options.force ? ROAD_RULE_REROUTE_COOLDOWN_SECONDS : REROUTE_COOLDOWN_SECONDS,
+      stopBeforeMoving: Boolean(options.force),
+    });
+    return true;
+  }
 
-    car.route = newRoute;
+  private findBestFallbackRouteFromLegalNeighbor(start: Vec2, destination: Vec2, traffic: Map<string, TrafficCell>): Vec2[] {
+    let bestRoute: Vec2[] = [];
+    let bestCost = Infinity;
+
+    for (const next of getDrivableNeighbors(this.grid, start)) {
+      if (!isLegalRoadMove(this.grid, start, next)) continue;
+      const routeFromNeighbor = findFastestPath(this.grid, traffic, next, destination);
+      if (!routeFromNeighbor.length) continue;
+      const candidate = [start, ...routeFromNeighbor];
+      const cost = estimateRouteCost(this.grid, traffic, candidate);
+      if (cost < bestCost) {
+        bestCost = cost;
+        bestRoute = candidate;
+      }
+    }
+
+    return bestRoute;
+  }
+
+  private applyRouteToCar(
+    car: Car,
+    route: Vec2[],
+    options: { reason: string; cooldownSeconds: number; stopBeforeMoving?: boolean },
+  ): void {
+    const direction = getDirection(route[0], route[1]);
+    const roadType = this.getRoadTypeAt(route[0]);
+    const lane = getLaneOffset(direction, roadType, car.id, this.getOneWayAt(route[0], direction));
+    const signature = routeSignature(route);
+    car.repeatedRerouteCount = car.lastRouteSignature === signature ? car.repeatedRerouteCount + 1 : 0;
+    car.lastRouteSignature = signature;
+
+    car.route = route;
     car.routeIndex = 0;
     car.progressToNext = 0;
-    car.currentTileX = newRoute[0].x;
-    car.currentTileY = newRoute[0].y;
-    car.x = newRoute[0].x + lane.offset.x;
-    car.y = newRoute[0].y + lane.offset.y;
+    car.currentTileX = route[0].x;
+    car.currentTileY = route[0].y;
+    car.x = route[0].x + lane.offset.x;
+    car.y = route[0].y + lane.offset.y;
     car.direction = direction;
     car.laneOffset = lane.offset;
     car.laneIndex = lane.laneIndex;
     car.laneCount = lane.laneCount;
     car.laneSide = lane.laneSide;
-    car.estimatedTime = newRoute.length / Math.max(0.1, car.baseSpeed);
-    car.rerouteCooldownSeconds = REROUTE_COOLDOWN_SECONDS;
+    car.desiredSpeed = car.baseSpeed * ROAD_CONFIG[roadType].speed;
+    car.targetSpeed = options.stopBeforeMoving ? 0 : car.desiredSpeed;
+    car.currentSpeed = options.stopBeforeMoving ? 0 : Math.min(car.currentSpeed, car.desiredSpeed);
+    car.estimatedTime = route.length / Math.max(0.1, car.baseSpeed);
+    car.rerouteCooldownSeconds = options.cooldownSeconds;
     car.rerouteCount += 1;
-    car.lastRerouteReason = newScore < oldScore ? 'Rota alternativa mais livre' : 'Destravamento por espera prolongada';
+    car.lastRerouteReason = options.reason;
     car.stuckSeconds = 0;
     car.intersectionStopKey = undefined;
     car.waitTimer = 0;
     car.intersectionWaitSeconds = 0;
     car.gridlockEscapeSeconds = 0;
-    return true;
+    car.insideIntersectionSeconds = 0;
+    car.intersectionQueuePosition = undefined;
+    car.intersectionQueueLength = undefined;
+    car.intersectionReason = undefined;
+    car.blockedByCarId = undefined;
+    car.trafficState = options.stopBeforeMoving ? 'queued' : 'moving';
+    car.status = options.stopBeforeMoving ? 'stopped' : 'moving';
+  }
+
+  private rerouteCarsAfterRoadRuleChange(changedTiles: Vec2[]): void {
+    const changedKeys = new Set(changedTiles.map((pos) => keyOf(pos.x, pos.y)));
+
+    for (const car of this.cars) {
+      if (car.lifecyclePhase !== 'driving') continue;
+
+      const current = car.route[car.routeIndex];
+      const next = car.route[car.routeIndex + 1];
+      const currentKey = keyOf(car.currentTileX, car.currentTileY);
+      const isOnChangedTile = changedKeys.has(currentKey);
+      const routeTouchesChangedTile = car.route
+        .slice(car.routeIndex)
+        .some((pos) => changedKeys.has(keyOf(pos.x, pos.y)));
+      const nextMoveBecameIllegal = Boolean(current && next && !isLegalRoadMove(this.grid, current, next));
+
+      if (!isOnChangedTile && !routeTouchesChangedTile && !nextMoveBecameIllegal) continue;
+
+      const rerouted = this.tryRerouteCar(car, {
+        force: true,
+        reason: 'Mão única alterada: rota recalculada',
+        allowNeighborFallback: isOnChangedTile || nextMoveBecameIllegal,
+      });
+
+      if (!rerouted && nextMoveBecameIllegal) {
+        this.holdCarForRoadRuleReroute(car, 'Mão única alterada: aguardando rota válida');
+      }
+    }
+  }
+
+  private holdCarForRoadRuleReroute(car: Car, reason: string): void {
+    const current = car.route[car.routeIndex] ?? { x: car.currentTileX, y: car.currentTileY };
+    car.currentTileX = current.x;
+    car.currentTileY = current.y;
+    car.progressToNext = 0;
+    car.currentSpeed = 0;
+    car.targetSpeed = 0;
+    car.status = 'stopped';
+    car.trafficState = 'queued';
+    if (car.rerouteCooldownSeconds <= 0) {
+      car.rerouteCooldownSeconds = ROAD_RULE_REROUTE_COOLDOWN_SECONDS;
+    }
+    car.stuckSeconds = Math.max(car.stuckSeconds, 0.5);
+    car.waitTimer = 0;
+    car.intersectionWaitSeconds = 0;
+    car.gridlockEscapeSeconds = 0;
+    car.blockedByCarId = undefined;
+    car.intersectionStopKey = undefined;
+    car.intersectionReason = undefined;
+    car.lastRerouteReason = reason;
   }
 
   private rerouteCarsAffectedBy(area: Vec2[]): void {
@@ -842,29 +1043,11 @@ export class GameWorld {
         continue;
       }
 
-      const direction = getDirection(newRoute[0], newRoute[1]);
-      const roadType = this.getRoadTypeAt(newRoute[0]);
-      const lane = getLaneOffset(direction, roadType, car.id, this.getOneWayAt(newRoute[0], direction));
-      car.route = newRoute;
-      car.routeIndex = 0;
-      car.progressToNext = 0;
-      car.currentTileX = newRoute[0].x;
-      car.currentTileY = newRoute[0].y;
-      car.x = newRoute[0].x + lane.offset.x;
-      car.y = newRoute[0].y + lane.offset.y;
-      car.direction = direction;
-      car.laneOffset = lane.offset;
-      car.laneIndex = lane.laneIndex;
-      car.laneCount = lane.laneCount;
-      car.laneSide = lane.laneSide;
-      car.currentSpeed = 0;
-      car.targetSpeed = 0;
-      car.stuckSeconds = 0;
-      car.intersectionStopKey = undefined;
-      car.intersectionWaitSeconds = 0;
-      car.waitTimer = 0;
-      car.rerouteCount += 1;
-      car.lastRerouteReason = 'Via alterada: rota recalculada';
+      this.applyRouteToCar(car, newRoute, {
+        reason: 'Via alterada: rota recalculada',
+        cooldownSeconds: REROUTE_COOLDOWN_SECONDS,
+        stopBeforeMoving: true,
+      });
     }
   }
 
@@ -1077,6 +1260,15 @@ function estimateRouteCost(grid: Tile[][], traffic: Map<string, TrafficCell>, ro
     total += ROAD_CONFIG[roadType].pathCost + congestionPenalty;
   }
   return total;
+}
+
+function isLegalRoadMove(grid: Tile[][], from: Vec2, to: Vec2): boolean {
+  if (from.x === to.x && from.y === to.y) return false;
+  return getDrivableNeighbors(grid, from).some((next) => next.x === to.x && next.y === to.y);
+}
+
+function routeSignature(route: Vec2[]): string {
+  return route.slice(0, 6).map((pos) => keyOf(pos.x, pos.y)).join('|');
 }
 
 function dedupeTiles(tiles: Vec2[]): Vec2[] {

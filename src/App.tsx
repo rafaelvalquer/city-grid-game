@@ -49,7 +49,7 @@ export default function App() {
         <nav className="mobile-dock" aria-label="Painéis">
           <button className={mobilePanel === 'tools' ? 'active' : ''} onClick={() => setMobilePanel((panel) => panel === 'tools' ? null : 'tools')}>
             {mobilePanel === 'tools' ? <X size={18} /> : <Hammer size={18} />}
-            Ferramentas
+            Controles
           </button>
           <button className={mobilePanel === 'details' ? 'active' : ''} onClick={() => setMobilePanel((panel) => panel === 'details' ? null : 'details')}>
             {mobilePanel === 'details' ? <X size={18} /> : <BarChart3 size={18} />}

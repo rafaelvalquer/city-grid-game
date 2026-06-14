@@ -6,6 +6,7 @@ import { getTrafficLightSignal, isTrafficLightControlling, type TrafficLightMap 
 import {
   getRoundaboutCenter,
   getRoundaboutDistanceAlongRing,
+  getRoundaboutRing,
   isEnteringRoundabout,
   isInsideRoundabout,
   willExitBeforeEntry,
@@ -79,6 +80,8 @@ const ROUNDABOUT_ENTRY_FREE_SPEED = 0.62;
 const ROUNDABOUT_ENTRY_GAP_SPEED = 0.52;
 const ROUNDABOUT_BLOCK_DISTANCE = 1.15;
 const ROUNDABOUT_FREE_DISTANCE = 1.65;
+const ROUNDABOUT_LANE_COUNT = 3;
+const ROUNDABOUT_LANE_RADIAL_OFFSETS = [0.24, 0, -0.24];
 
 const rightTurnDebugTimers = new Map<string, number>();
 
@@ -127,6 +130,29 @@ export function getLaneOffset(
 
   if (direction === 'east' || direction === 'west') return { laneIndex, laneCount, laneSide, offset: { x: 0, y: signed } };
   return { laneIndex, laneCount, laneSide, offset: { x: -signed, y: 0 } };
+}
+
+export function getLaneOffsetForRouteSegment(
+  grid: Tile[][],
+  car: Car,
+  from: Vec2,
+  to: Vec2,
+): { offset: Vec2; laneIndex: number; laneCount: number; laneSide: -1 | 1 } {
+  if (isInsideRoundabout(grid, from)) {
+    return getRoundaboutLaneOffset(grid, car, from, to);
+  }
+
+  const direction = getDirection(from, to);
+  const roadType = getRoadType(grid, from);
+  return getLaneOffset(direction, roadType, car.id, getOneWayDirection(grid, from, direction));
+}
+
+export function getRoundaboutLaneIndexForCar(grid: Tile[][], car: Car, from?: Vec2, to?: Vec2): number {
+  const current = from ?? car.route[car.routeIndex];
+  const next = to ?? car.route[car.routeIndex + 1];
+  if (!current || !next) return 1;
+  const exitNumber = getRoundaboutExitNumber(grid, car.route, car.routeIndex, current, next);
+  return Math.max(0, Math.min(ROUNDABOUT_LANE_COUNT - 1, exitNumber - 1));
 }
 
 export function isIntersection(grid: Tile[][], pos: Vec2): boolean {
@@ -207,7 +233,7 @@ export function computeTrafficDecision(
   const direction = getDirection(current, next);
   const insideIntersection = isIntersection(grid, { x: car.currentTileX, y: car.currentTileY });
   const roadType = getRoadType(grid, current);
-  const { offset, laneIndex, laneCount, laneSide } = getLaneOffset(direction, roadType, car.id, getOneWayDirection(grid, current, direction));
+  const { offset, laneIndex, laneCount, laneSide } = getLaneOffsetForRouteSegment(grid, car, current, next);
   const desiredSpeed = (BASE_SPEED * ROAD_CONFIG[roadType].speed) / (1 + Math.max(0, congestion - 0.25));
   const turning = isTurningSoon(car);
   let targetSpeed = desiredSpeed * (turning ? CURVE_SLOWDOWN : 1);
@@ -236,7 +262,7 @@ export function computeTrafficDecision(
   if (insideIntersection || clearingIntersectionBox) {
     targetSpeed = Math.max(targetSpeed, INTERSECTION_CLEAR_SPEED);
     state = 'intersection';
-    hardStop = false;
+    if (!blockedByCarId) hardStop = false;
   }
 
   if (isInsideRoundabout(grid, current)) {
@@ -267,10 +293,14 @@ export function computeTrafficDecision(
       };
     }
 
-    targetSpeed = Math.min(targetSpeed, roundaboutDecision.targetSpeed);
-    state = 'turning';
-    intersectionReason = roundaboutDecision.reason;
-    hardStop = false;
+    if (!blockedByCarId && targetSpeed > 0) {
+      targetSpeed = roundaboutDecision.reason === 'roundabout_gap'
+        ? Math.max(Math.min(targetSpeed, roundaboutDecision.targetSpeed), INTERSECTION_APPROACH_SPEED)
+        : Math.min(targetSpeed, roundaboutDecision.targetSpeed);
+      state = targetSpeed > 0 ? 'turning' : 'intersection';
+      intersectionReason = roundaboutDecision.reason;
+    }
+    if (!blockedByCarId) hardStop = false;
   }
 
   const intersectionKey = keyOf(next.x, next.y);
@@ -338,6 +368,10 @@ export function computeTrafficDecision(
         intersectionReason = physicalOccupant ? 'box_occupied' : intent?.exitBlocked ? 'exit_blocked' : 'unsignalized_queue';
       }
     }
+  }
+
+  if (state === 'turning' && targetSpeed <= 0.05) {
+    state = blockedByCarId ? 'queued' : 'intersection';
   }
 
   return {
@@ -511,6 +545,100 @@ function canReleaseIntoIntersection(intent: IntersectionIntent): boolean {
   return !intent.exitBlocked;
 }
 
+function getRoundaboutLaneOffset(
+  grid: Tile[][],
+  car: Car,
+  from: Vec2,
+  to: Vec2,
+): { offset: Vec2; laneIndex: number; laneCount: number; laneSide: -1 | 1 } {
+  const roundaboutPos = isInsideRoundabout(grid, from) ? from : to;
+  const center = getRoundaboutCenter(grid, roundaboutPos);
+  if (!center) return { offset: { x: 0, y: 0 }, laneIndex: 1, laneCount: ROUNDABOUT_LANE_COUNT, laneSide: 1 };
+
+  const laneIndex = getRoundaboutLaneIndexForCar(grid, car, from, to);
+  const radial = normalizeVec({ x: roundaboutPos.x - center.x, y: roundaboutPos.y - center.y });
+  const distance = ROUNDABOUT_LANE_RADIAL_OFFSETS[laneIndex] ?? 0;
+  const laneSide: -1 | 1 = laneIndex === 0 ? 1 : -1;
+
+  return {
+    offset: { x: radial.x * distance, y: radial.y * distance },
+    laneIndex,
+    laneCount: ROUNDABOUT_LANE_COUNT,
+    laneSide,
+  };
+}
+
+function getRoundaboutExitNumber(grid: Tile[][], route: Vec2[], routeIndex: number, from: Vec2, to: Vec2): number {
+  const roundaboutPos = isInsideRoundabout(grid, from) ? from : to;
+  const center = getRoundaboutCenter(grid, roundaboutPos);
+  if (!center) return 2;
+
+  const entryRouteIndex = findRoundaboutEntryRouteIndex(grid, route, routeIndex, center);
+  const exitRouteIndex = findRoundaboutExitRouteIndex(grid, route, Math.max(entryRouteIndex, routeIndex), center);
+  if (entryRouteIndex < 0 || exitRouteIndex < 0) return 2;
+
+  const ring = getRoundaboutRing(center);
+  const entryRingIndex = ring.findIndex((tile) => samePos(tile, route[entryRouteIndex]));
+  const exitRingIndex = ring.findIndex((tile) => samePos(tile, route[exitRouteIndex]));
+  if (entryRingIndex < 0 || exitRingIndex < 0) return 2;
+  if (entryRingIndex === exitRingIndex) return 1;
+
+  let exitNumber = 0;
+  for (let step = 1; step <= ring.length; step += 1) {
+    const ringIndex = (entryRingIndex + step) % ring.length;
+    const pos = ring[ringIndex];
+    if (isRoundaboutExitOpportunity(grid, pos, center)) exitNumber += 1;
+    if (ringIndex === exitRingIndex) return Math.max(1, exitNumber);
+  }
+
+  return Math.max(1, exitNumber);
+}
+
+function findRoundaboutEntryRouteIndex(grid: Tile[][], route: Vec2[], routeIndex: number, center: Vec2): number {
+  const start = Math.min(route.length - 1, routeIndex + 1);
+  for (let index = start; index >= 0; index -= 1) {
+    const pos = route[index];
+    if (!isInsideSameRoundabout(grid, pos, center)) continue;
+    const previous = route[index - 1];
+    if (!previous || !isInsideSameRoundabout(grid, previous, center)) return index;
+  }
+  return -1;
+}
+
+function findRoundaboutExitRouteIndex(grid: Tile[][], route: Vec2[], startIndex: number, center: Vec2): number {
+  for (let index = Math.max(0, startIndex); index < route.length - 1; index += 1) {
+    const pos = route[index];
+    const next = route[index + 1];
+    if (isInsideSameRoundabout(grid, pos, center) && !isInsideSameRoundabout(grid, next, center)) return index;
+  }
+  return -1;
+}
+
+function isInsideSameRoundabout(grid: Tile[][], pos: Vec2 | undefined, center: Vec2): boolean {
+  if (!pos || !isInsideRoundabout(grid, pos)) return false;
+  const currentCenter = getRoundaboutCenter(grid, pos);
+  return Boolean(currentCenter && samePos(currentCenter, center));
+}
+
+function isRoundaboutExitOpportunity(grid: Tile[][], pos: Vec2, center: Vec2): boolean {
+  const dx = pos.x - center.x;
+  const dy = pos.y - center.y;
+  if (Math.abs(dx) + Math.abs(dy) !== 1) return false;
+  const exitTile = { x: pos.x + dx, y: pos.y + dy };
+  const tile = grid[exitTile.y]?.[exitTile.x];
+  return Boolean(tile && isRoadType(tile.type) && !isRoundaboutTile(tile));
+}
+
+function normalizeVec(vec: Vec2): Vec2 {
+  const length = Math.hypot(vec.x, vec.y);
+  if (length <= 0.0001) return { x: 0, y: 0 };
+  return { x: vec.x / length, y: vec.y / length };
+}
+
+function samePos(a: Vec2 | undefined, b: Vec2 | undefined): boolean {
+  return Boolean(a && b && a.x === b.x && a.y === b.y);
+}
+
 function computeRoundaboutEntryDecision(
   grid: Tile[][],
   car: Car,
@@ -523,6 +651,7 @@ function computeRoundaboutEntryDecision(
   let hasExitingCarNearEntry = false;
   let nearestConflictDistance = Infinity;
   let nearestConflictCarId: string | undefined;
+  const enteringLaneIndex = getRoundaboutLaneIndexForCar(grid, car, car.route[car.routeIndex], entryTile);
 
   for (const other of cars) {
     if (other.id === car.id || other.status === 'arrived' || other.lifecyclePhase !== 'driving') continue;
@@ -548,6 +677,8 @@ function computeRoundaboutEntryDecision(
 
     const ringDistance = getRoundaboutDistanceAlongRing(grid, otherCurrent, entryTile);
     const adjustedDistance = ringDistance === Infinity ? Infinity : Math.max(0, ringDistance - other.progressToNext);
+    const otherLaneIndex = getRoundaboutLaneIndexForCar(grid, other, otherCurrent, otherNext);
+    if (otherLaneIndex !== enteringLaneIndex && adjustedDistance > SAFE_DISTANCE) continue;
     if (adjustedDistance < nearestConflictDistance) {
       nearestConflictDistance = adjustedDistance;
       nearestConflictCarId = other.id;

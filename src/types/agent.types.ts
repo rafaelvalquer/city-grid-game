@@ -48,8 +48,11 @@ export type Car = {
   estimatedTime: number;
   delay: number;
   stuckSeconds: number;
+  immobileSeconds: number;
   rerouteCooldownSeconds: number;
   rerouteCount: number;
+  repeatedRerouteCount: number;
+  lastRouteSignature?: string;
   lastRerouteReason?: string;
   signalTransitionGraceSeconds: number;
   signalTransitionKey?: string;

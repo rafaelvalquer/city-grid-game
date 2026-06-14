@@ -187,6 +187,7 @@ export function DetailsPanel({ world, className = '', onClose }: { world: GameWo
 
 function getCarLaneDisplayTotal(world: GameWorld, x: number, y: number, laneCount: number): number {
   const tile = world.grid[y]?.[x];
-  if ((tile?.type === 'road' || tile?.type === 'avenue') && tile.oneWay) return Math.max(1, laneCount);
-  return Math.max(1, laneCount / 2);
+  if (tile?.type === 'roundabout') return Math.max(1, Math.ceil(laneCount));
+  if ((tile?.type === 'road' || tile?.type === 'avenue') && tile.oneWay) return Math.max(1, Math.ceil(laneCount));
+  return Math.max(1, Math.ceil(laneCount / 2));
 }

@@ -906,6 +906,183 @@ h3 {
 .heatmap-legend .mid { background: var(--warn); }
 .heatmap-legend .high { background: var(--bad); }
 
+.canvas-tool-dock {
+  position: absolute;
+  left: 50%;
+  bottom: 16px;
+  z-index: 5;
+  transform: translateX(-50%);
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  pointer-events: auto;
+}
+
+.canvas-tool-bubbles {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px;
+  border: 1px solid rgba(150, 167, 189, 0.24);
+  border-radius: 999px;
+  background: rgba(8, 17, 31, 0.78);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(14px);
+}
+
+.canvas-tool-group {
+  position: relative;
+  display: grid;
+  place-items: center;
+}
+
+.canvas-tool-bubble {
+  width: 56px;
+  height: 56px;
+  position: relative;
+  display: grid;
+  place-items: center;
+  gap: 2px;
+  border: 1px solid rgba(150, 167, 189, 0.28);
+  border-radius: 999px;
+  background:
+    radial-gradient(circle at 50% 20%, rgba(255, 255, 255, 0.1), transparent 44%),
+    #111d2f;
+  color: #e7f4ff;
+  cursor: pointer;
+  box-shadow: inset 0 -10px 18px rgba(0, 0, 0, 0.18);
+  overflow: visible;
+  isolation: isolate;
+}
+
+.canvas-tool-bubble > span:not(.canvas-tool-halo) {
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.canvas-tool-bubble:hover {
+  border-color: var(--line-strong);
+  background:
+    radial-gradient(circle at 50% 18%, rgba(92, 200, 255, 0.18), transparent 45%),
+    #162640;
+}
+
+.canvas-tool-bubble.active {
+  border-color: rgba(92, 200, 255, 0.7);
+  color: #f3fbff;
+  background:
+    radial-gradient(circle at 50% 15%, rgba(92, 200, 255, 0.34), transparent 45%),
+    rgba(36, 167, 223, 0.2);
+  box-shadow: 0 0 0 2px rgba(92, 200, 255, 0.16), 0 12px 26px rgba(0, 0, 0, 0.28);
+}
+
+.canvas-tool-bubble.open {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+}
+
+.canvas-tool-radial {
+  position: absolute;
+  left: 50%;
+  bottom: 50%;
+  width: 0;
+  height: 0;
+  z-index: 6;
+  pointer-events: none;
+}
+
+.canvas-tool-radial-item {
+  position: absolute;
+  width: 50px;
+  height: 50px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(150, 167, 189, 0.28);
+  border-radius: 999px;
+  background:
+    radial-gradient(circle at 45% 22%, rgba(255, 255, 255, 0.16), transparent 36%),
+    #121f32;
+  color: #e9f7ff;
+  cursor: pointer;
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.3), inset 0 -8px 16px rgba(0, 0, 0, 0.18);
+  pointer-events: auto;
+  isolation: isolate;
+}
+
+.canvas-tool-radial-item:hover {
+  border-color: rgba(92, 200, 255, 0.74);
+  background:
+    radial-gradient(circle at 45% 20%, rgba(92, 200, 255, 0.2), transparent 40%),
+    #172942;
+}
+
+.canvas-tool-radial-item.active {
+  border-color: var(--accent);
+  background:
+    radial-gradient(circle at 45% 18%, rgba(92, 200, 255, 0.34), transparent 42%),
+    rgba(36, 167, 223, 0.24);
+  box-shadow:
+    0 0 0 3px rgba(92, 200, 255, 0.18),
+    0 18px 40px rgba(36, 167, 223, 0.22);
+}
+
+.canvas-tool-radial-item:disabled {
+  color: #748196;
+  background: #0e1726;
+  cursor: not-allowed;
+  border-color: rgba(150, 167, 189, 0.12);
+  opacity: 0.54;
+}
+
+.canvas-tool-radial-label {
+  position: absolute;
+  left: 50%;
+  top: calc(100% + 6px);
+  transform: translateX(-50%);
+  min-width: max-content;
+  max-width: 104px;
+  padding: 4px 6px;
+  border: 1px solid rgba(150, 167, 189, 0.18);
+  border-radius: 999px;
+  background: rgba(6, 14, 26, 0.9);
+  color: #dcecf8;
+  font-size: 10px;
+  line-height: 1.1;
+  text-align: center;
+  white-space: nowrap;
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.24);
+  pointer-events: none;
+}
+
+.canvas-tool-halo {
+  position: absolute;
+  inset: -2px;
+  z-index: -1;
+  border: 1px solid rgba(92, 200, 255, 0.55);
+  border-radius: inherit;
+  opacity: 0;
+  transform: scale(0.86);
+  pointer-events: none;
+}
+
+.canvas-tool-bubble:hover .canvas-tool-halo,
+.canvas-tool-radial-item:hover .canvas-tool-halo {
+  animation: canvas-tool-halo 720ms ease-out;
+}
+
+@keyframes canvas-tool-halo {
+  0% {
+    opacity: 0.62;
+    transform: scale(0.92);
+  }
+
+  100% {
+    opacity: 0;
+    transform: scale(1.42);
+  }
+}
+
 .detail-card {
   border: 1px solid var(--line);
   background: #111d2f;
@@ -1163,11 +1340,30 @@ h3 {
   }
 
   .tile-preview {
-    bottom: 76px;
+    bottom: 154px;
   }
 
   .heatmap-legend {
+    bottom: 154px;
+  }
+
+  .canvas-tool-dock {
     bottom: 76px;
+  }
+
+  .canvas-tool-bubble {
+    width: 52px;
+    height: 52px;
+  }
+
+  .canvas-tool-radial {
+    transform: scale(0.9);
+    transform-origin: bottom center;
+  }
+
+  .canvas-tool-radial-label {
+    font-size: 9px;
+    max-width: 96px;
   }
 }
 
@@ -1220,8 +1416,37 @@ h3 {
     left: 8px;
     right: 8px;
     top: auto;
-    bottom: 130px;
+    bottom: 214px;
     max-width: none;
+  }
+
+  .canvas-tool-bubbles {
+    gap: 7px;
+    padding: 7px;
+  }
+
+  .canvas-tool-bubble {
+    width: 48px;
+    height: 48px;
+  }
+
+  .canvas-tool-bubble > span:not(.canvas-tool-halo) {
+    font-size: 9px;
+  }
+
+  .canvas-tool-radial {
+    transform: scale(0.78);
+  }
+
+  .canvas-tool-radial-item {
+    width: 48px;
+    height: 48px;
+    left: -24px;
+    top: -24px;
+  }
+
+  .canvas-tool-radial-label {
+    max-width: 88px;
   }
 
   .bottom-bar {
@@ -1266,6 +1491,7 @@ h3 {
   .menu-settings-actions .menu-secondary-action {
     width: 100%;
   }
+
 }
 
 @media (prefers-reduced-motion: reduce) {
