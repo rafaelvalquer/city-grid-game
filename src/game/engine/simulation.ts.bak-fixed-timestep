@@ -51,12 +51,6 @@ const IMMOBILE_REROUTE_SECONDS = 8;
 const IMMOBILE_ESCAPE_SECONDS = 20;
 const IMMOBILE_REMOVE_SECONDS = 45;
 const REPEATED_REROUTE_REMOVE_COUNT = 30;
-
-// Mantém a simulação de trânsito estável mesmo em 2x/4x ou em frames lentos.
-// Em vez de aplicar um delta grande de uma vez, o jogo divide o tempo em passos menores.
-// Isso evita carros pulando tiles, sobreposição brusca em filas e remoções repentinas por arrived/no_route.
-const FIXED_TRAFFIC_STEP_SECONDS = 1 / 30;
-const MAX_TRAFFIC_CATCH_UP_SECONDS = FIXED_TRAFFIC_STEP_SECONDS * 8;
 type RerouteOptions = {
   force?: boolean;
   reason?: string;
@@ -293,21 +287,7 @@ export class GameWorld {
 
   update(deltaSeconds: number, speed: number, paused: boolean): void {
     if (paused || speed === 0) return;
-
-    const scaledDeltaSeconds = Math.min(
-      Math.max(0, deltaSeconds) * Math.max(0, speed),
-      MAX_TRAFFIC_CATCH_UP_SECONDS,
-    );
-
-    let remainingSeconds = scaledDeltaSeconds;
-    while (remainingSeconds > 0.0001) {
-      const dt = Math.min(FIXED_TRAFFIC_STEP_SECONDS, remainingSeconds);
-      this.updateStep(dt);
-      remainingSeconds -= dt;
-    }
-  }
-
-  private updateStep(dt: number): void {
+    const dt = Math.min(0.08, deltaSeconds) * speed;
     this.time.update(dt);
     this.updateDailyBuildingActivity();
     this.updateTrafficLights(dt);
