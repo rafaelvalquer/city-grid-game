@@ -3,6 +3,7 @@ import type { RoadDirection, RoadType, Tile, Vec2 } from '../../types/city.types
 import { ROAD_CONFIG } from '../config/roadConfig';
 import { getNeighbors4, isRoadType, keyOf } from '../city/grid';
 import { getTrafficLightSignal, isTrafficLightControlling, type TrafficLightMap } from './trafficLights';
+import type { CarSpatialIndex } from './carSpatialIndex';
 import {
   getRoundaboutCenter,
   getRoundaboutDistanceAlongRing,
@@ -162,7 +163,7 @@ export function isIntersection(grid: Tile[][], pos: Vec2): boolean {
   return getNeighbors4(pos).filter((next) => isRoadType(grid[next.y]?.[next.x]?.type)).length >= 3;
 }
 
-export function buildIntersectionControls(grid: Tile[][], cars: Car[]): IntersectionControls {
+export function buildIntersectionControls(grid: Tile[][], cars: Car[], spatialIndex?: CarSpatialIndex): IntersectionControls {
   const controls: IntersectionControls = new Map();
 
   for (const car of cars) {
@@ -173,7 +174,7 @@ export function buildIntersectionControls(grid: Tile[][], cars: Car[]): Intersec
       const control = ensureIntersectionControl(controls, keyOf(current.x, current.y));
       control.occupiedByCarId ??= car.id;
 
-      const activeIntent = buildIntentForCar(grid, car, cars, current);
+      const activeIntent = buildIntentForCar(grid, car, cars, current, spatialIndex);
       if (activeIntent) control.active.push(activeIntent);
     }
 
@@ -183,7 +184,7 @@ export function buildIntersectionControls(grid: Tile[][], cars: Car[]): Intersec
     if (!approaching) continue;
 
     const control = ensureIntersectionControl(controls, keyOf(next.x, next.y));
-    const intent = buildIntentForCar(grid, car, cars, next);
+    const intent = buildIntentForCar(grid, car, cars, next, spatialIndex);
     if (intent) control.queue.push(intent);
   }
 
@@ -212,6 +213,7 @@ export function computeTrafficDecision(
   intersectionControls: IntersectionControls,
   trafficLights: TrafficLightMap,
   congestion: number,
+  spatialIndex?: CarSpatialIndex,
 ): TrafficDecision {
   const current = car.route[car.routeIndex];
   const next = car.route[car.routeIndex + 1];
@@ -243,16 +245,16 @@ export function computeTrafficDecision(
   let intersectionReason: IntersectionReason | undefined;
 
   const clearingIntersectionBox = shouldClearIntersectionBox(grid, car);
-  let leader = findLeaderAhead(car, cars, direction, laneIndex);
+  let leader = findLeaderAhead(car, cars, direction, laneIndex, spatialIndex);
   const passingLane = leader?.car.vehicleType === 'bus' && leader.car.status === 'stopped' && roadType === 'avenue'
-    ? findAvenuePassingLane(car, cars, direction, laneIndex)
+    ? findAvenuePassingLane(car, cars, direction, laneIndex, spatialIndex)
     : undefined;
   if (passingLane) {
     laneIndex = passingLane.laneIndex;
     laneCount = passingLane.laneCount;
     laneSide = passingLane.laneSide;
     offset = passingLane.offset;
-    leader = findLeaderAhead(car, cars, direction, laneIndex);
+    leader = findLeaderAhead(car, cars, direction, laneIndex, spatialIndex);
   }
   if (leader && !insideIntersection && !clearingIntersectionBox) {
     blockedByCarId = leader.car.id;
@@ -326,7 +328,7 @@ export function computeTrafficDecision(
 
     const trafficLight = trafficLights.get(intersectionKey);
     const intent = control?.queue.find((entry) => entry.carId === car.id);
-    const physicalOccupant = isBlockingPhysicalOccupant(control, car, cars, intent);
+    const physicalOccupant = isBlockingPhysicalOccupant(control, car, cars, intent, spatialIndex);
     const signalIsControlling = Boolean(trafficLight && isTrafficLightControlling(trafficLight));
 
     if (trafficLight && signalIsControlling && intent) {
@@ -432,7 +434,7 @@ function getTurnIntent(from: TravelDirection, to: TravelDirection): TurnIntent {
   return 'uturn';
 }
 
-function buildIntentForCar(grid: Tile[][], car: Car, cars: Car[], intersectionTile: Vec2): IntersectionIntent | undefined {
+function buildIntentForCar(grid: Tile[][], car: Car, cars: Car[], intersectionTile: Vec2, spatialIndex?: CarSpatialIndex): IntersectionIntent | undefined {
   const previous = car.route[Math.max(0, car.routeIndex - 1)];
   const current = car.route[car.routeIndex];
   const next = car.route[car.routeIndex + 1];
@@ -472,7 +474,7 @@ function buildIntentForCar(grid: Tile[][], car: Car, cars: Car[], intersectionTi
     waitSeconds: Math.max(car.intersectionWaitSeconds, car.stuckSeconds),
     priorityToken: car.priorityToken || Number.MAX_SAFE_INTEGER,
     escape: Math.max(car.intersectionWaitSeconds, car.stuckSeconds) >= GRIDLOCK_ESCAPE_SECONDS,
-    exitBlocked: isExitBlocked(grid, car, cars, exitTile, exitDirection),
+    exitBlocked: isExitBlocked(grid, car, cars, exitTile, exitDirection, spatialIndex),
   };
 }
 
@@ -804,7 +806,7 @@ function isTIntersectionByKey(grid: Tile[][], key: string): boolean {
   return getNeighbors4(pos).filter((next) => isRoadType(grid[next.y]?.[next.x]?.type)).length === 3;
 }
 
-function isExitBlocked(grid: Tile[][], car: Car, cars: Car[], exitTile: Vec2 | undefined, exitDirection: TravelDirection): boolean {
+function isExitBlocked(grid: Tile[][], car: Car, cars: Car[], exitTile: Vec2 | undefined, exitDirection: TravelDirection, spatialIndex?: CarSpatialIndex): boolean {
   if (!exitTile) return false;
   const exitRoadType = getRoadType(grid, exitTile);
   const exitLane = getLaneOffset(exitDirection, exitRoadType, car.id, getOneWayDirection(grid, exitTile, exitDirection));
@@ -813,7 +815,8 @@ function isExitBlocked(grid: Tile[][], car: Car, cars: Car[], exitTile: Vec2 | u
     y: exitTile.y + exitLane.offset.y,
   };
 
-  for (const other of cars) {
+  const candidates = spatialIndex?.getCarsNearTile(exitTile.x, exitTile.y, 1) ?? cars;
+  for (const other of candidates) {
     if (other.id === car.id || other.status === 'arrived' || other.lifecyclePhase !== 'driving') continue;
     const sameTile = other.currentTileX === exitTile.x && other.currentTileY === exitTile.y;
     const nearCenter = Math.hypot(other.x - exitTile.x, other.y - exitTile.y) <= 0.58;
@@ -848,11 +851,12 @@ function isBlockingPhysicalOccupant(
   car: Car,
   cars: Car[],
   intent?: IntersectionIntent,
+  spatialIndex?: CarSpatialIndex,
 ): boolean {
   if (!control?.occupiedByCarId) return false;
   if (control.occupiedByCarId === car.id) return false;
 
-  const occupant = cars.find((other) => other.id === control.occupiedByCarId);
+  const occupant = spatialIndex?.getById(control.occupiedByCarId) ?? cars.find((other) => other.id === control.occupiedByCarId);
   if (!occupant) return false;
 
   if (intent && occupant.currentSpeed > 0.28 && isSameAxis(occupant.direction, intent.entryDirection)) {
@@ -903,14 +907,15 @@ function isTurningSoon(car: Car): boolean {
   return car.progressToNext > 0.42 && getDirection(current, next) !== getDirection(next, after);
 }
 
-function findLeaderAhead(car: Car, cars: Car[], direction: TravelDirection, laneIndex: number): { car: Car; distance: number } | undefined {
+function findLeaderAhead(car: Car, cars: Car[], direction: TravelDirection, laneIndex: number, spatialIndex?: CarSpatialIndex): { car: Car; distance: number } | undefined {
   const axis = direction === 'east' || direction === 'west' ? 'x' : 'y';
   const lineAxis = axis === 'x' ? 'y' : 'x';
   const laneLine = Math.round(car[lineAxis]);
   const scalar = travelScalar(car, direction);
   let leader: { car: Car; distance: number } | undefined;
+  const candidates = spatialIndex?.getLaneLineCandidates(direction, laneIndex, lineAxis, laneLine) ?? cars;
 
-  for (const other of cars) {
+  for (const other of candidates) {
     if (other.id === car.id || other.status === 'arrived' || other.lifecyclePhase !== 'driving') continue;
     if (other.direction !== direction || other.laneIndex !== laneIndex) continue;
     if (Math.round(other[lineAxis]) !== laneLine) continue;
@@ -931,6 +936,7 @@ function findAvenuePassingLane(
   cars: Car[],
   direction: TravelDirection,
   currentLaneIndex: number,
+  spatialIndex?: CarSpatialIndex,
 ): { offset: Vec2; laneIndex: number; laneCount: number; laneSide: -1 | 1 } | undefined {
   const alternateLaneIndex = currentLaneIndex === 0 ? 1 : 0;
   const axis = direction === 'east' || direction === 'west' ? 'x' : 'y';
@@ -938,8 +944,9 @@ function findAvenuePassingLane(
   const lane = getFixedAvenueLaneOffset(direction, alternateLaneIndex);
   const alternateLine = Math.round((axis === 'x' ? car.y + lane.offset.y : car.x + lane.offset.x));
   const scalar = travelScalar(car, direction);
+  const candidates = spatialIndex?.getLaneLineCandidates(direction, alternateLaneIndex, lineAxis, alternateLine) ?? cars;
 
-  for (const other of cars) {
+  for (const other of candidates) {
     if (other.id === car.id || other.status === 'arrived' || other.lifecyclePhase !== 'driving') continue;
     if (other.direction !== direction || other.laneIndex !== alternateLaneIndex) continue;
     if (Math.round(other[lineAxis]) !== alternateLine) continue;

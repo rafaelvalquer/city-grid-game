@@ -1,29 +1,12 @@
 import type { GameWorld } from '../engine/simulation';
 
+/**
+ * Static render invalidation now uses GameWorld's numeric render version.
+ *
+ * Previous versions rebuilt a large string by scanning the whole grid, buildings,
+ * transit stops and traffic lights on every frame. The numeric version is updated
+ * only when static map content changes, so this check stays O(1) per frame.
+ */
 export function getStaticRenderSignature(world: GameWorld, lightingKey = ''): string {
-  const parts: string[] = [`lighting:${lightingKey}`];
-
-  for (const row of world.grid) {
-    for (const tile of row) {
-      if (tile.type === 'empty') continue;
-      parts.push(`${tile.x},${tile.y}:${tile.type}:${'oneWay' in tile ? tile.oneWay ?? '' : ''}:${'buildingId' in tile ? tile.buildingId ?? '' : ''}`);
-    }
-  }
-
-  parts.push('buildings');
-  for (const building of world.buildings) {
-    parts.push(`${building.id}:${building.x},${building.y}:${building.type}:l${building.level}:c${building.connected ? 1 : 0}`);
-  }
-
-  parts.push('stops');
-  for (const stop of world.transitStops) {
-    parts.push(`${stop.id}:${stop.x},${stop.y}:${stop.accessRoad?.x ?? ''},${stop.accessRoad?.y ?? ''}`);
-  }
-
-  parts.push('lights');
-  for (const light of world.trafficLights.values()) {
-    parts.push(`${light.x},${light.y}`);
-  }
-
-  return parts.join('|');
+  return world.getStaticRenderSignature(lightingKey);
 }

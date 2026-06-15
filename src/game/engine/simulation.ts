@@ -11,6 +11,7 @@ import { CityGenerator } from '../city/cityGenerator';
 import { applyBuildingLevel, updateBuildingConnection } from '../city/buildings';
 import { findFastestPath } from '../pathfinding/pathfinder';
 import { buildIntersectionControls, computeTrafficDecision, getDirection, getLaneOffset, isIntersection } from '../systems/trafficRules';
+import { createCarSpatialIndex } from '../systems/carSpatialIndex';
 import { canPlaceRoundabout, findRoundaboutCenterForTile, getDrivableNeighbors, getRoundaboutArea, getRoundaboutRing, isLegalRoadMove, isRoundaboutCenter, isRoundaboutTile } from '../systems/roundabouts';
 import {
   createTrafficLight,
@@ -57,6 +58,7 @@ const REPEATED_REROUTE_REMOVE_COUNT = 30;
 // Isso evita carros pulando tiles, sobreposição brusca em filas e remoções repentinas por arrived/no_route.
 const FIXED_TRAFFIC_STEP_SECONDS = 1 / 30;
 const MAX_TRAFFIC_CATCH_UP_SECONDS = FIXED_TRAFFIC_STEP_SECONDS * 8;
+const SINGLE_TRAFFIC_MAP_PASS_CAR_THRESHOLD = 180;
 type RerouteOptions = {
   force?: boolean;
   reason?: string;
@@ -100,6 +102,7 @@ export class GameWorld {
   private lastHistorySampleKey = '';
   private trafficLightDebugTimers = new Map<string, number>();
   private readonly allowRoadDemolition: boolean;
+  private staticRenderVersion = 0;
 
   constructor(options: Partial<GameSetupOptions> = {}) {
     this.allowRoadDemolition = options.allowRoadDemolition ?? false;
@@ -117,6 +120,14 @@ export class GameWorld {
 
   emit(): void {
     for (const l of this.listeners) l();
+  }
+
+  getStaticRenderSignature(lightingKey = ''): string {
+    return `lighting:${lightingKey}:static:${this.staticRenderVersion}`;
+  }
+
+  private markStaticRenderDirty(): void {
+    this.staticRenderVersion = (this.staticRenderVersion + 1) % Number.MAX_SAFE_INTEGER;
   }
 
   getSnapshot(): CityStats {
@@ -285,6 +296,7 @@ export class GameWorld {
   addBuilding(building: Building): void {
     this.buildings.push(building);
     this.grid[building.y][building.x] = { x: building.x, y: building.y, type: 'building', buildingId: building.id };
+    this.markStaticRenderDirty();
   }
 
   canBuildRoadOverBuildings(): boolean {
@@ -319,7 +331,9 @@ export class GameWorld {
     this.updateTransitStops(dt);
     this.updateConnections();
     this.refreshSelectedBuilding();
-    this.updateTrafficMap();
+
+    const singleTrafficMapPass = this.cars.length >= SINGLE_TRAFFIC_MAP_PASS_CAR_THRESHOLD;
+    if (!singleTrafficMapPass) this.updateTrafficMap();
     this.updateCars(dt);
     this.updateTrafficMap();
 
@@ -363,6 +377,7 @@ export class GameWorld {
         this.grid[pos.y][pos.x] = { x: pos.x, y: pos.y, type: 'roundabout' };
       }
       this.grid[y][x] = { x, y, type: 'roundaboutCenter' };
+      this.markStaticRenderDirty();
       this.rerouteCarsAffectedBy(getRoundaboutArea({ x, y }));
       this.money -= ROAD_CONFIG.roundabout.buildCost;
       this.updateConnections();
@@ -383,6 +398,7 @@ export class GameWorld {
       const demand = this.getTrafficLightDemandForKey(x, y);
       const preferredAxis: TrafficLightAxis = demand.horizontalQueue >= demand.verticalQueue ? 'horizontal' : 'vertical';
       this.trafficLights.set(key, createTrafficLight(x, y, this.trafficLights.size, preferredAxis));
+      this.markStaticRenderDirty();
       this.prepareTrafficForNewSignal(key, x, y);
       this.money -= TRAFFIC_LIGHT_BUILD_COST;
       this.inspectAt(x, y);
@@ -410,6 +426,7 @@ export class GameWorld {
       this.nextTransitStopOrder += 1;
       this.transitStops.push(stop);
       this.grid[y][x] = { x, y, type: 'busStop', buildingId: stop.id };
+      this.markStaticRenderDirty();
       this.money -= TRANSIT_CONFIG.busStopCost;
       this.rebuildTransitLine();
       this.inspectAt(x, y);
@@ -428,6 +445,7 @@ export class GameWorld {
       const oneWay = tile.type === 'road' || tile.type === 'avenue' ? tile.oneWay : undefined;
       if (building) this.removeBuildingForRoad(building.id);
       this.grid[y][x] = { x, y, type: tool, oneWay };
+      this.markStaticRenderDirty();
       this.money -= cost;
       this.rerouteCarsAffectedBy([{ x, y }]);
       this.updateConnections();
@@ -457,6 +475,7 @@ export class GameWorld {
         this.rerouteCarsAffectedBy(getRoundaboutArea(center));
       } else {
         this.grid[y][x] = { x, y, type: 'empty' };
+        this.markStaticRenderDirty();
         this.trafficLights.delete(getTrafficLightKey(x, y));
       }
       this.money -= cost;
@@ -505,6 +524,7 @@ export class GameWorld {
         const oneWay = current.type === 'road' || current.type === 'avenue' ? current.oneWay : undefined;
         if (current.type === 'building' && current.buildingId) this.removeBuildingForRoad(current.buildingId);
         this.grid[pos.y][pos.x] = { x: pos.x, y: pos.y, type: roadType, oneWay };
+          this.markStaticRenderDirty();
       }
     }
 
@@ -537,6 +557,7 @@ export class GameWorld {
       const tile = this.grid[pos.y][pos.x];
       if (tile.oneWay !== direction) changed += 1;
       this.grid[pos.y][pos.x] = { ...tile, oneWay: direction };
+      this.markStaticRenderDirty();
     }
 
     if (changed > 0) this.rerouteCarsAfterRoadRuleChange(uniqueTiles);
@@ -555,6 +576,7 @@ export class GameWorld {
 
     const nextDirection = nextOneWayDirection(tile.oneWay);
     this.grid[y][x] = { ...tile, oneWay: nextDirection };
+    this.markStaticRenderDirty();
     this.rerouteCarsAfterRoadRuleChange([{ x, y }]);
     this.rebuildTransitLine();
     this.refreshSelectedRoad();
@@ -569,6 +591,7 @@ export class GameWorld {
     const tile = this.grid[y][x];
     if ((tile.type !== 'road' && tile.type !== 'avenue') || !tile.oneWay) return false;
     this.grid[y][x] = { ...tile, oneWay: undefined };
+    this.markStaticRenderDirty();
     this.rerouteCarsAfterRoadRuleChange([{ x, y }]);
     this.rebuildTransitLine();
     this.refreshSelectedRoad();
@@ -644,6 +667,7 @@ export class GameWorld {
     const stopId = tile?.type === 'busStop' ? tile.buildingId : undefined;
     this.transitStops = this.transitStops.filter((stop) => stop.id !== stopId);
     this.grid[y][x] = { x, y, type: 'empty' };
+    this.markStaticRenderDirty();
     this.rebuildTransitLine();
     this.selected = { kind: 'tile', x, y, type: 'empty' };
   }
@@ -652,6 +676,7 @@ export class GameWorld {
     const building = this.getBuilding(buildingId);
     if (!building) return;
     this.buildings = this.buildings.filter((candidate) => candidate.id !== buildingId);
+    this.markStaticRenderDirty();
     this.cars = this.cars.filter((car) => (
       car.vehicleType === 'bus'
       || (car.originBuildingId !== buildingId && car.destinationBuildingId !== buildingId)
@@ -928,7 +953,13 @@ export class GameWorld {
   }
 
   private updateConnections(): void {
-    this.buildings = this.buildings.map((b) => updateBuildingConnection(b, this.grid));
+    let changed = false;
+    this.buildings = this.buildings.map((building) => {
+      const next = updateBuildingConnection(building, this.grid);
+      if (next.connected !== building.connected) changed = true;
+      return next;
+    });
+    if (changed) this.markStaticRenderDirty();
   }
 
   private updateTrafficLights(dt: number): void {
@@ -1162,7 +1193,8 @@ export class GameWorld {
     const arrived: Car[] = [];
     const failed: Car[] = [];
     const drivingCars = this.cars.filter((car) => car.lifecyclePhase === 'driving');
-    const intersectionControls = buildIntersectionControls(this.grid, drivingCars);
+    const carSpatialIndex = createCarSpatialIndex(drivingCars);
+    const intersectionControls = buildIntersectionControls(this.grid, drivingCars, carSpatialIndex);
     const sortedCars = [...this.cars].sort((a, b) => this.carUpdatePriority(b) - this.carUpdatePriority(a));
 
     for (const car of sortedCars) {
@@ -1239,7 +1271,7 @@ export class GameWorld {
 
       const traffic = this.traffic.get(keyOf(car.currentTileX, car.currentTileY));
       const congestion = traffic?.congestion ?? 0;
-      const decision = computeTrafficDecision(this.grid, car, drivingCars, intersectionControls, this.trafficLights, congestion);
+      const decision = computeTrafficDecision(this.grid, car, drivingCars, intersectionControls, this.trafficLights, congestion, carSpatialIndex);
       car.desiredSpeed = decision.desiredSpeed;
       car.targetSpeed = decision.targetSpeed;
       car.laneOffset = decision.laneOffset;
@@ -1728,6 +1760,7 @@ export class GameWorld {
         ? applyBuildingLevel(building, nextLevel, this.time.getDay())
         : building
     ));
+    this.markStaticRenderDirty();
     this.refreshSelectedBuilding();
   }
 
