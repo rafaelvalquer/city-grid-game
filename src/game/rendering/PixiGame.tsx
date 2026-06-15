@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import type { Application, Container } from 'pixi.js';
 import { GameWorld } from '../engine/simulation';
+import { GAME_CONFIG } from '../config/gameConfig';
 import { useGameStore } from '../../store/gameStore';
 import { CanvasToolDock } from '../../components/CanvasToolDock';
 import { createPixiApp, safelyDestroyPixiApp } from './pixiAppLifecycle';
@@ -8,6 +9,7 @@ import { createCameraController, type CameraState } from './cameraController';
 import { connectInputController, type OneWayLineDrag, type RoadLineDrag } from './inputController';
 import { heatmapLabel } from './renderHeatmap';
 import { createRenderWorldState, renderWorld } from './renderWorld';
+import { ParticleSystem } from './particleSystem';
 
 const UI_SYNC_INTERVAL_SECONDS = 0.2;
 
@@ -21,6 +23,7 @@ export function PixiGame({ world }: { world: GameWorld }) {
   const oneWayLineDragRef = useRef<OneWayLineDrag | null>(null);
   const cameraRef = useRef<CameraState>({ x: 56, y: 42, scale: 0.75 });
   const renderStateRef = useRef(createRenderWorldState());
+  const particleSystemRef = useRef<ParticleSystem | null>(null);
   const hoverPreview = useGameStore((s) => s.hoverPreview);
   const actionFeedback = useGameStore((s) => s.actionFeedback);
   const heatmapModeUi = useGameStore((s) => s.heatmapMode);
@@ -46,12 +49,15 @@ export function PixiGame({ world }: { world: GameWorld }) {
       }
 
       stageRef.current = view.root;
+      const particles = new ParticleSystem(view.particleLabels);
+      particleSystemRef.current = particles;
       const camera = createCameraController(view.app.canvas, cameraRef.current);
       connectInputController({
         canvas: view.app.canvas,
         signal: abortController.signal,
         world,
         camera,
+        particles,
         refs: {
           isDrawingRef,
           lastTileRef,
@@ -81,7 +87,11 @@ export function PixiGame({ world }: { world: GameWorld }) {
           cameraRef.current.x,
           cameraRef.current.y,
           cameraRef.current.scale,
+          particles,
         );
+        applyParticleCamera(view.particleGraphics, view.particleLabels, cameraRef.current);
+        particles.update(dt);
+        particles.draw(view.particleGraphics, GAME_CONFIG.tileSize);
 
         uiTimer += dt;
         if (uiTimer >= UI_SYNC_INTERVAL_SECONDS) {
@@ -96,6 +106,8 @@ export function PixiGame({ world }: { world: GameWorld }) {
     return () => {
       disposed = true;
       abortController.abort();
+      particleSystemRef.current?.destroy();
+      particleSystemRef.current = null;
       if (initialized && app) {
         safelyDestroyPixiApp(app);
       }
@@ -126,4 +138,11 @@ export function PixiGame({ world }: { world: GameWorld }) {
       </div>
     </main>
   );
+}
+
+function applyParticleCamera(graphics: Container, labels: Container, camera: CameraState): void {
+  graphics.position.set(camera.x, camera.y);
+  graphics.scale.set(camera.scale);
+  labels.position.set(camera.x, camera.y);
+  labels.scale.set(camera.scale);
 }

@@ -1,7 +1,7 @@
 import type { MutableRefObject } from 'react';
 import { ROAD_CONFIG } from '../config/roadConfig';
 import { TRANSIT_CONFIG } from '../config/transitConfig';
-import type { GameWorld } from '../engine/simulation';
+import { getBuildingDemolitionCost, type GameWorld } from '../engine/simulation';
 import { inBounds, isRoadType, keyOf } from '../city/grid';
 import { isIntersection } from '../systems/trafficRules';
 import { TRAFFIC_LIGHT_BUILD_COST } from '../systems/trafficLights';
@@ -11,6 +11,7 @@ import type { RoadDirection, RoadType, Tile, Vec2 } from '../../types/city.types
 import type { Tool } from '../../types/game.types';
 import type { ActionPreview } from './renderTypes';
 import type { CameraController } from './cameraController';
+import type { ParticleSystem } from './particleSystem';
 
 export type RoadLineDrag = {
   startTile: Vec2;
@@ -36,8 +37,9 @@ export function connectInputController(params: {
   world: GameWorld;
   camera: CameraController;
   refs: InputControllerRefs;
+  particles?: ParticleSystem;
 }): void {
-  const { canvas, signal, world, camera, refs } = params;
+  const { canvas, signal, world, camera, refs, particles } = params;
 
   const detectCar = (tileX: number, tileY: number) => {
     return world.cars.find((c) => Math.abs(c.x - tileX) < 0.45 && Math.abs(c.y - tileY) < 0.45);
@@ -58,6 +60,7 @@ export function connectInputController(params: {
     }
     const preview = { ...getActionPreview(world, tileX, tileY, state.selectedTool, state.stats.money), tool: state.selectedTool };
     const didBuild = world.buildAt(tileX, tileY, state.selectedTool);
+    if (didBuild) emitActionParticles(particles, { x: tileX, y: tileY }, state.selectedTool, preview.cost);
     state.setActionFeedback(didBuild ? preview.successMessage : preview.reason ?? 'Ação indisponível neste tile.');
   };
 
@@ -111,7 +114,10 @@ export function connectInputController(params: {
       const lineTiles = getLineTiles(drag.startTile, drag.currentTile);
       const preview = getLineBuildPreview(world, lineTiles, drag.tool, state.stats.money);
       const result = world.buildRoadLine(lineTiles, drag.tool);
-      state.setActionFeedback(result.success
+      if (result.success) emitRoadLineParticles(particles, lineTiles, drag.tool, result.cost);
+      if (result.success && (result.demolished ?? 0) > 0) {
+        state.setActionFeedback(roadLineSuccessMessage(drag.tool, result.built, result.cost, result.demolished ?? 0));
+      } else state.setActionFeedback(result.success
         ? `${ROAD_CONFIG[drag.tool].label} construída: ${result.built} tiles por $ ${result.cost}.`
         : result.reason ?? preview.reason ?? 'Não foi possível construir a linha.');
       state.setHoverPreview(null);
@@ -162,6 +168,32 @@ export function connectInputController(params: {
     camera.handleWheel(event);
   }, { passive: false, signal });
 }
+
+function emitActionParticles(particles: ParticleSystem | undefined, pos: Vec2, tool: Tool, cost?: number): void {
+  if (!particles) return;
+  if (tool === 'road' || tool === 'avenue') particles.emitRoadDust(pos, tool === 'avenue' ? 12 : 8);
+  if (tool === 'trafficLight') particles.emitTrafficLightSpark(pos);
+  if (cost && cost > 0) particles.emitMoneyText(pos, -cost);
+}
+
+function emitRoadLineParticles(particles: ParticleSystem | undefined, lineTiles: Vec2[], tool: 'road' | 'avenue', cost: number): void {
+  if (!particles) return;
+  const step = Math.max(1, Math.ceil(lineTiles.length / 18));
+  for (let i = 0; i < lineTiles.length; i += step) {
+    particles.emitRoadDust(lineTiles[i], tool === 'avenue' ? 10 : 7);
+  }
+  const anchor = lineTiles[lineTiles.length - 1];
+  if (anchor && cost > 0) particles.emitMoneyText(anchor, -cost);
+}
+
+function roadLineSuccessMessage(tool: 'road' | 'avenue', built: number, cost: number, demolished: number): string {
+  const label = ROAD_CONFIG[tool].label;
+  const demolitionText = demolished > 0
+    ? ` ${demolished} prédio${demolished > 1 ? 's' : ''} demolido${demolished > 1 ? 's' : ''}.`
+    : '';
+  return `${label} construída: ${built} tiles por $ ${cost}.${demolitionText}`;
+}
+
 export function isRoadLineTool(tool: Tool): tool is 'road' | 'avenue' {
   return tool === 'road' || tool === 'avenue';
 }
@@ -186,6 +218,8 @@ export function getLineBuildPreview(world: GameWorld, tiles: Vec2[], tool: 'road
   const uniqueTiles = dedupePreviewTiles(tiles);
   const invalidTiles: Vec2[] = [];
   let buildableTiles = 0;
+  let demolishedBuildings = 0;
+  let demolitionCost = 0;
   let reason: string | undefined;
 
   for (const pos of uniqueTiles) {
@@ -196,6 +230,15 @@ export function getLineBuildPreview(world: GameWorld, tiles: Vec2[], tool: 'road
     }
 
     const tile = world.grid[pos.y][pos.x];
+    if (tile.type === 'building' && world.canBuildRoadOverBuildings()) {
+      const building = tile.buildingId ? world.getBuilding(tile.buildingId) : undefined;
+      if (building) {
+        buildableTiles += 1;
+        demolishedBuildings += 1;
+        demolitionCost += getBuildingDemolitionCost(building);
+        continue;
+      }
+    }
     if (tile.type === 'busStop') {
       invalidTiles.push(pos);
       reason ??= 'A linha passa por um ponto de ônibus.';
@@ -214,11 +257,11 @@ export function getLineBuildPreview(world: GameWorld, tiles: Vec2[], tool: 'road
     if (tile.type !== tool) buildableTiles += 1;
   }
 
-  const cost = buildableTiles * ROAD_CONFIG[tool].buildCost;
+  const cost = buildableTiles * ROAD_CONFIG[tool].buildCost + demolitionCost;
   if (!reason && buildableTiles === 0) reason = 'Essa via já existe em toda a linha.';
   if (!reason && money < cost) reason = `Faltam $ ${cost - money} para construir.`;
 
-  const label = `${tool === 'road' ? 'Construir rua' : 'Construir avenida'}: ${uniqueTiles.length} tiles`;
+  const label = `${tool === 'road' ? 'Construir rua' : 'Construir avenida'}: ${uniqueTiles.length} tiles${demolishedBuildings > 0 ? `, ${demolishedBuildings} demolições` : ''}`;
   return {
     x: uniqueTiles[uniqueTiles.length - 1]?.x ?? 0,
     y: uniqueTiles[uniqueTiles.length - 1]?.y ?? 0,
@@ -230,6 +273,7 @@ export function getLineBuildPreview(world: GameWorld, tiles: Vec2[], tool: 'road
     lineTiles: uniqueTiles,
     invalidTiles,
     buildableTiles,
+    demolishedBuildings,
     successMessage: `${tool === 'road' ? 'Rua' : 'Avenida'} construída: ${buildableTiles} tiles por $ ${cost}.`,
   };
 }
@@ -311,6 +355,23 @@ export function getActionPreview(world: GameWorld, x: number, y: number, tool: T
 
   if (tool === 'road' || tool === 'avenue') {
     const cost = ROAD_CONFIG[tool].buildCost;
+    if (tile.type === 'building' && world.canBuildRoadOverBuildings()) {
+      const building = tile.buildingId ? world.getBuilding(tile.buildingId) : undefined;
+      if (building) {
+        const demolitionCost = getBuildingDemolitionCost(building);
+        const totalCost = cost + demolitionCost;
+        if (money < totalCost) return { x, y, label: 'Dinheiro insuficiente', cost: totalCost, valid: false, reason: `Faltam $ ${totalCost - money} para demolir e construir.`, successMessage: '' };
+        return {
+          x,
+          y,
+          label: tool === 'road' ? 'Demolir e construir rua' : 'Demolir e construir avenida',
+          cost: totalCost,
+          valid: true,
+          demolishedBuildings: 1,
+          successMessage: `${tool === 'road' ? 'Rua' : 'Avenida'} construída por $ ${totalCost}. 1 prédio demolido.`,
+        };
+      }
+    }
     if (tile.type === 'busStop') return { x, y, label: 'Ponto ocupa o tile', cost, valid: false, reason: 'Remova o ponto de ônibus antes de construir uma via.', successMessage: '' };
     if (tile.type === 'building') return { x, y, label: 'Prédio ocupa o tile', cost, valid: false, reason: 'Não é possível construir sobre prédio.', successMessage: '' };
     if (isRoundaboutTile(tile) || isRoundaboutCenter(tile)) return { x, y, label: 'Rotatória ocupa o tile', cost, valid: false, reason: 'Remova a rotatória antes de construir outra via.', successMessage: '' };

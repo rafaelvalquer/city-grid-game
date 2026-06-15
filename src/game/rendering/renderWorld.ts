@@ -2,7 +2,7 @@ import type { Container, Graphics } from 'pixi.js';
 import type { HeatmapMode, HoverPreview } from '../../store/gameStore';
 import { GAME_CONFIG } from '../config/gameConfig';
 import type { GameWorld } from '../engine/simulation';
-import { isRoadType } from '../city/grid';
+import { isRoadType, keyOf } from '../city/grid';
 import { MAP_COLORS } from './visualTheme';
 import { getAtmosphere, drawAtmosphereOverlay, drawBuildingLife, drawStreetFurniture } from './renderEffects';
 import { drawBaseTile, drawLotDecoration } from './renderTerrain';
@@ -12,13 +12,22 @@ import { drawBuildingVariant } from './renderBuildings';
 import { drawCar } from './renderVehicles';
 import { getStaticRenderSignature } from './renderInvalidation';
 import { drawConstructionPreview, drawSelectedCarMarker, drawSelectedRoute, drawSelection } from './renderUiOverlays';
+import type { ParticleSystem } from './particleSystem';
 
 export type RenderWorldState = {
   staticSignature: string | null;
+  buildingConnections: Map<string, boolean> | null;
+  smokeLastByTile: Map<string, number>;
+  lastMoney: number | null;
 };
 
 export function createRenderWorldState(): RenderWorldState {
-  return { staticSignature: null };
+  return {
+    staticSignature: null,
+    buildingConnections: null,
+    smokeLastByTile: new Map(),
+    lastMoney: null,
+  };
 }
 
 export function renderWorld(
@@ -32,6 +41,7 @@ export function renderWorld(
   camX: number,
   camY: number,
   scale: number,
+  particles?: ParticleSystem,
 ): void {
   const ts = GAME_CONFIG.tileSize;
   const timeSeconds = performance.now() / 1000;
@@ -41,13 +51,14 @@ export function renderWorld(
   applyCamera(dynamicGraphics, camX, camY, scale);
   applyCamera(labels, camX, camY, scale);
 
-  const staticSignature = getStaticRenderSignature(world);
+  const staticSignature = getStaticRenderSignature(world, atmosphere.period);
   if (state.staticSignature !== staticSignature) {
     state.staticSignature = staticSignature;
     renderStaticLayer(staticGraphics, world, ts, timeSeconds, atmosphere);
   }
 
-  renderDynamicLayer(dynamicGraphics, world, heatmapMode, hoverPreview, ts, timeSeconds, atmosphere);
+  emitRenderParticles(state, world, timeSeconds, particles);
+  renderDynamicLayer(dynamicGraphics, state, world, heatmapMode, hoverPreview, ts, timeSeconds, atmosphere);
 }
 
 function applyCamera(container: Container, camX: number, camY: number, scale: number): void {
@@ -94,6 +105,7 @@ function renderStaticLayer(
 
 function renderDynamicLayer(
   graphics: Graphics,
+  state: RenderWorldState,
   world: GameWorld,
   heatmapMode: HeatmapMode,
   hoverPreview: HoverPreview | null,
@@ -107,15 +119,16 @@ function renderDynamicLayer(
     drawBusStop(graphics, world, stop.x, stop.y, ts, timeSeconds, atmosphere);
   }
 
-  drawHeatmapMode(graphics, world, heatmapMode, ts);
+  drawHeatmapMode(graphics, world, heatmapMode, ts, atmosphere);
   drawStreetFurniture(graphics, world, ts, timeSeconds, atmosphere);
   drawAtmosphereOverlay(graphics, atmosphere, heatmapMode, ts);
   drawBuildingLife(graphics, world, ts, timeSeconds, atmosphere);
+  drawDisconnectedBuildingAlerts(graphics, world, ts, timeSeconds);
   drawTrafficLights(graphics, world, ts, timeSeconds);
   drawSelectedRoute(graphics, world, ts);
 
   for (const car of world.cars) {
-    drawCar(graphics, car, world, ts, timeSeconds);
+    drawCar(graphics, car, world, ts, timeSeconds, atmosphere);
   }
 
   if (hoverPreview) drawConstructionPreview(graphics, world, hoverPreview, ts, timeSeconds);
@@ -127,4 +140,76 @@ function renderDynamicLayer(
     drawSelection(graphics, world.selected.stop.x, world.selected.stop.y, ts);
   }
   drawSelectedCarMarker(graphics, world, ts);
+  pruneSmokeHistory(state, timeSeconds);
+}
+
+function emitRenderParticles(state: RenderWorldState, world: GameWorld, timeSeconds: number, particles?: ParticleSystem): void {
+  if (!particles) {
+    syncRenderHistory(state, world);
+    return;
+  }
+
+  if (!state.buildingConnections) {
+    state.buildingConnections = new Map(world.buildings.map((building) => [building.id, building.connected]));
+  } else {
+    for (const building of world.buildings) {
+      const wasConnected = state.buildingConnections.get(building.id);
+      if (wasConnected === false && building.connected) {
+        particles.emitConnectionPulse({ x: building.x, y: building.y });
+      }
+      state.buildingConnections.set(building.id, building.connected);
+    }
+  }
+
+  for (const traffic of world.traffic.values()) {
+    if (traffic.congestion < 1.35) continue;
+    const key = keyOf(traffic.x, traffic.y);
+    const lastSmoke = state.smokeLastByTile.get(key) ?? -Infinity;
+    if (timeSeconds - lastSmoke < 1.15) continue;
+    state.smokeLastByTile.set(key, timeSeconds);
+    particles.emitCongestionSmoke(traffic);
+  }
+
+  const money = Math.floor(world.money);
+  if (state.lastMoney !== null && money > state.lastMoney) {
+    const anchor = moneyParticleAnchor(world);
+    particles.emitMoneyText(anchor, money - state.lastMoney);
+  }
+  state.lastMoney = money;
+}
+
+function syncRenderHistory(state: RenderWorldState, world: GameWorld): void {
+  if (!state.buildingConnections) {
+    state.buildingConnections = new Map(world.buildings.map((building) => [building.id, building.connected]));
+    state.lastMoney = Math.floor(world.money);
+    return;
+  }
+  for (const building of world.buildings) {
+    state.buildingConnections.set(building.id, building.connected);
+  }
+  state.lastMoney = Math.floor(world.money);
+}
+
+function moneyParticleAnchor(world: GameWorld): { x: number; y: number } {
+  const activeBuilding = world.buildings.find((building) => building.connected && (building.type === 'shop' || building.type === 'office'))
+    ?? world.buildings.find((building) => building.connected);
+  if (activeBuilding) return { x: activeBuilding.x, y: activeBuilding.y };
+  return { x: Math.floor(GAME_CONFIG.gridWidth / 2), y: Math.floor(GAME_CONFIG.gridHeight / 2) };
+}
+
+function drawDisconnectedBuildingAlerts(graphics: Graphics, world: GameWorld, ts: number, timeSeconds: number): void {
+  const pulse = 0.5 + Math.sin(timeSeconds * 3.8) * 0.5;
+  for (const building of world.buildings) {
+    if (building.connected) continue;
+    const px = building.x * ts;
+    const py = building.y * ts;
+    graphics.roundRect(px + 2, py + 2, ts - 4, ts - 4, 7).stroke({ color: MAP_COLORS.disconnected, width: 1.5 + pulse * 1.2, alpha: 0.28 + pulse * 0.36 });
+    graphics.circle(px + ts - 5, py + 5, 4 + pulse * 1.5).fill({ color: MAP_COLORS.disconnected, alpha: 0.16 + pulse * 0.22 });
+  }
+}
+
+function pruneSmokeHistory(state: RenderWorldState, timeSeconds: number): void {
+  for (const [key, lastSmoke] of state.smokeLastByTile) {
+    if (timeSeconds - lastSmoke > 8) state.smokeLastByTile.delete(key);
+  }
 }

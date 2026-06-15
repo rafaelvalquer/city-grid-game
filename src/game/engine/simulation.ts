@@ -11,7 +11,7 @@ import { CityGenerator } from '../city/cityGenerator';
 import { applyBuildingLevel, updateBuildingConnection } from '../city/buildings';
 import { findFastestPath } from '../pathfinding/pathfinder';
 import { buildIntersectionControls, computeTrafficDecision, getDirection, getLaneOffset, isIntersection } from '../systems/trafficRules';
-import { canPlaceRoundabout, findRoundaboutCenterForTile, getDrivableNeighbors, getRoundaboutArea, getRoundaboutRing, isRoundaboutCenter, isRoundaboutTile } from '../systems/roundabouts';
+import { canPlaceRoundabout, findRoundaboutCenterForTile, getDrivableNeighbors, getRoundaboutArea, getRoundaboutRing, isLegalRoadMove, isRoundaboutCenter, isRoundaboutTile } from '../systems/roundabouts';
 import {
   createTrafficLight,
   EMPTY_TRAFFIC_LIGHT_DEMAND,
@@ -25,6 +25,11 @@ import {
 import { TimeSystem } from './timeSystem';
 import { chooseTrip } from '../agents/tripGenerator';
 
+const BUILDING_DEMOLITION_COST: Record<Building['type'], number> = {
+  house: 20,
+  shop: 35,
+  office: 50,
+};
 const SIGNAL_INSTALL_GRACE_SECONDS = 5.5;
 const REROUTE_STUCK_SECONDS = 8.5;
 const REROUTE_FORCE_SECONDS = 14;
@@ -41,6 +46,7 @@ const BUILDING_UPGRADE_MIN_SCORE = 3.2;
 const CAR_SPAWN_EXIT_SECONDS = 0.65;
 const CAR_DESTINATION_ENTRY_SECONDS = 0.75;
 const ROAD_RULE_REROUTE_COOLDOWN_SECONDS = 1.2;
+const ROAD_RULE_NO_ROUTE_SECONDS = 12;
 const IMMOBILE_REROUTE_SECONDS = 8;
 const IMMOBILE_ESCAPE_SECONDS = 20;
 const IMMOBILE_REMOVE_SECONDS = 45;
@@ -49,6 +55,8 @@ type RerouteOptions = {
   force?: boolean;
   reason?: string;
   allowNeighborFallback?: boolean;
+  cooldownSeconds?: number;
+  stopBeforeMoving?: boolean;
 };
 
 export class GameWorld {
@@ -85,8 +93,10 @@ export class GameWorld {
   private nextTransitStopOrder = 1;
   private lastHistorySampleKey = '';
   private trafficLightDebugTimers = new Map<string, number>();
+  private readonly allowRoadDemolition: boolean;
 
   constructor(options: Partial<GameSetupOptions> = {}) {
+    this.allowRoadDemolition = options.allowRoadDemolition ?? false;
     this.generator = new CityGenerator(options);
     this.seedInitialCity();
     this.updateConnections();
@@ -271,6 +281,10 @@ export class GameWorld {
     this.grid[building.y][building.x] = { x: building.x, y: building.y, type: 'building', buildingId: building.id };
   }
 
+  canBuildRoadOverBuildings(): boolean {
+    return this.allowRoadDemolition;
+  }
+
   update(deltaSeconds: number, speed: number, paused: boolean): void {
     if (paused || speed === 0) return;
     const dt = Math.min(0.08, deltaSeconds) * speed;
@@ -384,14 +398,18 @@ export class GameWorld {
     }
 
     if (tool === 'road' || tool === 'avenue') {
-      if (tile.type === 'building' || tile.type === 'busStop') return false;
+      if (tile.type === 'busStop') return false;
       if (isRoundaboutTile(tile) || isRoundaboutCenter(tile)) return false;
-      const cost = ROAD_CONFIG[tool].buildCost;
-      if (this.money < cost) return false;
       if (tile.type === tool) return false;
+      const building = tile.type === 'building' && tile.buildingId ? this.getBuilding(tile.buildingId) : undefined;
+      if (tile.type === 'building' && (!this.allowRoadDemolition || !building)) return false;
+      const cost = ROAD_CONFIG[tool].buildCost + (building ? getBuildingDemolitionCost(building) : 0);
+      if (this.money < cost) return false;
       const oneWay = tile.type === 'road' || tile.type === 'avenue' ? tile.oneWay : undefined;
+      if (building) this.removeBuildingForRoad(building.id);
       this.grid[y][x] = { x, y, type: tool, oneWay };
       this.money -= cost;
+      this.rerouteCarsAffectedBy([{ x, y }]);
       this.updateConnections();
       this.rebuildTransitLine();
       this.emit();
@@ -431,14 +449,25 @@ export class GameWorld {
     return false;
   }
 
-  buildRoadLine(tiles: Vec2[], roadType: 'road' | 'avenue'): { success: boolean; built: number; cost: number; reason?: string } {
+  buildRoadLine(tiles: Vec2[], roadType: 'road' | 'avenue'): { success: boolean; built: number; cost: number; demolished?: number; reason?: string } {
     const uniqueTiles = dedupeTiles(tiles);
     if (!uniqueTiles.length) return { success: false, built: 0, cost: 0, reason: 'Nenhum tile selecionado.' };
 
     let built = 0;
+    let demolished = 0;
+    let demolitionCost = 0;
     for (const pos of uniqueTiles) {
       if (!inBounds(pos.x, pos.y)) return { success: false, built: 0, cost: 0, reason: 'A linha sai do mapa.' };
       const tile = this.grid[pos.y][pos.x];
+      if (tile.type === 'building' && this.allowRoadDemolition) {
+        const building = tile.buildingId ? this.getBuilding(tile.buildingId) : undefined;
+        if (building) {
+          built += 1;
+          demolished += 1;
+          demolitionCost += getBuildingDemolitionCost(building);
+          continue;
+        }
+      }
       if (tile.type === 'busStop') return { success: false, built: 0, cost: 0, reason: 'A linha passa por um ponto de ônibus.' };
       if (tile.type === 'building') return { success: false, built: 0, cost: 0, reason: 'A linha passa por um prédio.' };
       if (isRoundaboutTile(tile) || isRoundaboutCenter(tile)) return { success: false, built: 0, cost: 0, reason: 'A linha passa por uma rotatória.' };
@@ -447,13 +476,14 @@ export class GameWorld {
 
     if (built === 0) return { success: false, built: 0, cost: 0, reason: 'Essa via já existe em toda a linha.' };
 
-    const cost = built * ROAD_CONFIG[roadType].buildCost;
+    const cost = built * ROAD_CONFIG[roadType].buildCost + demolitionCost;
     if (this.money < cost) return { success: false, built, cost, reason: `Faltam $ ${cost - this.money} para construir.` };
 
     for (const pos of uniqueTiles) {
       if (this.grid[pos.y][pos.x].type !== roadType) {
         const current = this.grid[pos.y][pos.x];
         const oneWay = current.type === 'road' || current.type === 'avenue' ? current.oneWay : undefined;
+        if (current.type === 'building' && current.buildingId) this.removeBuildingForRoad(current.buildingId);
         this.grid[pos.y][pos.x] = { x: pos.x, y: pos.y, type: roadType, oneWay };
       }
     }
@@ -467,7 +497,7 @@ export class GameWorld {
     this.updateConnections();
     this.rebuildTransitLine();
     this.emit();
-    return { success: true, built, cost };
+    return { success: true, built, cost, demolished };
   }
 
   setOneWayLine(tiles: Vec2[], direction: RoadDirection): { success: boolean; changed: number; reason?: string } {
@@ -596,6 +626,22 @@ export class GameWorld {
     this.grid[y][x] = { x, y, type: 'empty' };
     this.rebuildTransitLine();
     this.selected = { kind: 'tile', x, y, type: 'empty' };
+  }
+
+  private removeBuildingForRoad(buildingId: string): void {
+    const building = this.getBuilding(buildingId);
+    if (!building) return;
+    this.buildings = this.buildings.filter((candidate) => candidate.id !== buildingId);
+    this.cars = this.cars.filter((car) => (
+      car.vehicleType === 'bus'
+      || (car.originBuildingId !== buildingId && car.destinationBuildingId !== buildingId)
+    ));
+    if (this.selected.kind === 'building' && this.selected.building.id === buildingId) {
+      this.selected = { kind: 'tile', x: building.x, y: building.y, type: 'empty' };
+    }
+    if (this.selected.kind === 'car' && !this.getCar(this.selected.carId)) {
+      this.selected = { kind: 'none' };
+    }
   }
 
   private rebuildTransitLine(): void {
@@ -1154,8 +1200,18 @@ export class GameWorld {
             force: true,
             reason: 'Mão única alterada: rota recalculada',
             allowNeighborFallback: true,
+            cooldownSeconds: ROAD_RULE_REROUTE_COOLDOWN_SECONDS,
+            stopBeforeMoving: false,
           });
         if (!rerouted) {
+          car.stuckSeconds += dt;
+          car.immobileSeconds += dt;
+          if (car.stuckSeconds >= ROAD_RULE_NO_ROUTE_SECONDS) {
+            car.status = 'no_route';
+            car.lastRerouteReason = 'Sem rota após mudança de mão única';
+            failed.push(car);
+            continue;
+          }
           this.holdCarForRoadRuleReroute(car, 'Mão única alterada: aguardando rota válida');
           continue;
         }
@@ -1396,6 +1452,7 @@ export class GameWorld {
 
     const trafficForReroute = this.buildRerouteTraffic(car);
     let newRoute = findFastestPath(this.grid, trafficForReroute, start, destination);
+    if (!isRouteLegal(this.grid, newRoute)) newRoute = [];
     if (newRoute.length < 2 && options.allowNeighborFallback) {
       newRoute = this.findBestFallbackRouteFromLegalNeighbor(start, destination, trafficForReroute);
     }
@@ -1413,8 +1470,8 @@ export class GameWorld {
 
     this.applyRouteToCar(car, newRoute, {
       reason: options.reason ?? (newScore < oldScore ? 'Rota alternativa mais livre' : 'Destravamento por espera prolongada'),
-      cooldownSeconds: options.force ? ROAD_RULE_REROUTE_COOLDOWN_SECONDS : REROUTE_COOLDOWN_SECONDS,
-      stopBeforeMoving: Boolean(options.force),
+      cooldownSeconds: options.cooldownSeconds ?? (options.force ? ROAD_RULE_REROUTE_COOLDOWN_SECONDS : REROUTE_COOLDOWN_SECONDS),
+      stopBeforeMoving: options.stopBeforeMoving ?? Boolean(options.force),
     });
     return true;
   }
@@ -1428,6 +1485,7 @@ export class GameWorld {
       const routeFromNeighbor = findFastestPath(this.grid, traffic, next, destination);
       if (!routeFromNeighbor.length) continue;
       const candidate = [start, ...routeFromNeighbor];
+      if (!isRouteLegal(this.grid, candidate)) continue;
       const cost = estimateRouteCost(this.grid, traffic, candidate);
       if (cost < bestCost) {
         bestCost = cost;
@@ -1504,6 +1562,8 @@ export class GameWorld {
         force: true,
         reason: 'Mão única alterada: rota recalculada',
         allowNeighborFallback: isOnChangedTile || nextMoveBecameIllegal,
+        cooldownSeconds: ROAD_RULE_REROUTE_COOLDOWN_SECONDS,
+        stopBeforeMoving: false,
       });
 
       if (!rerouted && nextMoveBecameIllegal) {
@@ -1739,6 +1799,10 @@ export class GameWorld {
   }
 }
 
+export function getBuildingDemolitionCost(building: Building): number {
+  return BUILDING_DEMOLITION_COST[building.type] * building.level;
+}
+
 function applySmoothSpeed(car: Car, targetSpeed: number, dt: number, hardStop: boolean): void {
   if (hardStop) {
     car.currentSpeed = 0;
@@ -1788,9 +1852,12 @@ function estimateRouteCost(grid: Tile[][], traffic: Map<string, TrafficCell>, ro
   return total;
 }
 
-function isLegalRoadMove(grid: Tile[][], from: Vec2, to: Vec2): boolean {
-  if (from.x === to.x && from.y === to.y) return false;
-  return getDrivableNeighbors(grid, from).some((next) => next.x === to.x && next.y === to.y);
+function isRouteLegal(grid: Tile[][], route: Vec2[]): boolean {
+  if (route.length < 2) return false;
+  for (let index = 0; index < route.length - 1; index += 1) {
+    if (!isLegalRoadMove(grid, route[index], route[index + 1])) return false;
+  }
+  return true;
 }
 
 function routeSignature(route: Vec2[]): string {

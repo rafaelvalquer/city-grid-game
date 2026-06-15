@@ -6,6 +6,8 @@ export type PixiWorldView = {
   root: Container;
   staticGraphics: Graphics;
   dynamicGraphics: Graphics;
+  particleGraphics: Graphics;
+  particleLabels: Container;
   labels: Container;
 };
 
@@ -19,12 +21,16 @@ export async function createPixiApp(hostElement: HTMLDivElement, app = new Appli
 
   const staticGraphics = new Graphics();
   const dynamicGraphics = new Graphics();
+  const particleGraphics = new Graphics();
+  const particleLabels = new Container();
   const labels = new Container();
   root.addChild(staticGraphics);
   root.addChild(dynamicGraphics);
+  root.addChild(particleGraphics);
+  root.addChild(particleLabels);
   root.addChild(labels);
 
-  return { app, root, staticGraphics, dynamicGraphics, labels };
+  return { app, root, staticGraphics, dynamicGraphics, particleGraphics, particleLabels, labels };
 }
 
 export function safelyDestroyPixiApp(app: Application): void {

@@ -12,6 +12,19 @@ import type { Atmosphere } from './renderTypes';
 import { SIGNAL_GREEN, SIGNAL_OFF, SIGNAL_RED, SIGNAL_YELLOW } from './renderTypes';
 import { passengerGroupCount } from './renderEffects';
 import { directionAngle, hash2, idPhase, normalizeVec, pulse } from './renderUtils';
+
+type RoadConnections = Record<RoadDirection, boolean>;
+type RoadAutoTileShape = 'isolated' | 'deadEnd' | 'straight' | 'corner' | 'tee' | 'cross' | 'roundabout';
+
+type RoadAutoTile = {
+  shape: RoadAutoTileShape;
+  connections: RoadConnections;
+  directions: RoadDirection[];
+  count: number;
+  horizontal: boolean;
+  vertical: boolean;
+};
+
 export function drawBusStop(graphics: Graphics, world: GameWorld, x: number, y: number, ts: number, timeSeconds: number, atmosphere: Atmosphere): void {
   const stop = world.transitStops.find((candidate) => candidate.x === x && candidate.y === y);
   const px = x * ts;
@@ -102,24 +115,22 @@ export function drawRoad(graphics: Graphics, grid: Tile[][], x: number, y: numbe
   const halfRoad = roadW / 2;
   const halfWalk = walkW / 2;
   const center = ts / 2;
-  const neighbors = roadNeighbors(grid, x, y);
+  const autoTile = getRoadAutoTileShape(grid, x, y, type);
+  const { connections } = autoTile;
 
-  drawRoadConnectors(graphics, px + 2, py + 3, ts, halfWalk, MAP_COLORS.curbShadow, neighbors);
-  graphics.circle(px + center + 2, py + center + 3, halfWalk).fill(MAP_COLORS.curbShadow);
+  drawRoadShapeLayer(graphics, px + 2, py + 3, ts, halfWalk, MAP_COLORS.curbShadow, autoTile);
 
-  drawRoadConnectors(graphics, px, py, ts, halfWalk, MAP_COLORS.sidewalk, neighbors);
-  graphics.circle(px + center, py + center, halfWalk).fill(MAP_COLORS.sidewalk);
+  drawRoadShapeLayer(graphics, px, py, ts, halfWalk, MAP_COLORS.sidewalk, autoTile);
 
-  drawRoadConnectors(graphics, px + 1, py + 2, ts, halfRoad, MAP_COLORS.shadow, neighbors);
-  graphics.circle(px + center + 1, py + center + 2, halfRoad).fill({ color: MAP_COLORS.shadow, alpha: 0.24 });
+  drawRoadShapeLayer(graphics, px + 1, py + 2, ts, halfRoad, MAP_COLORS.shadow, autoTile, 0.24);
 
-  drawRoadConnectors(graphics, px, py, ts, halfRoad, roadColor, neighbors);
-  graphics.circle(px + center, py + center, halfRoad).fill(roadColor).stroke({ color: edgeColor, width: 1, alpha: 0.75 });
+  drawRoadShapeLayer(graphics, px, py, ts, halfRoad, roadColor, autoTile);
+  drawRoadOutline(graphics, px, py, ts, halfRoad, edgeColor, autoTile);
 
   if (isRoundabout) {
     drawRoundaboutMarkings(graphics, grid, x, y, ts);
   } else {
-    drawLaneMarkings(graphics, px, py, ts, isAvenue, neighbors, grid[y]?.[x]?.oneWay);
+    drawLaneMarkings(graphics, px, py, ts, isAvenue, autoTile, grid[y]?.[x]?.oneWay);
   }
 }
 
@@ -174,7 +185,9 @@ export function drawRoadSignage(graphics: Graphics, world: GameWorld, x: number,
   const px = x * ts;
   const py = y * ts;
   const center = ts / 2;
-  const neighbors = roadNeighbors(world.grid, x, y);
+  const autoTile = getRoadAutoTileShape(world.grid, x, y, world.grid[y][x].type as RoadType);
+  if (autoTile.shape !== 'tee' && autoTile.shape !== 'cross') return;
+  const neighbors = autoTile.connections;
   const markColor = MAP_COLORS.laneSoft;
 
   drawIntersectionBox(graphics, px, py, ts);
@@ -278,7 +291,7 @@ export function signalColor(signal: 'green' | 'yellow' | 'red'): number {
 }
 
 
-export function roadNeighbors(grid: Tile[][], x: number, y: number): Record<'north' | 'south' | 'east' | 'west', boolean> {
+export function roadNeighbors(grid: Tile[][], x: number, y: number): RoadConnections {
   const hasRoad = (tx: number, ty: number) => isRoadType(grid[ty]?.[tx]?.type);
   return {
     north: hasRoad(x, y - 1),
@@ -286,6 +299,32 @@ export function roadNeighbors(grid: Tile[][], x: number, y: number): Record<'nor
     east: hasRoad(x + 1, y),
     west: hasRoad(x - 1, y),
   };
+}
+
+
+export function getRoadAutoTileShape(grid: Tile[][], x: number, y: number, type: RoadType): RoadAutoTile {
+  const connections = type === 'roundabout'
+    ? roadNeighbors(grid, x, y)
+    : roadNeighbors(grid, x, y);
+  const directions = connectedDirections(connections);
+  const count = directions.length;
+  const horizontal = connections.east || connections.west;
+  const vertical = connections.north || connections.south;
+  let shape: RoadAutoTileShape = 'isolated';
+
+  if (type === 'roundabout') shape = 'roundabout';
+  else if (count === 0) shape = 'isolated';
+  else if (count === 1) shape = 'deadEnd';
+  else if (count === 2) shape = horizontal && vertical ? 'corner' : 'straight';
+  else if (count === 3) shape = 'tee';
+  else shape = 'cross';
+
+  return { shape, connections, directions, count, horizontal, vertical };
+}
+
+
+export function connectedDirections(connections: RoadConnections): RoadDirection[] {
+  return (['north', 'south', 'east', 'west'] as RoadDirection[]).filter((direction) => connections[direction]);
 }
 
 
@@ -306,20 +345,93 @@ export function drawRoadConnectors(
 }
 
 
+export function drawRoadShapeLayer(
+  graphics: Graphics,
+  px: number,
+  py: number,
+  ts: number,
+  halfWidth: number,
+  color: number,
+  autoTile: RoadAutoTile,
+  alpha = 1,
+): void {
+  const center = ts / 2;
+  const width = halfWidth * 2;
+  const fill = alpha === 1 ? color : { color, alpha };
+  const cornerRadius = Math.min(8, halfWidth * 0.55);
+  const centerInset = center - halfWidth;
+
+  if (autoTile.shape === 'isolated') {
+    graphics.roundRect(px + centerInset, py + centerInset, width, width, cornerRadius).fill(fill);
+    return;
+  }
+
+  if (autoTile.connections.west) graphics.rect(px, py + center - halfWidth, center, width).fill(fill);
+  if (autoTile.connections.east) graphics.rect(px + center, py + center - halfWidth, center, width).fill(fill);
+  if (autoTile.connections.north) graphics.rect(px + center - halfWidth, py, width, center).fill(fill);
+  if (autoTile.connections.south) graphics.rect(px + center - halfWidth, py + center, width, center).fill(fill);
+
+  if (autoTile.shape === 'deadEnd') {
+    const direction = autoTile.directions[0];
+    const cap = halfWidth * 0.5;
+    if (direction === 'west') graphics.roundRect(px + center - halfWidth, py + center - halfWidth, width + cap, width, cornerRadius).fill(fill);
+    if (direction === 'east') graphics.roundRect(px + center - cap, py + center - halfWidth, width + cap, width, cornerRadius).fill(fill);
+    if (direction === 'north') graphics.roundRect(px + center - halfWidth, py + center - halfWidth, width, width + cap, cornerRadius).fill(fill);
+    if (direction === 'south') graphics.roundRect(px + center - halfWidth, py + center - cap, width, width + cap, cornerRadius).fill(fill);
+    return;
+  }
+
+  const centerRadius = autoTile.shape === 'corner' ? cornerRadius : Math.min(5, cornerRadius);
+  graphics.roundRect(px + centerInset, py + centerInset, width, width, centerRadius).fill(fill);
+
+  if (autoTile.shape === 'tee' || autoTile.shape === 'cross') {
+    graphics.roundRect(px + centerInset - 1, py + centerInset - 1, width + 2, width + 2, 4).fill(fill);
+  }
+}
+
+
+export function drawRoadOutline(
+  graphics: Graphics,
+  px: number,
+  py: number,
+  ts: number,
+  halfWidth: number,
+  edgeColor: number,
+  autoTile: RoadAutoTile,
+): void {
+  const center = ts / 2;
+  const width = halfWidth * 2;
+  const inset = center - halfWidth;
+  const alpha = autoTile.shape === 'straight' ? 0.46 : 0.62;
+  graphics.roundRect(px + inset, py + inset, width, width, Math.min(7, halfWidth * 0.45))
+    .stroke({ color: edgeColor, width: 1, alpha });
+
+  for (const direction of autoTile.directions) {
+    if (direction === 'west') graphics.moveTo(px, py + center - halfWidth).lineTo(px + center, py + center - halfWidth).stroke({ color: edgeColor, width: 1, alpha: 0.36 });
+    if (direction === 'east') graphics.moveTo(px + center, py + center - halfWidth).lineTo(px + ts, py + center - halfWidth).stroke({ color: edgeColor, width: 1, alpha: 0.36 });
+    if (direction === 'north') graphics.moveTo(px + center - halfWidth, py).lineTo(px + center - halfWidth, py + center).stroke({ color: edgeColor, width: 1, alpha: 0.36 });
+    if (direction === 'south') graphics.moveTo(px + center - halfWidth, py + center).lineTo(px + center - halfWidth, py + ts).stroke({ color: edgeColor, width: 1, alpha: 0.36 });
+  }
+}
+
+
 export function drawLaneMarkings(
   graphics: Graphics,
   px: number,
   py: number,
   ts: number,
   isAvenue: boolean,
-  neighbors: Record<'north' | 'south' | 'east' | 'west', boolean>,
+  autoTile: RoadAutoTile,
   oneWayDirection?: RoadDirection,
 ): void {
   const oneWayHorizontal = oneWayDirection === 'east' || oneWayDirection === 'west';
   const oneWayVertical = oneWayDirection === 'north' || oneWayDirection === 'south';
-  const horizontal = oneWayDirection ? oneWayHorizontal : neighbors.east || neighbors.west;
-  const vertical = oneWayDirection ? oneWayVertical : neighbors.north || neighbors.south;
+  const horizontal = oneWayDirection ? oneWayHorizontal : autoTile.horizontal;
+  const vertical = oneWayDirection ? oneWayVertical : autoTile.vertical;
   const center = ts / 2;
+  const hasTrueHorizontalSpan = autoTile.connections.east && autoTile.connections.west;
+  const hasTrueVerticalSpan = autoTile.connections.north && autoTile.connections.south;
+
   if (oneWayDirection) {
     const offsets = isAvenue ? [-10, 0, 10] : [0];
     for (const offset of offsets) {
@@ -328,16 +440,38 @@ export function drawLaneMarkings(
     }
     return;
   }
-  if (horizontal) drawDashedLine(graphics, px + 5, py + center - 1, ts - 10, true, MAP_COLORS.lane);
-  if (vertical) drawDashedLine(graphics, px + center - 1, py + 5, ts - 10, false, MAP_COLORS.lane);
-  if (isAvenue && horizontal) {
+  if (hasTrueHorizontalSpan) drawDashedLine(graphics, px + 5, py + center - 1, ts - 10, true, MAP_COLORS.lane);
+  else if (horizontal) drawDirectionalLaneSegments(graphics, px, py, ts, autoTile, true, MAP_COLORS.lane);
+
+  if (hasTrueVerticalSpan) drawDashedLine(graphics, px + center - 1, py + 5, ts - 10, false, MAP_COLORS.lane);
+  else if (vertical) drawDirectionalLaneSegments(graphics, px, py, ts, autoTile, false, MAP_COLORS.lane);
+
+  if (isAvenue && hasTrueHorizontalSpan) {
     drawDashedLine(graphics, px + 6, py + center - 11, ts - 12, true, MAP_COLORS.laneSoft, 0.52);
     drawDashedLine(graphics, px + 6, py + center + 9, ts - 12, true, MAP_COLORS.laneSoft, 0.52);
   }
-  if (isAvenue && vertical) {
+  if (isAvenue && hasTrueVerticalSpan) {
     drawDashedLine(graphics, px + center - 11, py + 6, ts - 12, false, MAP_COLORS.laneSoft, 0.52);
     drawDashedLine(graphics, px + center + 9, py + 6, ts - 12, false, MAP_COLORS.laneSoft, 0.52);
   }
+}
+
+
+export function drawDirectionalLaneSegments(
+  graphics: Graphics,
+  px: number,
+  py: number,
+  ts: number,
+  autoTile: RoadAutoTile,
+  horizontal: boolean,
+  color: number,
+): void {
+  const center = ts / 2;
+  const alpha = autoTile.shape === 'deadEnd' ? 0.5 : 0.62;
+  if (horizontal && autoTile.connections.west) drawDashedLine(graphics, px + 6, py + center - 1, center - 8, true, color, alpha);
+  if (horizontal && autoTile.connections.east) drawDashedLine(graphics, px + center + 2, py + center - 1, center - 8, true, color, alpha);
+  if (!horizontal && autoTile.connections.north) drawDashedLine(graphics, px + center - 1, py + 6, center - 8, false, color, alpha);
+  if (!horizontal && autoTile.connections.south) drawDashedLine(graphics, px + center - 1, py + center + 2, center - 8, false, color, alpha);
 }
 
 

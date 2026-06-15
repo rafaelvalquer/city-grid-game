@@ -1,7 +1,7 @@
 import type { GameWorld } from '../engine/simulation';
 
-export function getStaticRenderSignature(world: GameWorld): string {
-  const parts: string[] = [];
+export function getStaticRenderSignature(world: GameWorld, lightingKey = ''): string {
+  const parts: string[] = [`lighting:${lightingKey}`];
 
   for (const row of world.grid) {
     for (const tile of row) {

@@ -453,6 +453,174 @@ button:focus-visible {
 .spawn-preview.gridBlocks b:nth-child(8) { left: 52px; top: 52px; }
 .spawn-preview.gridBlocks b:nth-child(9) { left: 8px; top: 52px; }
 
+.demolition-setting-card {
+  width: 100%;
+  min-height: 104px;
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr) 42px;
+  align-items: center;
+  gap: 12px;
+  padding: 11px;
+  border: 1px solid rgba(150, 167, 189, 0.18);
+  border-radius: 10px;
+  background: rgba(17, 29, 47, 0.62);
+  color: #dcecf8;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 140ms ease, border-color 140ms ease, background 140ms ease;
+}
+
+.demolition-setting-card:hover {
+  transform: translateY(-1px);
+  border-color: rgba(92, 200, 255, 0.36);
+  background: rgba(17, 38, 60, 0.8);
+}
+
+.demolition-setting-card.selected {
+  border-color: rgba(53, 208, 127, 0.72);
+  background: rgba(53, 208, 127, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(53, 208, 127, 0.16);
+}
+
+.demolition-setting-card strong,
+.demolition-setting-card small {
+  display: block;
+}
+
+.demolition-setting-card strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+  color: #f3fbff;
+  font-size: 13px;
+}
+
+.demolition-setting-card small {
+  color: #9fb3c6;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.setting-toggle {
+  justify-self: end;
+  position: relative;
+  width: 38px;
+  height: 22px;
+  border-radius: 999px;
+  background: rgba(150, 167, 189, 0.22);
+  box-shadow: inset 0 0 0 1px rgba(150, 167, 189, 0.18);
+}
+
+.setting-toggle::after {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #dcecf8;
+  transition: transform 140ms ease, background 140ms ease;
+}
+
+.demolition-setting-card.selected .setting-toggle {
+  background: rgba(53, 208, 127, 0.42);
+}
+
+.demolition-setting-card.selected .setting-toggle::after {
+  transform: translateX(16px);
+  background: #35d07f;
+}
+
+.demolition-preview {
+  position: relative;
+  width: 72px;
+  height: 72px;
+  display: block;
+  overflow: hidden;
+  border-radius: 9px;
+  background:
+    linear-gradient(rgba(150, 167, 189, 0.11) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(150, 167, 189, 0.1) 1px, transparent 1px),
+    rgba(8, 17, 30, 0.7);
+  background-size: 18px 18px;
+}
+
+.demolition-preview b {
+  position: absolute;
+  display: block;
+}
+
+.demolition-building {
+  left: 11px;
+  top: 12px;
+  width: 22px;
+  height: 28px;
+  border-radius: 5px;
+  background: linear-gradient(135deg, #ffbd4a, #ff7a4f);
+  box-shadow: 0 7px 0 rgba(0, 0, 0, 0.18);
+}
+
+.demolition-building::before,
+.demolition-building::after {
+  content: "";
+  position: absolute;
+  left: 5px;
+  width: 12px;
+  height: 3px;
+  border-radius: 1px;
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.demolition-building::before { top: 7px; }
+.demolition-building::after { top: 15px; }
+
+.demolition-road {
+  left: 28px;
+  top: 37px;
+  width: 56px;
+  height: 16px;
+  border-radius: 999px;
+  background:
+    linear-gradient(90deg, transparent 46%, rgba(244, 197, 66, 0.86) 46%, rgba(244, 197, 66, 0.86) 54%, transparent 54%),
+    #34415a;
+  transform: rotate(-24deg);
+  box-shadow: inset 0 0 0 3px rgba(255, 255, 255, 0.08);
+}
+
+.demolition-crack {
+  width: 15px;
+  height: 3px;
+  border-radius: 999px;
+  background: #f26464;
+  box-shadow: 0 0 10px rgba(242, 100, 100, 0.45);
+}
+
+.demolition-crack.one {
+  left: 24px;
+  top: 25px;
+  transform: rotate(-35deg);
+}
+
+.demolition-crack.two {
+  left: 18px;
+  top: 42px;
+  transform: rotate(26deg);
+}
+
+.demolition-cost {
+  right: 8px;
+  top: 8px;
+  padding: 2px 4px;
+  border-radius: 6px;
+  background: rgba(242, 100, 100, 0.18);
+  color: #ff9aa3;
+  font-size: 10px;
+  font-weight: 900;
+  font-style: normal;
+}
+
 .menu-settings-actions {
   width: 100%;
   display: flex;
@@ -1981,6 +2149,21 @@ h3 {
   .spawn-preview {
     width: 62px;
     height: 62px;
+  }
+
+  .demolition-setting-card {
+    grid-template-columns: 62px minmax(0, 1fr);
+    min-height: 96px;
+  }
+
+  .demolition-preview {
+    width: 62px;
+    height: 62px;
+  }
+
+  .setting-toggle {
+    grid-column: 2;
+    justify-self: start;
   }
 
   .menu-settings-actions {

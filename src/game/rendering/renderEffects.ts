@@ -16,8 +16,11 @@ export function getAtmosphere(rawPeriod: string, timeSeconds: number): Atmospher
     return {
       period,
       overlayColor: MAP_COLORS.nightOverlay,
-      overlayAlpha: 0.31 + softPulse * 0.03,
+      overlayAlpha: 0.39 + softPulse * 0.04,
       lightAlpha: 1,
+      windowGlowAlpha: 1,
+      headlightAlpha: 1,
+      heatmapBoost: 1,
       pedestrianAlpha: 0.32,
       motion: reducedMotion ? 0 : 0.35,
     };
@@ -26,8 +29,11 @@ export function getAtmosphere(rawPeriod: string, timeSeconds: number): Atmospher
     return {
       period,
       overlayColor: MAP_COLORS.eveningOverlay,
-      overlayAlpha: 0.14 + softPulse * 0.025,
-      lightAlpha: 0.74,
+      overlayAlpha: 0.18 + softPulse * 0.035,
+      lightAlpha: 0.82,
+      windowGlowAlpha: 0.78,
+      headlightAlpha: 0.68,
+      heatmapBoost: 1.28,
       pedestrianAlpha: 0.9,
       motion: reducedMotion ? 0 : 0.85,
     };
@@ -36,8 +42,11 @@ export function getAtmosphere(rawPeriod: string, timeSeconds: number): Atmospher
     return {
       period,
       overlayColor: MAP_COLORS.morningOverlay,
-      overlayAlpha: 0.075,
-      lightAlpha: 0.24,
+      overlayAlpha: 0.095,
+      lightAlpha: 0.18,
+      windowGlowAlpha: 0.12,
+      headlightAlpha: 0.16,
+      heatmapBoost: 1.22,
       pedestrianAlpha: 0.72,
       motion: reducedMotion ? 0 : 0.65,
     };
@@ -46,8 +55,11 @@ export function getAtmosphere(rawPeriod: string, timeSeconds: number): Atmospher
     return {
       period,
       overlayColor: MAP_COLORS.morningOverlay,
-      overlayAlpha: 0.025,
+      overlayAlpha: 0.018,
       lightAlpha: 0.08,
+      windowGlowAlpha: 0.04,
+      headlightAlpha: 0.08,
+      heatmapBoost: 1,
       pedestrianAlpha: 0.82,
       motion: reducedMotion ? 0 : 0.75,
     };
@@ -55,8 +67,11 @@ export function getAtmosphere(rawPeriod: string, timeSeconds: number): Atmospher
   return {
     period,
     overlayColor: MAP_COLORS.eveningOverlay,
-    overlayAlpha: 0.055,
-    lightAlpha: 0.18,
+    overlayAlpha: 0.035,
+    lightAlpha: 0.14,
+    windowGlowAlpha: 0.08,
+    headlightAlpha: 0.1,
+    heatmapBoost: 1,
     pedestrianAlpha: 0.62,
     motion: reducedMotion ? 0 : 0.55,
   };

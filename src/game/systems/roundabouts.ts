@@ -161,6 +161,11 @@ export function getDrivableNeighbors(grid: Tile[][], current: Vec2): Vec2[] {
   return [...allowed.values()];
 }
 
+export function isLegalRoadMove(grid: Tile[][], from: Vec2, to: Vec2): boolean {
+  if (from.x === to.x && from.y === to.y) return false;
+  return getDrivableNeighbors(grid, from).some((next) => next.x === to.x && next.y === to.y);
+}
+
 function movementDirection(from: Vec2, to: Vec2): RoadDirection {
   if (to.x > from.x) return 'east';
   if (to.x < from.x) return 'west';

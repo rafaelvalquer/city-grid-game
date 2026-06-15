@@ -4,10 +4,10 @@ import type { Building, Tile, Vec2 } from '../../types/city.types';
 import type { GameWorld } from '../engine/simulation';
 import { getDirection, getLaneOffsetForRouteSegment } from '../systems/trafficRules';
 import { MAP_COLORS } from './visualTheme';
-import type { CarRenderPose } from './renderTypes';
+import type { Atmosphere, CarRenderPose } from './renderTypes';
 import { TURN_IN_START, TURN_OUT_END } from './renderTypes';
 import { carColor, directionAngle, drawCapsule, drawRotatedRect, idPhase, normalizeVec, pulse } from './renderUtils';
-export function drawCar(graphics: Graphics, car: Car, world: GameWorld, ts: number, timeSeconds: number): void {
+export function drawCar(graphics: Graphics, car: Car, world: GameWorld, ts: number, timeSeconds: number, atmosphere: Atmosphere): void {
   const pose = getCarRenderPose(car, world);
   const cx = pose.x * ts + ts / 2;
   const cy = pose.y * ts + ts / 2;
@@ -28,6 +28,7 @@ export function drawCar(graphics: Graphics, car: Car, world: GameWorld, ts: numb
   drawCapsule(graphics, cx, cy, length, width, pose.angle, color, pose.alpha, MAP_COLORS.roadEdge);
   if (isBus) {
     for (let index = -2; index <= 2; index += 1) {
+      const windowGlow = atmosphere.windowGlowAlpha > 0.45 ? MAP_COLORS.windowLit : MAP_COLORS.shopGlass;
       drawRotatedRect(
         graphics,
         cx + Math.cos(pose.angle) * (index * 3.2) - Math.sin(pose.angle) * 1.1,
@@ -35,18 +36,18 @@ export function drawCar(graphics: Graphics, car: Car, world: GameWorld, ts: numb
         2.5,
         2.4,
         pose.angle,
-        MAP_COLORS.shopGlass,
-        0.86 * pose.alpha,
+        windowGlow,
+        Math.min(1, (0.86 + atmosphere.windowGlowAlpha * 0.12) * pose.alpha),
       );
     }
   } else {
     drawRotatedRect(graphics, cx + Math.cos(pose.angle) * 1.8, cy + Math.sin(pose.angle) * 1.8, 4.2, 3.2, pose.angle, MAP_COLORS.carWindow, 0.88 * pose.alpha);
   }
-  drawCarLights(graphics, car, cx, cy, length, width, pose.angle, timeSeconds, pose.alpha);
+  drawCarLights(graphics, car, cx, cy, length, width, pose.angle, timeSeconds, atmosphere, pose.alpha);
 }
 
 
-export function drawCarLights(graphics: Graphics, car: Car, cx: number, cy: number, length: number, width: number, angle: number, timeSeconds: number, alpha = 1): void {
+export function drawCarLights(graphics: Graphics, car: Car, cx: number, cy: number, length: number, width: number, angle: number, timeSeconds: number, atmosphere: Atmosphere, alpha = 1): void {
   const dx = Math.cos(angle);
   const dy = Math.sin(angle);
   const px = -dy;
@@ -56,10 +57,29 @@ export function drawCarLights(graphics: Graphics, car: Car, cx: number, cy: numb
   const backX = cx - dx * (length / 2 - 1.5);
   const backY = cy - dy * (length / 2 - 1.5);
   const queuedPulse = car.trafficState === 'queued' ? pulse(timeSeconds, 1.15, idPhase(car.id)) : 1;
-  const lightAlpha = (car.trafficState === 'queued' ? 0.55 + queuedPulse * 0.45 : 0.88) * alpha;
-  const tailAlpha = (car.trafficState === 'queued' ? 0.5 + queuedPulse * 0.5 : 0.86) * alpha;
-  const lightRadius = car.trafficState === 'queued' ? 1.05 + queuedPulse * 0.45 : 1.15;
-  const tailRadius = car.trafficState === 'queued' ? 0.85 + queuedPulse * 0.3 : 0.95;
+  const nightLight = atmosphere.headlightAlpha;
+  const lightAlpha = Math.min(1, (car.trafficState === 'queued' ? 0.55 + queuedPulse * 0.45 : 0.88) * (0.72 + nightLight * 0.38)) * alpha;
+  const tailAlpha = Math.min(1, (car.trafficState === 'queued' ? 0.5 + queuedPulse * 0.5 : 0.86) * (0.78 + nightLight * 0.28)) * alpha;
+  const lightRadius = (car.trafficState === 'queued' ? 1.05 + queuedPulse * 0.45 : 1.15) + nightLight * 0.42;
+  const tailRadius = (car.trafficState === 'queued' ? 0.85 + queuedPulse * 0.3 : 0.95) + nightLight * 0.22;
+  if (nightLight > 0.22) {
+    const beamLength = car.vehicleType === 'bus' ? 22 : 16;
+    const beamSpread = car.vehicleType === 'bus' ? 7.2 : 5.2;
+    const beamAlpha = Math.min(0.16, nightLight * 0.11) * alpha;
+    graphics.poly([
+      frontX + px * (width * 0.28),
+      frontY + py * (width * 0.28),
+      frontX + dx * beamLength + px * beamSpread,
+      frontY + dy * beamLength + py * beamSpread,
+      frontX + dx * (beamLength + 3),
+      frontY + dy * (beamLength + 3),
+      frontX + dx * beamLength - px * beamSpread,
+      frontY + dy * beamLength - py * beamSpread,
+      frontX - px * (width * 0.28),
+      frontY - py * (width * 0.28),
+    ]).fill({ color: MAP_COLORS.carLight, alpha: beamAlpha });
+    graphics.circle(frontX + dx * 7, frontY + dy * 7, 6 + nightLight * 3).fill({ color: MAP_COLORS.carLight, alpha: beamAlpha * 0.55 });
+  }
   graphics.circle(frontX + px * (width * 0.22), frontY + py * (width * 0.22), lightRadius).fill({ color: MAP_COLORS.carLight, alpha: lightAlpha });
   graphics.circle(frontX - px * (width * 0.22), frontY - py * (width * 0.22), lightRadius).fill({ color: MAP_COLORS.carLight, alpha: lightAlpha });
   graphics.circle(backX + px * (width * 0.2), backY + py * (width * 0.2), tailRadius).fill({ color: MAP_COLORS.carTail, alpha: tailAlpha });

@@ -4,6 +4,7 @@ import type { DayPeriod } from '../engine/timeSystem';
 export type ActionPreview = HoverPreview & {
   reason?: string;
   successMessage: string;
+  demolishedBuildings?: number;
 };
 
 export type LotDecor = 'trees' | 'park' | 'parking' | 'garden' | 'plaza' | 'plain';
@@ -13,6 +14,9 @@ export type Atmosphere = {
   overlayColor: number;
   overlayAlpha: number;
   lightAlpha: number;
+  windowGlowAlpha: number;
+  headlightAlpha: number;
+  heatmapBoost: number;
   pedestrianAlpha: number;
   motion: number;
 };

@@ -488,6 +488,13 @@ function canFreeFlowThroughIntersection(grid: Tile[][], intersectionKey: string,
   if (activeAndReleased.some((entry) => isSameMovement(entry, intent))) return false;
   if (activeAndReleased.some((entry) => hasSameExit(entry, intent))) return false;
 
+  const approaching = control.queue.filter((entry) => entry.carId !== intent.carId && !control.releasedCarIds.has(entry.carId));
+  const hasApproachingConflict = approaching.some((entry) => hasIntersectionConflict(grid, intersectionKey, intent, entry));
+  if (!activeAndReleased.length && !hasApproachingConflict) return true;
+  if (activeAndReleased.length > 0 && activeAndReleased.every((entry) => areMovementsCompatible(grid, intersectionKey, intent, entry)) && !hasApproachingConflict) {
+    return true;
+  }
+
   if (intent.turnIntent === 'right') return true;
 
   if (isTIntersectionByKey(grid, intersectionKey) && intent.turnIntent === 'straight') {
@@ -495,6 +502,13 @@ function canFreeFlowThroughIntersection(grid: Tile[][], intersectionKey: string,
   }
 
   return false;
+}
+
+function hasIntersectionConflict(grid: Tile[][], intersectionKey: string, a: IntersectionIntent, b: IntersectionIntent): boolean {
+  if (b.exitBlocked) return true;
+  if (isSameMovement(a, b)) return true;
+  if (hasSameExit(a, b)) return true;
+  return !areMovementsCompatible(grid, intersectionKey, a, b);
 }
 
 function canRightTurnYield(

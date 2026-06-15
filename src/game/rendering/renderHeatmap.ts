@@ -3,13 +3,15 @@ import type { HeatmapMode } from '../../store/gameStore';
 import type { GameWorld } from '../engine/simulation';
 import { keyOf } from '../city/grid';
 import { MAP_COLORS, congestionColor } from './visualTheme';
-export function drawHeatmapMode(graphics: Graphics, world: GameWorld, mode: HeatmapMode, ts: number): void {
+import type { Atmosphere } from './renderTypes';
+export function drawHeatmapMode(graphics: Graphics, world: GameWorld, mode: HeatmapMode, ts: number, atmosphere: Atmosphere): void {
   if (mode === 'off') return;
+  const boost = atmosphere.heatmapBoost;
 
   if (mode === 'traffic') {
     for (const t of world.traffic.values()) {
       if (t.congestion <= 0) continue;
-      graphics.roundRect(t.x * ts + 5, t.y * ts + 5, ts - 10, ts - 10, 5).fill({ color: congestionColor(t.congestion), alpha: Math.min(0.5, 0.12 + t.congestion * 0.18) });
+      graphics.roundRect(t.x * ts + 5, t.y * ts + 5, ts - 10, ts - 10, 5).fill({ color: congestionColor(t.congestion), alpha: Math.min(0.68, (0.12 + t.congestion * 0.18) * boost) });
     }
     return;
   }
@@ -18,7 +20,7 @@ export function drawHeatmapMode(graphics: Graphics, world: GameWorld, mode: Heat
     for (const t of world.traffic.values()) {
       if (t.cars <= 0) continue;
       const intensity = Math.min(1, t.cars / Math.max(1, t.capacity));
-      graphics.roundRect(t.x * ts + 6, t.y * ts + 6, ts - 12, ts - 12, 5).fill({ color: MAP_COLORS.route, alpha: 0.12 + intensity * 0.38 });
+      graphics.roundRect(t.x * ts + 6, t.y * ts + 6, ts - 12, ts - 12, 5).fill({ color: MAP_COLORS.route, alpha: Math.min(0.68, (0.12 + intensity * 0.38) * boost) });
     }
     return;
   }
@@ -29,7 +31,7 @@ export function drawHeatmapMode(graphics: Graphics, world: GameWorld, mode: Heat
     const nearbyCongestion = nearbyTrafficCongestion(world, building.x, building.y);
     const localStress = building.connected ? nearbyCongestion : 1.2;
     const color = localStress > 0.9 || !building.connected ? MAP_COLORS.disconnected : cityColor;
-    graphics.roundRect(building.x * ts + 4, building.y * ts + 4, ts - 8, ts - 8, 6).fill({ color, alpha: Math.min(0.45, 0.16 + localStress * 0.18) });
+    graphics.roundRect(building.x * ts + 4, building.y * ts + 4, ts - 8, ts - 8, 6).fill({ color, alpha: Math.min(0.58, (0.16 + localStress * 0.18) * boost) });
   }
 }
 

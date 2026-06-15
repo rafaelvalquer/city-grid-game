@@ -2,10 +2,12 @@ export type BuildingSpawnMode = 'organic' | 'compact' | 'districts' | 'corridors
 
 export type GameSetupOptions = {
   spawnMode: BuildingSpawnMode;
+  allowRoadDemolition: boolean;
 };
 
 export const DEFAULT_GAME_SETUP: GameSetupOptions = {
   spawnMode: 'organic',
+  allowRoadDemolition: false,
 };
 
 export const BUILDING_SPAWN_MODES: Array<{

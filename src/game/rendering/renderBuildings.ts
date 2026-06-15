@@ -79,7 +79,8 @@ export function buildingLightAlpha(building: Building, atmosphere: Atmosphere, t
   const stable = (hash2(building.x, building.y, salt + 41) % 100) / 100;
   const activity = Math.min(1, (building.tripsToday + building.population + building.jobs + building.attraction) / 18);
   const flicker = atmosphere.motion > 0 ? pulse(timeSeconds, 0.12 + stable * 0.08, stable) : 0.5;
-  const periodBoost = building.type === 'house' && atmosphere.period === 'night' ? 0.18 : building.type === 'shop' && atmosphere.period === 'evening' ? 0.16 : 0;
-  return Math.min(0.95, base * (0.34 + stable * 0.28 + activity * 0.3 + flicker * 0.12 + periodBoost));
+  const typeBoost = building.type === 'house' && atmosphere.period === 'night' ? 0.18 : building.type === 'shop' && atmosphere.period === 'evening' ? 0.16 : 0;
+  const nightBoost = atmosphere.windowGlowAlpha * (0.22 + activity * 0.18);
+  return Math.min(0.98, base * (0.34 + stable * 0.28 + activity * 0.3 + flicker * 0.12 + typeBoost + nightBoost));
 }
 

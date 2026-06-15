@@ -1,19 +1,23 @@
 import { useEffect, useState } from 'react';
-import { ArrowLeft, CarFront, Clock3, Map, Play, Settings, Sparkles } from 'lucide-react';
+import { ArrowLeft, CarFront, Clock3, Construction, Map, Play, Settings, Sparkles } from 'lucide-react';
 import type { BuildingSpawnMode, GameSetupOptions } from '../game/config/gameSetup';
 import { BUILDING_SPAWN_MODES, DEFAULT_GAME_SETUP, normalizeSpawnMode } from '../game/config/gameSetup';
 
 const SPAWN_MODE_STORAGE_KEY = 'citySpawnMode';
+const ROAD_DEMOLITION_STORAGE_KEY = 'cityAllowRoadDemolition';
 
 export function MainMenu({ onStartSandbox }: { onStartSandbox: (options: GameSetupOptions) => void }) {
   const [view, setView] = useState<'home' | 'settings'>('home');
   const [spawnMode, setSpawnMode] = useState<BuildingSpawnMode>(DEFAULT_GAME_SETUP.spawnMode);
+  const [allowRoadDemolition, setAllowRoadDemolition] = useState(DEFAULT_GAME_SETUP.allowRoadDemolition);
 
   useEffect(() => {
     try {
       setSpawnMode(normalizeSpawnMode(localStorage.getItem(SPAWN_MODE_STORAGE_KEY)));
+      setAllowRoadDemolition(localStorage.getItem(ROAD_DEMOLITION_STORAGE_KEY) === '1');
     } catch {
       setSpawnMode(DEFAULT_GAME_SETUP.spawnMode);
+      setAllowRoadDemolition(DEFAULT_GAME_SETUP.allowRoadDemolition);
     }
   }, []);
 
@@ -26,7 +30,19 @@ export function MainMenu({ onStartSandbox }: { onStartSandbox: (options: GameSet
     }
   };
 
-  const startSandbox = () => onStartSandbox({ spawnMode });
+  const toggleRoadDemolition = () => {
+    setAllowRoadDemolition((current) => {
+      const next = !current;
+      try {
+        localStorage.setItem(ROAD_DEMOLITION_STORAGE_KEY, next ? '1' : '0');
+      } catch {
+        // Keep working with local state when storage is unavailable.
+      }
+      return next;
+    });
+  };
+
+  const startSandbox = () => onStartSandbox({ spawnMode, allowRoadDemolition });
   const selectedMode = BUILDING_SPAWN_MODES.find((mode) => mode.id === spawnMode) ?? BUILDING_SPAWN_MODES[0];
 
   return (
@@ -71,6 +87,10 @@ export function MainMenu({ onStartSandbox }: { onStartSandbox: (options: GameSet
             <div className="menu-selected-setting">
               <span>Surgimento</span>
               <strong>{selectedMode.label}</strong>
+            </div>
+            <div className="menu-selected-setting">
+              <span>Demolição para vias</span>
+              <strong>{allowRoadDemolition ? 'Habilitada' : 'Desabilitada'}</strong>
             </div>
 
             <div className="menu-mode-grid">
@@ -122,6 +142,19 @@ export function MainMenu({ onStartSandbox }: { onStartSandbox: (options: GameSet
               ))}
             </div>
 
+            <button
+              className={`demolition-setting-card ${allowRoadDemolition ? 'selected' : ''}`}
+              onClick={toggleRoadDemolition}
+              aria-pressed={allowRoadDemolition}
+            >
+              <RoadDemolitionPreview />
+              <span>
+                <strong><Construction size={15} /> Permitir demolição para vias</strong>
+                <small>Rua ou avenida pode substituir casas, comércios e escritórios cobrando a obra mais uma penalidade por nível.</small>
+              </span>
+              <i className="setting-toggle" aria-hidden="true" />
+            </button>
+
             <div className="menu-settings-actions">
               <button className="menu-secondary-action" onClick={() => setView('home')}>
                 <ArrowLeft size={17} />
@@ -143,6 +176,18 @@ function SpawnModePreview({ mode }: { mode: BuildingSpawnMode }) {
   return (
     <i className={`spawn-preview ${mode}`} aria-hidden="true">
       {Array.from({ length: 9 }).map((_, index) => <b key={index} />)}
+    </i>
+  );
+}
+
+function RoadDemolitionPreview() {
+  return (
+    <i className="demolition-preview" aria-hidden="true">
+      <b className="demolition-building" />
+      <b className="demolition-road" />
+      <b className="demolition-crack one" />
+      <b className="demolition-crack two" />
+      <b className="demolition-cost">-$</b>
     </i>
   );
 }

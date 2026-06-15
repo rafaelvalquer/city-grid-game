@@ -19,18 +19,68 @@ function reconstruct(cameFrom: Map<string, string>, current: string): Vec2[] {
   });
 }
 
+class PriorityQueue<T> {
+  private items: { value: T; priority: number }[] = [];
+
+  get size(): number {
+    return this.items.length;
+  }
+
+  push(value: T, priority: number): void {
+    this.items.push({ value, priority });
+    this.bubbleUp(this.items.length - 1);
+  }
+
+  pop(): T | undefined {
+    const first = this.items[0];
+    const last = this.items.pop();
+    if (!first || !last) return undefined;
+    if (this.items.length > 0) {
+      this.items[0] = last;
+      this.sinkDown(0);
+    }
+    return first.value;
+  }
+
+  private bubbleUp(index: number): void {
+    while (index > 0) {
+      const parent = Math.floor((index - 1) / 2);
+      if (this.items[parent].priority <= this.items[index].priority) break;
+      [this.items[parent], this.items[index]] = [this.items[index], this.items[parent]];
+      index = parent;
+    }
+  }
+
+  private sinkDown(index: number): void {
+    while (true) {
+      const left = index * 2 + 1;
+      const right = left + 1;
+      let smallest = index;
+
+      if (left < this.items.length && this.items[left].priority < this.items[smallest].priority) smallest = left;
+      if (right < this.items.length && this.items[right].priority < this.items[smallest].priority) smallest = right;
+      if (smallest === index) return;
+
+      [this.items[smallest], this.items[index]] = [this.items[index], this.items[smallest]];
+      index = smallest;
+    }
+  }
+}
+
 export function findFastestPath(grid: Tile[][], traffic: Map<string, TrafficCell>, start: Vec2, goal: Vec2): Vec2[] {
   const startKey = keyOf(start.x, start.y);
   const goalKey = keyOf(goal.x, goal.y);
-  const open = new Set<string>([startKey]);
+  const open = new PriorityQueue<string>();
   const cameFrom = new Map<string, string>();
   const gScore = new Map<string, number>([[startKey, 0]]);
-  const fScore = new Map<string, number>([[startKey, heuristic(start, goal)]]);
+  const closed = new Set<string>();
+  open.push(startKey, heuristic(start, goal));
 
   while (open.size > 0) {
-    let current = [...open].sort((a, b) => (fScore.get(a) ?? Infinity) - (fScore.get(b) ?? Infinity))[0];
+    const current = open.pop();
+    if (!current || closed.has(current)) continue;
     if (current === goalKey) return reconstruct(cameFrom, current);
-    open.delete(current);
+    closed.add(current);
 
     const [cx, cy] = current.split(',').map(Number);
     for (const next of getDrivableNeighbors(grid, { x: cx, y: cy })) {
@@ -45,8 +95,7 @@ export function findFastestPath(grid: Tile[][], traffic: Map<string, TrafficCell
       if (tentative < (gScore.get(nextKey) ?? Infinity)) {
         cameFrom.set(nextKey, current);
         gScore.set(nextKey, tentative);
-        fScore.set(nextKey, tentative + heuristic(next, goal));
-        open.add(nextKey);
+        open.push(nextKey, tentative + heuristic(next, goal));
       }
     }
   }
