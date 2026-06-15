@@ -4,7 +4,8 @@ import { MAP_COLORS } from './visualTheme';
 export type PixiWorldView = {
   app: Application;
   root: Container;
-  graphics: Graphics;
+  staticGraphics: Graphics;
+  dynamicGraphics: Graphics;
   labels: Container;
 };
 
@@ -16,12 +17,14 @@ export async function createPixiApp(hostElement: HTMLDivElement, app = new Appli
   const root = new Container();
   app.stage.addChild(root);
 
-  const graphics = new Graphics();
+  const staticGraphics = new Graphics();
+  const dynamicGraphics = new Graphics();
   const labels = new Container();
-  root.addChild(graphics);
+  root.addChild(staticGraphics);
+  root.addChild(dynamicGraphics);
   root.addChild(labels);
 
-  return { app, root, graphics, labels };
+  return { app, root, staticGraphics, dynamicGraphics, labels };
 }
 
 export function safelyDestroyPixiApp(app: Application): void {

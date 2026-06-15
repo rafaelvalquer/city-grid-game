@@ -7,7 +7,9 @@ import { createPixiApp, safelyDestroyPixiApp } from './pixiAppLifecycle';
 import { createCameraController, type CameraState } from './cameraController';
 import { connectInputController, type OneWayLineDrag, type RoadLineDrag } from './inputController';
 import { heatmapLabel } from './renderHeatmap';
-import { renderWorld } from './renderWorld';
+import { createRenderWorldState, renderWorld } from './renderWorld';
+
+const UI_SYNC_INTERVAL_SECONDS = 0.2;
 
 export function PixiGame({ world }: { world: GameWorld }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -18,6 +20,7 @@ export function PixiGame({ world }: { world: GameWorld }) {
   const roadLineDragRef = useRef<RoadLineDrag | null>(null);
   const oneWayLineDragRef = useRef<OneWayLineDrag | null>(null);
   const cameraRef = useRef<CameraState>({ x: 56, y: 42, scale: 0.75 });
+  const renderStateRef = useRef(createRenderWorldState());
   const hoverPreview = useGameStore((s) => s.hoverPreview);
   const actionFeedback = useGameStore((s) => s.actionFeedback);
   const heatmapModeUi = useGameStore((s) => s.heatmapMode);
@@ -30,6 +33,7 @@ export function PixiGame({ world }: { world: GameWorld }) {
     let initialized = false;
     const abortController = new AbortController();
     let app: Application | null = null;
+    renderStateRef.current = createRenderWorldState();
 
     async function start() {
       const view = await createPixiApp(hostElement);
@@ -56,13 +60,35 @@ export function PixiGame({ world }: { world: GameWorld }) {
         },
       });
 
+      const initialState = useGameStore.getState();
+      initialState.setStats(world.getSnapshot());
+      initialState.setSelected(world.selected);
+      let uiTimer = UI_SYNC_INTERVAL_SECONDS;
+
       view.app.ticker.add((ticker) => {
         const { paused, speed, heatmapMode, setStats, setSelected } = useGameStore.getState();
-        world.update(ticker.deltaMS / 1000, speed, paused);
-        setStats(world.getSnapshot());
-        setSelected(world.selected);
+        const dt = ticker.deltaMS / 1000;
+        world.update(dt, speed, paused);
         const hover = useGameStore.getState().hoverPreview;
-        renderWorld(view.graphics, view.labels, world, heatmapMode, hover, cameraRef.current.x, cameraRef.current.y, cameraRef.current.scale);
+        renderWorld(
+          view.staticGraphics,
+          view.dynamicGraphics,
+          view.labels,
+          renderStateRef.current,
+          world,
+          heatmapMode,
+          hover,
+          cameraRef.current.x,
+          cameraRef.current.y,
+          cameraRef.current.scale,
+        );
+
+        uiTimer += dt;
+        if (uiTimer >= UI_SYNC_INTERVAL_SECONDS) {
+          uiTimer = 0;
+          setStats(world.getSnapshot());
+          setSelected(world.selected);
+        }
       });
     }
 

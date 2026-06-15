@@ -10,11 +10,22 @@ import { drawBusStop, drawBusStopCoverage, drawRoad, drawRoadSignage, drawRounda
 import { drawHeatmapMode } from './renderHeatmap';
 import { drawBuildingVariant } from './renderBuildings';
 import { drawCar } from './renderVehicles';
+import { getStaticRenderSignature } from './renderInvalidation';
 import { drawConstructionPreview, drawSelectedCarMarker, drawSelectedRoute, drawSelection } from './renderUiOverlays';
 
+export type RenderWorldState = {
+  staticSignature: string | null;
+};
+
+export function createRenderWorldState(): RenderWorldState {
+  return { staticSignature: null };
+}
+
 export function renderWorld(
-  graphics: Graphics,
+  staticGraphics: Graphics,
+  dynamicGraphics: Graphics,
   labels: Container,
+  state: RenderWorldState,
   world: GameWorld,
   heatmapMode: HeatmapMode,
   hoverPreview: HoverPreview | null,
@@ -24,14 +35,34 @@ export function renderWorld(
 ): void {
   const ts = GAME_CONFIG.tileSize;
   const timeSeconds = performance.now() / 1000;
-  const snapshot = world.getSnapshot();
-  const atmosphere = getAtmosphere(snapshot.dayPeriod, timeSeconds);
+  const atmosphere = getAtmosphere(world.time.getPeriod(), timeSeconds);
+
+  applyCamera(staticGraphics, camX, camY, scale);
+  applyCamera(dynamicGraphics, camX, camY, scale);
+  applyCamera(labels, camX, camY, scale);
+
+  const staticSignature = getStaticRenderSignature(world);
+  if (state.staticSignature !== staticSignature) {
+    state.staticSignature = staticSignature;
+    renderStaticLayer(staticGraphics, world, ts, timeSeconds, atmosphere);
+  }
+
+  renderDynamicLayer(dynamicGraphics, world, heatmapMode, hoverPreview, ts, timeSeconds, atmosphere);
+}
+
+function applyCamera(container: Container, camX: number, camY: number, scale: number): void {
+  container.position.set(camX, camY);
+  container.scale.set(scale);
+}
+
+function renderStaticLayer(
+  graphics: Graphics,
+  world: GameWorld,
+  ts: number,
+  timeSeconds: number,
+  atmosphere: ReturnType<typeof getAtmosphere>,
+): void {
   graphics.clear();
-  labels.removeChildren();
-  graphics.position.set(camX, camY);
-  graphics.scale.set(scale);
-  labels.position.set(camX, camY);
-  labels.scale.set(scale);
 
   for (let y = 0; y < GAME_CONFIG.gridHeight; y++) {
     for (let x = 0; x < GAME_CONFIG.gridWidth; x++) {
@@ -42,7 +73,6 @@ export function renderWorld(
       if (tile.type === 'avenue') drawRoad(graphics, world.grid, x, y, ts, 'avenue');
       if (tile.type === 'roundabout') drawRoad(graphics, world.grid, x, y, ts, 'roundabout');
       if (tile.type === 'roundaboutCenter') drawRoundaboutIsland(graphics, world.grid, x, y, ts);
-      if (tile.type === 'busStop') drawBusStop(graphics, world, x, y, ts, timeSeconds, atmosphere);
     }
   }
 
@@ -54,15 +84,30 @@ export function renderWorld(
     }
   }
 
-  drawHeatmapMode(graphics, world, heatmapMode, ts);
-
   for (const building of world.buildings) {
     drawBuildingVariant(graphics, building, ts, timeSeconds, atmosphere);
     if (!building.connected) {
       graphics.circle(building.x * ts + ts - 5, building.y * ts + 5, 4).fill(MAP_COLORS.disconnected);
     }
   }
+}
 
+function renderDynamicLayer(
+  graphics: Graphics,
+  world: GameWorld,
+  heatmapMode: HeatmapMode,
+  hoverPreview: HoverPreview | null,
+  ts: number,
+  timeSeconds: number,
+  atmosphere: ReturnType<typeof getAtmosphere>,
+): void {
+  graphics.clear();
+
+  for (const stop of world.transitStops) {
+    drawBusStop(graphics, world, stop.x, stop.y, ts, timeSeconds, atmosphere);
+  }
+
+  drawHeatmapMode(graphics, world, heatmapMode, ts);
   drawStreetFurniture(graphics, world, ts, timeSeconds, atmosphere);
   drawAtmosphereOverlay(graphics, atmosphere, heatmapMode, ts);
   drawBuildingLife(graphics, world, ts, timeSeconds, atmosphere);
