@@ -31,6 +31,7 @@ export type GameStore = {
   setTool: (tool: Tool) => void;
   setHeatmapMode: (mode: HeatmapMode) => void;
   togglePaused: () => void;
+  setPaused: (paused: boolean) => void;
   setSpeed: (speed: SimulationSpeed) => void;
   setStats: (stats: CityStats) => void;
   setSelected: (selected: SelectedEntity) => void;
@@ -70,6 +71,7 @@ export const useGameStore = create<GameStore>((set) => ({
   setTool: (tool) => set({ selectedTool: tool, actionFeedback: null }),
   setHeatmapMode: (mode) => set({ heatmapMode: mode }),
   togglePaused: () => set((s) => ({ paused: !s.paused })),
+  setPaused: (paused) => set({ paused }),
   setSpeed: (speed) => set({ speed }),
   setStats: (stats) => set({ stats }),
   setSelected: (selected) => set({ selected }),

@@ -105,6 +105,62 @@ export type CityStats = {
   dayPeriod: string;
 };
 
+export type BuildingTypeCounts = Record<BuildingType, number>;
+export type BuildingLevelCounts = Record<BuildingLevel, number>;
+
+export type CityHistorySample = {
+  key: string;
+  day: number;
+  hour: number;
+  timeLabel: string;
+  dayPeriod: string;
+  population: number;
+  activeCars: number;
+  activeBuses: number;
+  waitingPassengers: number;
+  completedTrips: number;
+  failedTrips: number;
+  publicTripsCompleted: number;
+  carTripsAvoided: number;
+  averageCongestion: number;
+  satisfaction: number;
+  averageTravelTime: number;
+  cityLevel: number;
+  buildingTypes: BuildingTypeCounts;
+  buildingLevels: BuildingLevelCounts;
+};
+
+export type TrafficHeatmapTileSample = {
+  x: number;
+  y: number;
+  cars: number;
+  congestion: number;
+  capacity: number;
+  weight: number;
+};
+
+export type TrafficHeatmapSample = {
+  key: string;
+  day: number;
+  hour: number;
+  tiles: TrafficHeatmapTileSample[];
+};
+
+export type TrafficHeatmapCell = {
+  x: number;
+  y: number;
+  samples: number;
+  carsAverage: number;
+  congestionAverage: number;
+  weight: number;
+};
+
+export type TrafficHeatmapSummary = {
+  bounds: { minX: number; minY: number; maxX: number; maxY: number };
+  maxWeight: number;
+  cells: TrafficHeatmapCell[];
+};
+
 export type SelectedEntity =
   | { kind: 'none' }
   | { kind: 'tile'; x: number; y: number; type: TileType }

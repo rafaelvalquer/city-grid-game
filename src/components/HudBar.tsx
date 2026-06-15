@@ -1,4 +1,4 @@
-import { Banknote, BusFront, Car, Clock3, Gauge, HeartPulse, TrendingUp, Users } from 'lucide-react';
+import { Banknote, BarChart3, BusFront, Car, Clock3, Gauge, HeartPulse, TrendingUp, Users } from 'lucide-react';
 import { useGameStore } from '../store/gameStore';
 
 const periodLabel: Record<string, string> = {
@@ -20,7 +20,7 @@ function levelClass(value: number, warnAt: number, badAt: number, inverse = fals
   return 'good';
 }
 
-export function HudBar() {
+export function HudBar({ analyticsOpen = false, onToggleAnalytics }: { analyticsOpen?: boolean; onToggleAnalytics?: () => void }) {
   const stats = useGameStore((s) => s.stats);
   return (
     <header className="hud-bar">
@@ -46,6 +46,17 @@ export function HudBar() {
         </div>
         <div className="hud-item"><TrendingUp size={16} /><span>{stats.averageTravelTime}s</span><small>tempo médio</small></div>
       </div>
+      <button
+        className={`hud-item hud-action ${analyticsOpen ? 'active' : ''}`}
+        type="button"
+        onClick={onToggleAnalytics}
+        aria-pressed={analyticsOpen}
+        aria-label="Abrir análises históricas"
+        title="Análises históricas"
+      >
+        <BarChart3 size={16} />
+        <span>Análises</span>
+      </button>
       <div className="hud-item time"><Clock3 size={16} /><span>Dia {stats.day} · {stats.timeLabel}</span><small>{periodLabel[stats.dayPeriod] ?? stats.dayPeriod}</small></div>
     </header>
   );

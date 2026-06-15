@@ -1,4 +1,4 @@
-import { useMemo, useEffect, useState } from 'react';
+import { useCallback, useMemo, useEffect, useRef, useState } from 'react';
 import { BarChart3, Hammer, X } from 'lucide-react';
 import { GameWorld } from './game/engine/simulation';
 import { PixiGame } from './game/rendering/PixiGame';
@@ -7,6 +7,7 @@ import { ToolPanel } from './components/ToolPanel';
 import { DetailsPanel } from './components/DetailsPanel';
 import { BottomBar } from './components/BottomBar';
 import { MainMenu } from './components/MainMenu';
+import { AnalyticsPanel } from './components/AnalyticsPanel';
 import { useGameStore } from './store/gameStore';
 import type { GameSetupOptions } from './game/config/gameSetup';
 import { DEFAULT_GAME_SETUP } from './game/config/gameSetup';
@@ -18,6 +19,10 @@ export default function App() {
   const [setupOptions, setSetupOptions] = useState<GameSetupOptions>(DEFAULT_GAME_SETUP);
   const world = useMemo(() => (screen === 'sandbox' ? new GameWorld(setupOptions) : null), [screen, setupOptions]);
   const [mobilePanel, setMobilePanel] = useState<'tools' | 'details' | null>(null);
+  const [analyticsOpen, setAnalyticsOpen] = useState(false);
+  const wasPausedBeforeAnalytics = useRef(false);
+  const paused = useGameStore((s) => s.paused);
+  const setPaused = useGameStore((s) => s.setPaused);
   const setStats = useGameStore((s) => s.setStats);
   const setSelected = useGameStore((s) => s.setSelected);
 
@@ -31,6 +36,23 @@ export default function App() {
     });
   }, [world, setStats, setSelected]);
 
+  const openAnalytics = useCallback(() => {
+    if (analyticsOpen) return;
+    wasPausedBeforeAnalytics.current = paused;
+    setPaused(true);
+    setAnalyticsOpen(true);
+  }, [analyticsOpen, paused, setPaused]);
+
+  const closeAnalytics = useCallback(() => {
+    setAnalyticsOpen(false);
+    setPaused(wasPausedBeforeAnalytics.current);
+  }, [setPaused]);
+
+  const toggleAnalytics = useCallback(() => {
+    if (analyticsOpen) closeAnalytics();
+    else openAnalytics();
+  }, [analyticsOpen, closeAnalytics, openAnalytics]);
+
   if (screen === 'menu' || !world) {
     return <MainMenu onStartSandbox={(options) => {
       setSetupOptions(options);
@@ -40,7 +62,7 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <HudBar />
+      <HudBar analyticsOpen={analyticsOpen} onToggleAnalytics={toggleAnalytics} />
       <div className="main-layout">
         <ToolPanel className={mobilePanel === 'tools' ? 'is-open' : ''} onClose={() => setMobilePanel(null)} />
         <PixiGame world={world} />
@@ -57,6 +79,7 @@ export default function App() {
           </button>
         </nav>
       </div>
+      {analyticsOpen && <AnalyticsPanel world={world} onClose={closeAnalytics} />}
       <BottomBar />
     </div>
   );

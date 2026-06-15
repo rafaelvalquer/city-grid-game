@@ -1,5 +1,5 @@
 import { nanoid } from 'nanoid';
-import type { Building, BuildingLevel, CityStats, RoadDirection, RoadType, SelectedEntity, Tile, TrafficCell, TrafficLightAxis, TrafficLightState, TransitLine, TransitPassengerGroup, TransitStop, Vec2 } from '../../types/city.types';
+import type { Building, BuildingLevel, CityHistorySample, CityStats, RoadDirection, RoadType, SelectedEntity, Tile, TrafficCell, TrafficHeatmapCell, TrafficHeatmapSample, TrafficHeatmapSummary, TrafficLightAxis, TrafficLightState, TransitLine, TransitPassengerGroup, TransitStop, Vec2 } from '../../types/city.types';
 import type { Car } from '../../types/agent.types';
 import type { Tool } from '../../types/game.types';
 import { GAME_CONFIG } from '../config/gameConfig';
@@ -68,6 +68,8 @@ export class GameWorld {
   carTripsAvoided = 0;
   averageTravelTime = 0;
   cityLevel = 1;
+  historySamples: CityHistorySample[] = [];
+  trafficHeatmapSamples: TrafficHeatmapSample[] = [];
   time = new TimeSystem();
   generator: CityGenerator;
 
@@ -81,6 +83,7 @@ export class GameWorld {
   private lastProcessedDay = 1;
   private nextPriorityToken = 1;
   private nextTransitStopOrder = 1;
+  private lastHistorySampleKey = '';
   private trafficLightDebugTimers = new Map<string, number>();
 
   constructor(options: Partial<GameSetupOptions> = {}) {
@@ -88,6 +91,7 @@ export class GameWorld {
     this.seedInitialCity();
     this.updateConnections();
     this.updateTrafficMap();
+    this.recordHistorySample(true);
   }
 
   subscribe(listener: () => void): () => void {
@@ -121,6 +125,136 @@ export class GameWorld {
       day: this.time.getDay(),
       timeLabel: this.time.getLabel(),
       dayPeriod: this.time.getPeriod(),
+    };
+  }
+
+  getHistorySamples(): CityHistorySample[] {
+    return this.historySamples;
+  }
+
+  getTrafficHeatmapLast24h(): TrafficHeatmapSummary {
+    const aggregate = new Map<string, { x: number; y: number; cars: number; congestion: number; weight: number; samples: number }>();
+    const bounds = this.getRoadBounds();
+
+    for (const sample of this.trafficHeatmapSamples.slice(-24)) {
+      for (const tile of sample.tiles) {
+        const key = keyOf(tile.x, tile.y);
+        const current = aggregate.get(key) ?? { x: tile.x, y: tile.y, cars: 0, congestion: 0, weight: 0, samples: 0 };
+        current.cars += tile.cars;
+        current.congestion += tile.congestion;
+        current.weight += tile.weight;
+        current.samples += 1;
+        aggregate.set(key, current);
+      }
+    }
+
+    const cells: TrafficHeatmapCell[] = [...aggregate.values()].map((cell) => ({
+      x: cell.x,
+      y: cell.y,
+      samples: cell.samples,
+      carsAverage: cell.cars / Math.max(1, cell.samples),
+      congestionAverage: cell.congestion / Math.max(1, cell.samples),
+      weight: cell.weight,
+    }));
+
+    return {
+      bounds,
+      maxWeight: Math.max(1, ...cells.map((cell) => cell.weight)),
+      cells,
+    };
+  }
+
+  private recordHistorySample(force = false): void {
+    const day = this.time.getDay();
+    const hour = this.time.getHour();
+    const key = `${day}-${hour}`;
+    if (!force && key === this.lastHistorySampleKey) return;
+
+    this.lastHistorySampleKey = key;
+    const snapshot = this.getSnapshot();
+    const buildingTypes = {
+      house: 0,
+      shop: 0,
+      office: 0,
+    };
+    const buildingLevels = {
+      1: 0,
+      2: 0,
+      3: 0,
+    };
+
+    for (const building of this.buildings) {
+      buildingTypes[building.type] += 1;
+      buildingLevels[building.level] += 1;
+    }
+
+    this.historySamples.push({
+      key,
+      day,
+      hour,
+      timeLabel: `${String(hour).padStart(2, '0')}:00`,
+      dayPeriod: this.time.getPeriod(),
+      population: snapshot.population,
+      activeCars: snapshot.activeCars,
+      activeBuses: snapshot.activeBuses,
+      waitingPassengers: snapshot.waitingPassengers,
+      completedTrips: snapshot.completedTrips,
+      failedTrips: snapshot.failedTrips,
+      publicTripsCompleted: snapshot.publicTripsCompleted,
+      carTripsAvoided: snapshot.carTripsAvoided,
+      averageCongestion: snapshot.averageCongestion,
+      satisfaction: snapshot.satisfaction,
+      averageTravelTime: snapshot.averageTravelTime,
+      cityLevel: snapshot.cityLevel,
+      buildingTypes,
+      buildingLevels,
+    });
+    this.recordTrafficHeatmapSample(key, day, hour);
+  }
+
+  private recordTrafficHeatmapSample(key: string, day: number, hour: number): void {
+    const tiles = [...this.traffic.values()]
+      .filter((traffic) => traffic.cars > 0 || traffic.congestion > 0)
+      .map((traffic) => ({
+        x: traffic.x,
+        y: traffic.y,
+        cars: traffic.cars,
+        congestion: traffic.congestion,
+        capacity: traffic.capacity,
+        weight: traffic.cars + Math.max(0, traffic.congestion) * traffic.capacity,
+      }));
+
+    this.trafficHeatmapSamples.push({ key, day, hour, tiles });
+    if (this.trafficHeatmapSamples.length > 24) {
+      this.trafficHeatmapSamples = this.trafficHeatmapSamples.slice(-24);
+    }
+  }
+
+  private getRoadBounds(): { minX: number; minY: number; maxX: number; maxY: number } {
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+
+    for (const row of this.grid) {
+      for (const tile of row) {
+        if (!isRoadType(tile.type)) continue;
+        minX = Math.min(minX, tile.x);
+        minY = Math.min(minY, tile.y);
+        maxX = Math.max(maxX, tile.x);
+        maxY = Math.max(maxY, tile.y);
+      }
+    }
+
+    if (!Number.isFinite(minX)) {
+      return { minX: 0, minY: 0, maxX: this.grid[0]?.length ?? 0, maxY: this.grid.length };
+    }
+
+    return {
+      minX: Math.max(0, minX - 2),
+      minY: Math.max(0, minY - 2),
+      maxX: Math.min((this.grid[0]?.length ?? maxX + 1) - 1, maxX + 2),
+      maxY: Math.min(this.grid.length - 1, maxY + 2),
     };
   }
 
@@ -174,6 +308,8 @@ export class GameWorld {
       this.economyTimer = 0;
       this.updateEconomyAndSatisfaction();
     }
+
+    this.recordHistorySample();
   }
 
   buildAt(x: number, y: number, tool: Tool): boolean {
