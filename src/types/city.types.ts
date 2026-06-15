@@ -1,3 +1,5 @@
+import type { MetroLine, MetroStation, MetroTrain } from './metro.types';
+
 export type TileType = 'empty' | 'road' | 'avenue' | 'roundabout' | 'roundaboutCenter' | 'building' | 'busStop';
 export type BuildingType = 'house' | 'shop' | 'office';
 export type BuildingLevel = 1 | 2 | 3;
@@ -11,6 +13,7 @@ export type Tile = {
   y: number;
   type: TileType;
   buildingId?: string;
+  metroStationId?: string;
   oneWay?: RoadDirection;
 };
 
@@ -99,6 +102,13 @@ export type CityStats = {
   carTripsAvoided: number;
   waitingPassengers: number;
   activeBuses: number;
+  metroStations: number;
+  metroLines: number;
+  metroPassengers: number;
+  metroCarsAvoided: number;
+  metroTripsCompleted: number;
+  metroPassengersWaiting: number;
+  metroTrains: number;
   cityLevel: number;
   day: number;
   timeLabel: string;
@@ -122,6 +132,13 @@ export type CityHistorySample = {
   failedTrips: number;
   publicTripsCompleted: number;
   carTripsAvoided: number;
+  metroTripsCompleted: number;
+  metroCarsAvoided: number;
+  metroPassengers: number;
+  metroPassengersWaiting: number;
+  metroStations: number;
+  metroLines: number;
+  metroTrains: number;
   averageCongestion: number;
   satisfaction: number;
   averageTravelTime: number;
@@ -167,4 +184,7 @@ export type SelectedEntity =
   | { kind: 'building'; building: Building }
   | { kind: 'busStop'; stop: TransitStop }
   | { kind: 'road'; x: number; y: number; roadType: RoadType; traffic: TrafficCell; trafficLight?: TrafficLightState; oneWay?: RoadDirection }
-  | { kind: 'car'; carId: string };
+  | { kind: 'car'; carId: string }
+  | { kind: 'metroStation'; station: MetroStation }
+  | { kind: 'metroLine'; line: MetroLine }
+  | { kind: 'metroTrain'; trainId: string; train?: MetroTrain };

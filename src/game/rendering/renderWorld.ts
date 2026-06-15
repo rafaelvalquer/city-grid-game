@@ -1,5 +1,5 @@
 import type { Container, Graphics } from 'pixi.js';
-import type { HeatmapMode, HoverPreview } from '../../store/gameStore';
+import type { HeatmapMode, HoverPreview, ViewLayer } from '../../store/gameStore';
 import { GAME_CONFIG } from '../config/gameConfig';
 import type { GameWorld } from '../engine/simulation';
 import { isRoadType, keyOf } from '../city/grid';
@@ -13,6 +13,7 @@ import { drawCar } from './renderVehicles';
 import { getStaticRenderSignature } from './renderInvalidation';
 import { drawConstructionPreview, drawSelectedCarMarker, drawSelectedRoute, drawSelection } from './renderUiOverlays';
 import type { ParticleSystem } from './particleSystem';
+import { renderMetroLayer } from './renderMetro';
 
 export type RenderWorldState = {
   staticSignature: string | null;
@@ -41,6 +42,7 @@ export function renderWorld(
   camX: number,
   camY: number,
   scale: number,
+  viewLayer: ViewLayer,
   particles?: ParticleSystem,
 ): void {
   const ts = GAME_CONFIG.tileSize;
@@ -58,7 +60,7 @@ export function renderWorld(
   }
 
   emitRenderParticles(state, world, timeSeconds, particles);
-  renderDynamicLayer(dynamicGraphics, state, world, heatmapMode, hoverPreview, ts, timeSeconds, atmosphere);
+  renderDynamicLayer(dynamicGraphics, state, world, heatmapMode, hoverPreview, ts, timeSeconds, atmosphere, viewLayer);
 }
 
 function applyCamera(container: Container, camX: number, camY: number, scale: number): void {
@@ -112,6 +114,7 @@ function renderDynamicLayer(
   ts: number,
   timeSeconds: number,
   atmosphere: ReturnType<typeof getAtmosphere>,
+  viewLayer: ViewLayer,
 ): void {
   graphics.clear();
 
@@ -122,6 +125,7 @@ function renderDynamicLayer(
   drawHeatmapMode(graphics, world, heatmapMode, ts, atmosphere);
   drawStreetFurniture(graphics, world, ts, timeSeconds, atmosphere);
   drawAtmosphereOverlay(graphics, atmosphere, heatmapMode, ts);
+  renderMetroLayer(graphics, world, viewLayer, ts, timeSeconds);
   drawBuildingLife(graphics, world, ts, timeSeconds, atmosphere);
   drawDisconnectedBuildingAlerts(graphics, world, ts, timeSeconds);
   drawTrafficLights(graphics, world, ts, timeSeconds);

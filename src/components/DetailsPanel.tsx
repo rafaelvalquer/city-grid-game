@@ -123,6 +123,46 @@ export function DetailsPanel({ world, className = '', onClose }: { world: GameWo
         </div>
       )}
 
+
+      {selected.kind === 'metroStation' && (
+        <div className="detail-card">
+          <h3><CircleDot size={15} /> {selected.station.name}</h3>
+          <p><span>Posição</span><strong>{selected.station.x}, {selected.station.y}</strong></p>
+          <p><span>Passageiros esperando</span><strong>{selected.station.waitingPassengers}/{selected.station.capacity}</strong></p>
+          <p><span>Embarques</span><strong>{selected.station.totalBoarded}</strong></p>
+          <p><span>Desembarques</span><strong>{selected.station.totalAlighted}</strong></p>
+          <p><span>Passageiros processados</span><strong>{selected.station.totalPassengersHandled}</strong></p>
+          <p><span>Pico de fila</span><strong>{selected.station.peakWaitingPassengers}</strong></p>
+          <p><span>Carros evitados</span><strong>{selected.station.carsAvoidedFromStation}</strong></p>
+          <p><span>Cobertura</span><strong>{selected.station.coverageRadius} tiles</strong></p>
+          <p><span>Linhas</span><strong>{world.getMetroLinesForStation(selected.station.id).map((line) => line.name).join(', ') || 'Nenhuma'}</strong></p>
+          <p><span>Status</span><strong className={selected.station.activeLineIds.length ? 'good' : 'warn'}>{selected.station.activeLineIds.length ? 'Ativa' : 'Sem linha'}</strong></p>
+        </div>
+      )}
+
+      {selected.kind === 'metroLine' && (
+        <div className="detail-card">
+          <h3><Route size={15} /> {selected.line.name}</h3>
+          <p><span>Estações</span><strong>{selected.line.stationIds.length}</strong></p>
+          <p><span>Trens ativos</span><strong>{world.metroTrains.filter((train) => train.lineId === selected.line.id).length}</strong></p>
+          <p><span>Passageiros</span><strong>{selected.line.totalPassengers}</strong></p>
+          <p><span>Carros evitados</span><strong>{selected.line.carsAvoided}</strong></p>
+          <p><span>Passageiros atuais</span><strong>{selected.line.currentPassengers}</strong></p>
+          <p><span>Passageiros esperando</span><strong>{selected.line.waitingPassengers}</strong></p>
+          <p><span>Ciclos completos</span><strong>{selected.line.completedCycles}</strong></p>
+          <p><span>Frequência</span><strong>{selected.line.frequencySeconds}s</strong></p>
+        </div>
+      )}
+
+      {selected.kind === 'metroTrain' && selected.train && (
+        <div className="detail-card">
+          <h3><BusFront size={15} /> Trem de metrô</h3>
+          <p><span>Linha</span><strong>{world.metroLines.find((line) => line.id === selected.train?.lineId)?.name ?? '-'}</strong></p>
+          <p><span>Lotação</span><strong>{selected.train.passengers}/{selected.train.capacity}</strong></p>
+          <p><span>Progresso</span><strong>{Math.round(selected.train.progress * 100)}%</strong></p>
+        </div>
+      )}
+
       {selected.kind === 'road' && (
         <div className="detail-card">
           <h3><Route size={15} /> {ROAD_CONFIG[selected.roadType].label}</h3>

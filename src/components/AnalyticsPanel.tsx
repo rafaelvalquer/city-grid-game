@@ -135,14 +135,23 @@ function renderTab(tab: AnalyticsTab, samples: CityHistorySample[], world: GameW
           { label: 'Ônibus ativos', value: latest.activeBuses, initial: samples[0].activeBuses },
           { label: 'Passageiros esperando', value: latest.waitingPassengers, initial: samples[0].waitingPassengers },
           { label: 'Carros evitados', value: latest.carTripsAvoided, initial: samples[0].carTripsAvoided },
+          { label: 'Viagens de metrô', value: latest.metroTripsCompleted ?? 0, initial: samples[0].metroTripsCompleted ?? 0 },
+          { label: 'Carros evitados pelo metrô', value: latest.metroCarsAvoided ?? 0, initial: samples[0].metroCarsAvoided ?? 0 },
         ]} />
+        <MetroAnalyticsCard world={world} latest={latest} />
         <ChartCard title="Fila e frota" samples={samples} series={[
           { label: 'Passageiros esperando', color: 'warn', values: samples.map((s) => s.waitingPassengers) },
           { label: 'Ônibus ativos x 12', color: 'accent', values: samples.map((s) => s.activeBuses * 12) },
         ]} />
         <ChartCard title="Impacto do transporte público" samples={samples} series={[
           { label: 'Viagens por ônibus', color: 'good', values: samples.map((s) => s.publicTripsCompleted) },
-          { label: 'Carros evitados', color: 'accent', values: samples.map((s) => s.carTripsAvoided) },
+          { label: 'Viagens por metrô', color: 'accent', values: samples.map((s) => s.metroTripsCompleted ?? 0) },
+          { label: 'Carros evitados', color: 'warn', values: samples.map((s) => s.carTripsAvoided) },
+        ]} />
+        <ChartCard title="Metrô: demanda e operação" samples={samples} series={[
+          { label: 'Passageiros metrô', color: 'accent', values: samples.map((s) => s.metroPassengers ?? 0) },
+          { label: 'Esperando no metrô', color: 'warn', values: samples.map((s) => s.metroPassengersWaiting ?? 0) },
+          { label: 'Trens x 30', color: 'good', values: samples.map((s) => (s.metroTrains ?? 0) * 30) },
         ]} />
       </>
     );
@@ -193,6 +202,29 @@ function renderTab(tab: AnalyticsTab, samples: CityHistorySample[], world: GameW
         { label: 'Carros evitados', color: 'warn', values: samples.map((s) => s.carTripsAvoided) },
       ]} />
     </>
+  );
+}
+
+
+function MetroAnalyticsCard({ world, latest }: { world: GameWorld; latest: CityHistorySample }) {
+  const busiestStation = [...world.metroStations].sort((a, b) => b.waitingPassengers - a.waitingPassengers)[0];
+  const busiestLine = [...world.metroLines].sort((a, b) => b.totalPassengers - a.totalPassengers)[0];
+  return (
+    <article className="analytics-card metro-analytics-card">
+      <header>
+        <h3>Metrô</h3>
+        <span>{latest.metroLines ?? 0} linhas ativas</span>
+      </header>
+      <div className="metro-analytics-grid">
+        <p><span>Estações</span><strong>{latest.metroStations ?? world.metroStations.length}</strong></p>
+        <p><span>Trens</span><strong>{latest.metroTrains ?? world.metroTrains.length}</strong></p>
+        <p><span>Passageiros aguardando</span><strong>{latest.metroPassengersWaiting ?? 0}</strong></p>
+        <p><span>Viagens por metrô</span><strong>{latest.metroTripsCompleted ?? 0}</strong></p>
+        <p><span>Carros evitados pelo metrô</span><strong>{latest.metroCarsAvoided ?? 0}</strong></p>
+        <p><span>Linha mais usada</span><strong>{busiestLine ? busiestLine.name + ' (' + busiestLine.totalPassengers + ')' : 'Nenhuma'}</strong></p>
+        <p><span>Estação mais carregada</span><strong>{busiestStation ? busiestStation.name + ' (' + busiestStation.waitingPassengers + ')' : 'Nenhuma'}</strong></p>
+      </div>
+    </article>
   );
 }
 

@@ -1,9 +1,11 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Application, Container } from 'pixi.js';
 import { GameWorld } from '../engine/simulation';
 import { GAME_CONFIG } from '../config/gameConfig';
 import { useGameStore } from '../../store/gameStore';
 import { CanvasToolDock } from '../../components/CanvasToolDock';
+import { MetroManagementPanel } from '../../components/MetroManagementPanel';
+import { LayerToggle } from '../../components/LayerToggle';
 import { createPixiApp, safelyDestroyPixiApp } from './pixiAppLifecycle';
 import { createCameraController, type CameraState } from './cameraController';
 import { connectInputController, type OneWayLineDrag, type RoadLineDrag } from './inputController';
@@ -27,6 +29,9 @@ export function PixiGame({ world }: { world: GameWorld }) {
   const hoverPreview = useGameStore((s) => s.hoverPreview);
   const actionFeedback = useGameStore((s) => s.actionFeedback);
   const heatmapModeUi = useGameStore((s) => s.heatmapMode);
+  const viewLayerUi = useGameStore((s) => s.viewLayer);
+  const [metroManagerOpen, setMetroManagerOpen] = useState(false);
+  const viewLayer = useGameStore((s) => s.viewLayer);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -72,7 +77,7 @@ export function PixiGame({ world }: { world: GameWorld }) {
       let uiTimer = UI_SYNC_INTERVAL_SECONDS;
 
       view.app.ticker.add((ticker) => {
-        const { paused, speed, heatmapMode, setStats, setSelected } = useGameStore.getState();
+        const { paused, speed, heatmapMode, viewLayer, setStats, setSelected } = useGameStore.getState();
         const dt = ticker.deltaMS / 1000;
         world.update(dt, speed, paused);
         const hover = useGameStore.getState().hoverPreview;
@@ -87,6 +92,7 @@ export function PixiGame({ world }: { world: GameWorld }) {
           cameraRef.current.x,
           cameraRef.current.y,
           cameraRef.current.scale,
+          viewLayer,
           particles,
         );
         applyParticleCamera(view.particleGraphics, view.particleLabels, cameraRef.current);
@@ -122,7 +128,14 @@ export function PixiGame({ world }: { world: GameWorld }) {
         <span>Scroll: zoom</span>
         <span>Clique e arraste: traçar rua/avenida</span>
       </div>
+      <LayerToggle />
       <CanvasToolDock />
+      {viewLayerUi === 'underground' && (
+        <button className="metro-manager-toggle" type="button" onClick={() => setMetroManagerOpen((open) => !open)}>
+          🚇 Gerenciar linhas
+        </button>
+      )}
+      {metroManagerOpen && <MetroManagementPanel world={world} onClose={() => setMetroManagerOpen(false)} />}
       {hoverPreview && (
         <div className={`tile-preview ${hoverPreview.valid ? 'valid' : 'invalid'}`}>
           <strong>{hoverPreview.label}</strong>

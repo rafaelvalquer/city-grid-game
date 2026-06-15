@@ -1979,9 +1979,7 @@ export class GameWorld {
 
   createMetroLine(stationIds: string[]): { success: boolean; name?: string; cost?: number; reason?: string } {
     const uniqueStationIds = dedupeIds(stationIds);
-    if (uniqueStationIds.length < METRO_CONFIG.minStationsForLine) {
-      return { success: false, reason: 'A linha precisa ter ao menos duas estações.' };
-    }
+    if (uniqueStationIds.length < METRO_CONFIG.minStationsForLine) return { success: false, reason: 'A linha precisa ter ao menos duas estações.' };
 
     for (let i = 0; i < uniqueStationIds.length - 1; i += 1) {
       if (!this.hasMetroTrackBetween(uniqueStationIds[i], uniqueStationIds[i + 1])) {
@@ -1990,11 +1988,7 @@ export class GameWorld {
     }
 
     if (this.money < METRO_CONFIG.lineActivationCost) {
-      return {
-        success: false,
-        cost: METRO_CONFIG.lineActivationCost,
-        reason: `Faltam $ ${METRO_CONFIG.lineActivationCost - this.money} para ativar a linha.`,
-      };
+      return { success: false, cost: METRO_CONFIG.lineActivationCost, reason: `Faltam $ ${METRO_CONFIG.lineActivationCost - this.money} para ativar a linha.` };
     }
 
     const line: MetroLine = {
@@ -2014,29 +2008,49 @@ export class GameWorld {
     };
 
     this.metroLines.push(line);
-
     for (const stationId of uniqueStationIds) {
       const station = this.getMetroStation(stationId);
-      if (!station) continue;
-      station.activeLineIds ??= [];
-      if (!station.activeLineIds.includes(line.id)) station.activeLineIds.push(line.id);
+      if (station && !station.activeLineIds.includes(line.id)) station.activeLineIds.push(line.id);
     }
-
     this.spawnMetroTrain(line.id);
-    line.trainsActive = this.metroTrains.filter((train) => train.lineId === line.id).length;
-    line.currentPassengers = this.metroTrains
-      .filter((train) => train.lineId === line.id)
-      .reduce((sum, train) => sum + train.passengers, 0);
-    line.waitingPassengers = uniqueStationIds
-      .map((stationId) => this.getMetroStation(stationId))
-      .filter((station): station is MetroStation => Boolean(station))
-      .reduce((sum, station) => sum + station.waitingPassengers, 0);
-
+    this.refreshMetroLineMetrics(line.id);
     this.money -= METRO_CONFIG.lineActivationCost;
     this.selected = { kind: 'metroLine', line };
     this.markStaticRenderDirty();
     this.emit();
+    return { success: true, name: line.name, cost: METRO_CONFIG.lineActivationCost };
+  } {
+    const uniqueStationIds = dedupeIds(stationIds);
+    if (uniqueStationIds.length < METRO_CONFIG.minStationsForLine) return { success: false, reason: 'A linha precisa ter ao menos duas estações.' };
 
+    for (let i = 0; i < uniqueStationIds.length - 1; i += 1) {
+      if (!this.hasMetroTrackBetween(uniqueStationIds[i], uniqueStationIds[i + 1])) {
+        return { success: false, reason: 'Todas as estações consecutivas precisam estar conectadas por trilhos.' };
+      }
+    }
+
+    if (this.money < METRO_CONFIG.lineActivationCost) {
+      return { success: false, cost: METRO_CONFIG.lineActivationCost, reason: `Faltam $ ${METRO_CONFIG.lineActivationCost - this.money} para ativar a linha.` };
+    }
+
+    const line: MetroLine = {
+      id: nanoid(8),
+      name: `Linha ${this.metroLines.length + 1}`,
+      color: pickMetroLineColor(this.metroLines.length),
+      stationIds: uniqueStationIds,
+      active: true,
+      frequencySeconds: 18,
+      trainCapacity: METRO_CONFIG.trainCapacity,
+      totalPassengers: 0,
+      carsAvoided: 0,
+    };
+
+    this.metroLines.push(line);
+    this.spawnMetroTrain(line.id);
+    this.money -= METRO_CONFIG.lineActivationCost;
+    this.selected = { kind: 'metroLine', line };
+    this.markStaticRenderDirty();
+    this.emit();
     return { success: true, name: line.name, cost: METRO_CONFIG.lineActivationCost };
   }
 

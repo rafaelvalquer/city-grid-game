@@ -2189,3 +2189,242 @@ h3 {
     transition: none;
   }
 }
+
+
+/* Metro / underground layer */
+.layer-toggle {
+  position: absolute;
+  top: 56px;
+  right: 16px;
+  z-index: 12;
+  display: inline-flex;
+  gap: 6px;
+  padding: 6px;
+  border: 1px solid rgba(150, 167, 189, 0.22);
+  border-radius: 999px;
+  background: rgba(7, 17, 31, 0.74);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(14px);
+}
+
+.layer-toggle button {
+  min-height: 32px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.layer-toggle button.active {
+  color: #06111d;
+  background: linear-gradient(135deg, #5cc8ff, #35d07f);
+}
+
+
+/* Metro surface V2 */
+.metro-manager-toggle {
+  position: absolute;
+  top: 102px;
+  right: 16px;
+  z-index: 12;
+  min-height: 34px;
+  padding: 8px 12px;
+  border: 1px solid rgba(92, 200, 255, 0.32);
+  border-radius: 999px;
+  background: rgba(7, 17, 31, 0.78);
+  color: #dff6ff;
+  font-weight: 850;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(14px);
+}
+
+.metro-management-panel {
+  position: absolute;
+  top: 146px;
+  right: 16px;
+  z-index: 18;
+  width: min(390px, calc(100% - 32px));
+  max-height: calc(100% - 170px);
+  overflow-y: auto;
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgba(92, 200, 255, 0.26);
+  border-radius: 16px;
+  background: rgba(7, 17, 31, 0.92);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(18px);
+}
+
+.metro-management-panel header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: start;
+}
+
+.metro-management-panel h2 {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+}
+
+.metro-management-panel header p,
+.metro-management-panel p {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.metro-management-panel header button,
+.metro-line-delete {
+  border: 1px solid rgba(150, 167, 189, 0.22);
+  border-radius: 10px;
+  background: rgba(16, 26, 42, 0.82);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.metro-management-summary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.metro-management-summary span,
+.metro-line-kpis span {
+  display: grid;
+  gap: 2px;
+  padding: 8px;
+  border: 1px solid rgba(150, 167, 189, 0.16);
+  border-radius: 10px;
+  background: rgba(16, 26, 42, 0.66);
+}
+
+.metro-management-summary strong,
+.metro-line-kpis span {
+  color: #e8eef7;
+  font-size: 14px;
+}
+
+.metro-management-summary small,
+.metro-line-kpis small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.metro-line-list {
+  display: grid;
+  gap: 10px;
+}
+
+.metro-line-card {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(150, 167, 189, 0.16);
+  border-radius: 12px;
+  background: rgba(16, 26, 42, 0.72);
+}
+
+.metro-line-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.metro-line-main i {
+  width: 12px;
+  height: 34px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+}
+
+.metro-line-main span {
+  display: grid;
+  gap: 2px;
+}
+
+.metro-line-main small {
+  color: var(--muted);
+}
+
+.metro-line-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  text-align: center;
+}
+
+.metro-line-details {
+  display: grid;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 10px;
+  background: rgba(7, 17, 31, 0.45);
+}
+
+.metro-line-details p {
+  display: grid;
+  gap: 3px;
+}
+
+.metro-line-details p span {
+  color: var(--muted);
+}
+
+.metro-station-list {
+  display: grid;
+  gap: 6px;
+}
+
+.metro-station-list div {
+  display: grid;
+  gap: 2px;
+  padding: 6px;
+  border-radius: 8px;
+  background: rgba(92, 200, 255, 0.08);
+}
+
+.metro-line-delete {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: #ffd6d6;
+}
+
+.metro-analytics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 8px;
+}
+
+.metro-analytics-grid p {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding: 9px;
+  border: 1px solid rgba(150, 167, 189, 0.14);
+  border-radius: 10px;
+  background: rgba(16, 26, 42, 0.5);
+}
+
+.metro-analytics-grid span {
+  color: var(--muted);
+  font-size: 12px;
+}
+

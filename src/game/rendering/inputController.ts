@@ -1,6 +1,7 @@
 import type { MutableRefObject } from 'react';
 import { ROAD_CONFIG } from '../config/roadConfig';
 import { TRANSIT_CONFIG } from '../config/transitConfig';
+import { METRO_CONFIG } from '../config/metroConfig';
 import { getBuildingDemolitionCost, type GameWorld } from '../engine/simulation';
 import { inBounds, isRoadType, keyOf } from '../city/grid';
 import { isIntersection } from '../systems/trafficRules';
@@ -45,6 +46,9 @@ export function connectInputController(params: {
     return world.cars.find((c) => Math.abs(c.x - tileX) < 0.45 && Math.abs(c.y - tileY) < 0.45);
   };
 
+  let pendingMetroTrackStationId: string | null = null;
+  let pendingMetroLineStationId: string | null = null;
+
   const applyTool = (tileX: number, tileY: number) => {
     const state = useGameStore.getState();
     const tileKey = keyOf(tileX, tileY);
@@ -53,9 +57,67 @@ export function connectInputController(params: {
 
     if (state.selectedTool === 'inspect') {
       const car = detectCar(tileX, tileY);
-      if (car) world.inspectCar(car.id);
+      const station = world.getMetroStationAt(tileX, tileY);
+      if (state.viewLayer === 'underground' && station) world.inspectMetroStation(station.id);
+      else if (car) world.inspectCar(car.id);
       else world.inspectAt(tileX, tileY);
       state.setActionFeedback(null);
+      return;
+    }
+
+    if (state.selectedTool === 'metroStation') {
+      const preview = getActionPreview(world, tileX, tileY, state.selectedTool, state.stats.money);
+      const didBuild = world.buildMetroStationAt(tileX, tileY);
+      state.setActionFeedback(didBuild ? preview.successMessage : preview.reason ?? 'Não foi possível construir a estação.');
+      return;
+    }
+
+    if (state.selectedTool === 'metroTrack') {
+      if (state.viewLayer !== 'underground') {
+        state.setActionFeedback('Ative a camada Subsolo para conectar trilhos.');
+        return;
+      }
+      const station = world.getMetroStationAt(tileX, tileY);
+      if (!station) {
+        state.setActionFeedback('Selecione uma estação de metrô para iniciar ou concluir o trilho.');
+        return;
+      }
+      if (!pendingMetroTrackStationId) {
+        pendingMetroTrackStationId = station.id;
+        state.setActionFeedback(`Origem do trilho: ${station.name}. Clique em outra estação para conectar.`);
+        return;
+      }
+      const from = pendingMetroTrackStationId;
+      pendingMetroTrackStationId = null;
+      const result = world.buildMetroTrack(from, station.id);
+      state.setActionFeedback(result.success ? `Trilho construído por $ ${result.cost}.` : result.reason ?? 'Não foi possível construir o trilho.');
+      return;
+    }
+
+    if (state.selectedTool === 'metroLine') {
+      if (state.viewLayer !== 'underground') {
+        state.setActionFeedback('Ative a camada Subsolo para criar linhas de metrô.');
+        return;
+      }
+      const station = world.getMetroStationAt(tileX, tileY);
+      if (!station) {
+        state.setActionFeedback('Clique em uma estação de metrô para iniciar ou finalizar a linha.');
+        return;
+      }
+      if (!pendingMetroLineStationId) {
+        pendingMetroLineStationId = station.id;
+        state.setActionFeedback(`Início da linha: ${station.name}. Clique na estação de destino.`);
+        return;
+      }
+      const from = pendingMetroLineStationId;
+      pendingMetroLineStationId = null;
+      const route = world.findMetroRoute(from, station.id);
+      if (route.length < 2) {
+        state.setActionFeedback('Não existe trilho conectado entre as estações selecionadas.');
+        return;
+      }
+      const result = world.createMetroLine(route);
+      state.setActionFeedback(result.success ? `${result.name} ativada por $ ${result.cost}.` : result.reason ?? 'Não foi possível criar a linha.');
       return;
     }
     const preview = { ...getActionPreview(world, tileX, tileY, state.selectedTool, state.stats.money), tool: state.selectedTool };
@@ -406,6 +468,24 @@ export function getActionPreview(world: GameWorld, x: number, y: number, tool: T
     if (!access) return { x, y, label: 'Sem via de acesso', cost, valid: false, reason: 'O ponto precisa ficar em um lote vazio adjacente a rua ou avenida.', successMessage: '' };
     if (money < cost) return { x, y, label: 'Dinheiro insuficiente', cost, valid: false, reason: `Faltam $ ${cost - money} para construir o ponto.`, successMessage: '' };
     return { x, y, label: 'Construir ponto de ônibus', cost, valid: true, successMessage: `Ponto de ônibus construído por $ ${cost}.` };
+  }
+
+  if (tool === 'metroStation') {
+    const cost = METRO_CONFIG.stationBuildCost;
+    if (world.getMetroStationAt(x, y)) return { x, y, label: 'Estação já existe', cost, valid: false, reason: 'Já existe uma estação de metrô nesse tile.', successMessage: '' };
+    if (tile.type !== 'empty') return { x, y, label: 'Tile ocupado', cost, valid: false, reason: 'A estação precisa ocupar um tile vazio na superfície.', successMessage: '' };
+    if (money < cost) return { x, y, label: 'Dinheiro insuficiente', cost, valid: false, reason: `Faltam $ ${cost - money} para construir a estação.`, successMessage: '' };
+    return { x, y, label: 'Construir estação de metrô', cost, valid: true, successMessage: `Estação de metrô construída por $ ${cost}.` };
+  }
+
+  if (tool === 'metroTrack') {
+    const station = world.getMetroStationAt(x, y);
+    return { x, y, label: station ? `Selecionar ${station.name}` : 'Selecione uma estação', valid: Boolean(station), reason: station ? undefined : 'Trilhos ligam uma estação a outra.', successMessage: 'Estação selecionada.' };
+  }
+
+  if (tool === 'metroLine') {
+    const station = world.getMetroStationAt(x, y);
+    return { x, y, label: station ? `Linha a partir de ${station.name}` : 'Selecione uma estação', cost: METRO_CONFIG.lineActivationCost, valid: Boolean(station), reason: station ? undefined : 'Clique em uma estação para criar uma linha.', successMessage: 'Estação selecionada.' };
   }
 
   if (tool === 'oneWay') {

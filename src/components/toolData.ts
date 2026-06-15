@@ -2,6 +2,7 @@ import type { LucideIcon } from 'lucide-react';
 import { ArrowRight, BusFront, Circle, CircleDot, Eye, Gauge, Route, TrafficCone, Trash2, Wrench } from 'lucide-react';
 import { ROAD_CONFIG } from '../game/config/roadConfig';
 import { TRANSIT_CONFIG } from '../game/config/transitConfig';
+import { METRO_CONFIG } from '../game/config/metroConfig';
 import { TRAFFIC_LIGHT_BUILD_COST } from '../game/systems/trafficLights';
 import type { Tool } from '../types/game.types';
 
@@ -13,7 +14,7 @@ export type ToolItem = {
 };
 
 export type ToolGroup = {
-  id: 'roads' | 'traffic' | 'edit';
+  id: 'roads' | 'traffic' | 'underground' | 'edit';
   label: string;
   Icon: LucideIcon;
   tools: ToolItem[];
@@ -38,6 +39,16 @@ export const toolGroups: ToolGroup[] = [
       { id: 'trafficLight', label: 'Semáforo', cost: TRAFFIC_LIGHT_BUILD_COST, Icon: CircleDot },
       { id: 'oneWay', label: 'Mão única', Icon: ArrowRight },
       { id: 'busStop', label: 'Ponto de ônibus', cost: TRANSIT_CONFIG.busStopCost, Icon: BusFront },
+    ],
+  },
+  {
+    id: 'underground',
+    label: 'Subsolo',
+    Icon: CircleDot,
+    tools: [
+      { id: 'metroStation', label: 'Estação', cost: METRO_CONFIG.stationBuildCost, Icon: CircleDot },
+      { id: 'metroTrack', label: 'Trilho', cost: METRO_CONFIG.trackCostPerTile, Icon: Route },
+      { id: 'metroLine', label: 'Criar linha', cost: METRO_CONFIG.lineActivationCost, Icon: BusFront },
     ],
   },
   {

@@ -36,6 +36,7 @@ export function HudBar({ analyticsOpen = false, onToggleAnalytics }: { analytics
         <div className="hud-item"><Users size={16} /><span>{stats.population}</span><small>pop</small></div>
         <div className="hud-item"><Car size={16} /><span>{stats.activeCars}</span><small>carros</small></div>
         <div className="hud-item"><BusFront size={16} /><span>{stats.activeBuses}</span><small>{stats.waitingPassengers} fila</small></div>
+        <div className="hud-item"><BusFront size={16} /><span>{stats.metroPassengers}</span><small>{stats.metroTrains} trens</small></div>
       </div>
       <div className="hud-cluster">
         <div className={`hud-item signal ${levelClass(stats.satisfaction, 62, 35)}`}>
