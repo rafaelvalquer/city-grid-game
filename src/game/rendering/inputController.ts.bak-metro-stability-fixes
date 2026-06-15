@@ -306,11 +306,6 @@ export function getLineBuildPreview(world: GameWorld, tiles: Vec2[], tool: 'road
       reason ??= 'A linha passa por um ponto de ônibus.';
       continue;
     }
-    if (tile.type === 'metroStation') {
-      invalidTiles.push(pos);
-      reason ??= 'A linha passa por uma estação de metrô.';
-      continue;
-    }
     if (tile.type === 'building') {
       invalidTiles.push(pos);
       reason ??= 'A linha passa por um prédio.';
@@ -508,16 +503,6 @@ export function getActionPreview(world: GameWorld, x: number, y: number, tool: T
 
   if (tool === 'remove') {
     const roundaboutCenter = findRoundaboutCenterForTile(world.grid, { x, y });
-    const metroStation = world.getMetroStationAt(x, y);
-    if (metroStation) {
-      return {
-        x,
-        y,
-        label: 'Remover estação de metrô',
-        valid: true,
-        successMessage: 'Estação de metrô removida. Trilhos, linhas e trens dependentes também foram removidos.',
-      };
-    }
     if (tile.type === 'busStop') {
       const cost = Math.ceil(TRANSIT_CONFIG.busStopCost * TRANSIT_CONFIG.busStopRemoveCostRatio);
       if (money < cost) return { x, y, label: 'Dinheiro insuficiente', cost, valid: false, reason: `Faltam $ ${cost - money} para remover.`, successMessage: '' };

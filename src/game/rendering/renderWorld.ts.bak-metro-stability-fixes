@@ -118,15 +118,6 @@ function renderDynamicLayer(
 ): void {
   graphics.clear();
 
-  if (viewLayer === 'underground') {
-    renderMetroLayer(graphics, world, viewLayer, ts, timeSeconds);
-    if (hoverPreview) drawConstructionPreview(graphics, world, hoverPreview, ts, timeSeconds);
-    if (world.selected.kind === 'tile') drawSelection(graphics, world.selected.x, world.selected.y, ts);
-    if (world.selected.kind === 'metroStation') drawSelection(graphics, world.selected.station.x, world.selected.station.y, ts);
-    pruneSmokeHistory(state, timeSeconds);
-    return;
-  }
-
   for (const stop of world.transitStops) {
     drawBusStop(graphics, world, stop.x, stop.y, ts, timeSeconds, atmosphere);
   }

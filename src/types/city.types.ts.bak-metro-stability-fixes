@@ -1,6 +1,6 @@
 import type { MetroLine, MetroStation, MetroTrain } from './metro.types';
 
-export type TileType = 'empty' | 'road' | 'avenue' | 'roundabout' | 'roundaboutCenter' | 'building' | 'busStop' | 'metroStation';
+export type TileType = 'empty' | 'road' | 'avenue' | 'roundabout' | 'roundaboutCenter' | 'building' | 'busStop';
 export type BuildingType = 'house' | 'shop' | 'office';
 export type BuildingLevel = 1 | 2 | 3;
 export type RoadType = 'road' | 'avenue' | 'roundabout';
