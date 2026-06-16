@@ -7,7 +7,7 @@ import { getBuildingDemolitionCost, type GameWorld } from '../engine/simulation'
 import { inBounds, isRoadType, keyOf } from '../city/grid';
 import { isIntersection } from '../systems/trafficRules';
 import { TRAFFIC_LIGHT_BUILD_COST } from '../systems/trafficLights';
-import { canPlaceRoundabout, findRoundaboutCenterForTile, getRoundaboutArea, isRoundaboutCenter, isRoundaboutTile } from '../systems/roundabouts';
+import { canPlaceRoundabout, findRoundaboutCenterForTile, isRoundaboutCenter, isRoundaboutTile } from '../systems/roundabouts';
 import { useGameStore } from '../../store/gameStore';
 import type { RoadDirection, RoadType, Tile, Vec2 } from '../../types/city.types';
 import type { Tool } from '../../types/game.types';
@@ -659,30 +659,11 @@ export function getActionPreview(world: GameWorld, x: number, y: number, tool: T
   }
 
   if (tool === 'roundabout') {
-    const area = getRoundaboutArea({ x, y });
-    const placement = canPlaceRoundabout(world.grid, { x, y }, world.canBuildRoadOverBuildings());
-    const buildingsToDemolish = area
-      .map((pos) => {
-        const areaTile = world.grid[pos.y]?.[pos.x];
-        return areaTile?.type === 'building' && areaTile.buildingId ? world.getBuilding(areaTile.buildingId) : undefined;
-      })
-      .filter((building): building is NonNullable<ReturnType<GameWorld['getBuilding']>> => Boolean(building));
-    const demolitionCost = buildingsToDemolish.reduce((sum, building) => sum + getBuildingDemolitionCost(building), 0);
-    const cost = ROAD_CONFIG.roundabout.buildCost + demolitionCost;
+    const cost = ROAD_CONFIG.roundabout.buildCost;
+    const placement = canPlaceRoundabout(world.grid, { x, y });
     if (!placement.valid) return { x, y, label: 'Rotatória indisponível', cost, valid: false, reason: placement.reason, successMessage: '' };
     if (money < cost) return { x, y, label: 'Dinheiro insuficiente', cost, valid: false, reason: `Faltam $ ${cost - money} para construir.`, successMessage: '' };
-    const demolitionText = buildingsToDemolish.length > 0
-      ? ` ${buildingsToDemolish.length} prédio${buildingsToDemolish.length > 1 ? 's' : ''} será${buildingsToDemolish.length > 1 ? 'o' : ''} demolido${buildingsToDemolish.length > 1 ? 's' : ''}.`
-      : '';
-    return {
-      x,
-      y,
-      label: buildingsToDemolish.length > 0 ? 'Demolir e construir rotatória' : 'Construir rotatória',
-      cost,
-      valid: true,
-      demolishedBuildings: buildingsToDemolish.length,
-      successMessage: `Rotatória construída por $ ${cost}.${demolitionText}`,
-    };
+    return { x, y, label: 'Construir rotatória', cost, valid: true, successMessage: `Rotatória construída por $ ${cost}.` };
   }
 
   if (tool === 'trafficLight') {

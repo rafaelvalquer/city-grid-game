@@ -52,14 +52,11 @@ export function findRoundaboutCenterForTile(grid: Tile[][], pos: Vec2): Vec2 | u
   return undefined;
 }
 
-export function canPlaceRoundabout(grid: Tile[][], center: Vec2, allowBuildingDemolition = false): { valid: boolean; reason?: string } {
+export function canPlaceRoundabout(grid: Tile[][], center: Vec2): { valid: boolean; reason?: string } {
   for (const tilePos of getRoundaboutArea(center)) {
     if (!inBounds(tilePos.x, tilePos.y)) return { valid: false, reason: 'A rotatória precisa caber em uma área 3x3.' };
-    const tile = grid[tilePos.y]?.[tilePos.x];
-    if (!tile) return { valid: false, reason: 'A rotatória precisa caber em uma área 3x3.' };
-    if (tile.type === 'building' && !allowBuildingDemolition) return { valid: false, reason: 'Não é possível construir rotatória sobre prédio.' };
-    if (tile.type === 'busStop') return { valid: false, reason: 'Remova o ponto de ônibus antes de construir a rotatória.' };
-    if (tile.type === 'metroStation') return { valid: false, reason: 'Remova a estação de metrô antes de construir a rotatória.' };
+    const tile = grid[tilePos.y][tilePos.x];
+    if (tile.type === 'building') return { valid: false, reason: 'Não é possível construir rotatória sobre prédio.' };
   }
   return { valid: true };
 }

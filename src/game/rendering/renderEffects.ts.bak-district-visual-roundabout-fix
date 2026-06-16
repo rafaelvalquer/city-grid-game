@@ -1,5 +1,6 @@
 import type { Graphics } from 'pixi.js';
 import type { HeatmapMode } from '../../store/gameStore';
+import { GAME_CONFIG } from '../config/gameConfig';
 import type { GameWorld } from '../engine/simulation';
 import type { DayPeriod } from '../engine/timeSystem';
 import { MAP_COLORS } from './visualTheme';
@@ -83,23 +84,18 @@ export function normalizePeriod(period: string): DayPeriod {
 }
 
 
-export function drawAtmosphereOverlay(graphics: Graphics, world: GameWorld, atmosphere: Atmosphere, heatmapMode: HeatmapMode, ts: number): void {
+export function drawAtmosphereOverlay(graphics: Graphics, atmosphere: Atmosphere, heatmapMode: HeatmapMode, ts: number): void {
   if (atmosphere.overlayAlpha <= 0) return;
   const heatmapFactor = heatmapMode === 'off' ? 1 : 0.55;
-  const width = world.grid[0]?.length ?? 0;
-  const height = world.grid.length;
-  graphics.rect(0, 0, width * ts, height * ts)
+  graphics.rect(0, 0, GAME_CONFIG.gridWidth * ts, GAME_CONFIG.gridHeight * ts)
     .fill({ color: atmosphere.overlayColor, alpha: atmosphere.overlayAlpha * heatmapFactor });
 }
 
 
 export function drawStreetFurniture(graphics: Graphics, world: GameWorld, ts: number, timeSeconds: number, atmosphere: Atmosphere): void {
-  for (let y = 0; y < world.grid.length; y += 1) {
-    const row = world.grid[y];
-    if (!row) continue;
-    for (let x = 0; x < row.length; x += 1) {
-      const tile = row[x];
-      if (!tile) continue;
+  for (let y = 0; y < GAME_CONFIG.gridHeight; y++) {
+    for (let x = 0; x < GAME_CONFIG.gridWidth; x++) {
+      const tile = world.grid[y][x];
       if (tile.type === 'empty') {
         drawEmptyLotMicroDetails(graphics, x, y, ts, timeSeconds, atmosphere);
         continue;

@@ -135,7 +135,7 @@ function renderDynamicLayer(
 
   drawHeatmapMode(graphics, world, heatmapMode, ts, atmosphere);
   drawStreetFurniture(graphics, world, ts, timeSeconds, atmosphere);
-  drawAtmosphereOverlay(graphics, world, atmosphere, heatmapMode, ts);
+  drawAtmosphereOverlay(graphics, atmosphere, heatmapMode, ts);
   renderMetroLayer(graphics, world, viewLayer, ts, timeSeconds);
   drawBuildingLife(graphics, world, ts, timeSeconds, atmosphere);
   drawDisconnectedBuildingAlerts(graphics, world, ts, timeSeconds);

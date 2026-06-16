@@ -525,35 +525,21 @@ export class GameWorld {
     }
 
     if (tool === 'roundabout') {
-      const center = { x, y };
-      const area = getRoundaboutArea(center);
-      const placement = canPlaceRoundabout(this.grid, center, this.allowRoadDemolition);
+      const placement = canPlaceRoundabout(this.grid, { x, y });
       if (!placement.valid) return false;
+      if (this.money < ROAD_CONFIG.roundabout.buildCost) return false;
 
-      const buildingsToDemolish = area
-        .map((pos) => {
-          const areaTile = this.grid[pos.y]?.[pos.x];
-          return areaTile?.type === 'building' && areaTile.buildingId ? this.getBuilding(areaTile.buildingId) : undefined;
-        })
-        .filter((building): building is Building => Boolean(building));
-      const demolitionCost = buildingsToDemolish.reduce((sum, building) => sum + getBuildingDemolitionCost(building), 0);
-      const cost = ROAD_CONFIG.roundabout.buildCost + demolitionCost;
-      if (this.money < cost) return false;
-
-      for (const building of buildingsToDemolish) {
-        this.removeBuildingForRoad(building.id);
-      }
-      for (const pos of area) {
+      for (const pos of getRoundaboutArea({ x, y })) {
         this.trafficLights.delete(getTrafficLightKey(pos.x, pos.y));
         this.grid[pos.y][pos.x] = { x: pos.x, y: pos.y, type: 'empty' };
       }
-      for (const pos of getRoundaboutRing(center)) {
+      for (const pos of getRoundaboutRing({ x, y })) {
         this.grid[pos.y][pos.x] = { x: pos.x, y: pos.y, type: 'roundabout' };
       }
       this.grid[y][x] = { x, y, type: 'roundaboutCenter' };
       this.markStaticRenderDirty();
-      this.rerouteCarsAffectedBy(area);
-      this.money -= cost;
+      this.rerouteCarsAffectedBy(getRoundaboutArea({ x, y }));
+      this.money -= ROAD_CONFIG.roundabout.buildCost;
       this.updateConnections();
       this.rebuildTransitLine();
       this.inspectAt(x, y - 1);
