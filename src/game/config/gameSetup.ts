@@ -3,11 +3,13 @@ export type BuildingSpawnMode = 'organic' | 'compact' | 'districts' | 'corridors
 export type GameSetupOptions = {
   spawnMode: BuildingSpawnMode;
   allowRoadDemolition: boolean;
+  enableTerrainRelief: boolean;
 };
 
 export const DEFAULT_GAME_SETUP: GameSetupOptions = {
   spawnMode: 'organic',
   allowRoadDemolition: false,
+  enableTerrainRelief: true,
 };
 
 export const BUILDING_SPAWN_MODES: Array<{

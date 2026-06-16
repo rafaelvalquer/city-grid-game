@@ -5,7 +5,7 @@ import { METRO_CONFIG } from '../config/metroConfig';
 import { BIKE_LANE_CONFIG } from '../config/bikeConfig';
 import { buildMetroTrackTiles } from '../metro/metroLineBuilder';
 import { getBuildingDemolitionCost, type GameWorld } from '../engine/simulation';
-import { inBounds, isRoadType, keyOf } from '../city/grid';
+import { inBounds, isRoadType, isTerrainBlocked, keyOf } from '../city/grid';
 import { isIntersection } from '../systems/trafficRules';
 import { TRAFFIC_LIGHT_BUILD_COST } from '../systems/trafficLights';
 import { canPlaceRoundabout, findRoundaboutCenterForTile, getRoundaboutArea, isRoundaboutCenter, isRoundaboutTile } from '../systems/roundabouts';
@@ -558,6 +558,11 @@ export function getLineBuildPreview(world: GameWorld, tiles: Vec2[], tool: 'road
     }
 
     const tile = world.grid[pos.y][pos.x];
+    if (isTerrainBlocked(tile)) {
+      invalidTiles.push(pos);
+      reason ??= tile.type === 'lake' ? 'A linha passa por um lago.' : 'A linha passa por uma montanha.';
+      continue;
+    }
     if (tile.type === 'building' && world.canBuildRoadOverBuildings()) {
       const building = tile.buildingId ? world.getBuilding(tile.buildingId) : undefined;
       if (building) {

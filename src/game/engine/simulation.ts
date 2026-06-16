@@ -10,8 +10,10 @@ import { TRANSIT_CONFIG, BUS_LANE_CONFIG } from '../config/transitConfig';
 import { METRO_CONFIG } from '../config/metroConfig';
 import { BIKE_LANE_CONFIG } from '../config/bikeConfig';
 import { DISTRICT_EXPANSION_CONFIG } from '../config/districtConfig';
-import { createGrid, inBounds, isRoadType, keyOf, setGridBounds } from '../city/grid';
+import { TERRAIN_CONFIG } from '../config/terrainConfig';
+import { createGrid, inBounds, isRoadType, isTerrainBlocked, keyOf, setGridBounds } from '../city/grid';
 import { CityGenerator } from '../city/cityGenerator';
+import { generateTerrainReliefForBounds, getTerrainSummary } from '../city/terrainGenerator';
 import { applyBuildingLevel, createBuilding, updateBuildingConnection } from '../city/buildings';
 import { findFastestPath } from '../pathfinding/pathfinder';
 import { findBikeLanePath } from '../pathfinding/bikePathfinder';
@@ -132,6 +134,7 @@ export class GameWorld {
   private lastHistorySampleKey = '';
   private trafficLightDebugTimers = new Map<string, number>();
   private readonly allowRoadDemolition: boolean;
+  private readonly enableTerrainRelief: boolean;
   private staticRenderVersion = 0;
   private activeViewportBounds?: PerformanceViewportBounds;
   private performanceUpdateTick = 0;
@@ -140,6 +143,10 @@ export class GameWorld {
     setGridBounds(GAME_CONFIG.gridWidth, GAME_CONFIG.gridHeight);
     this.grid = createGrid(GAME_CONFIG.gridWidth, GAME_CONFIG.gridHeight);
     this.initializeDistricts();
+    this.enableTerrainRelief = options.enableTerrainRelief ?? TERRAIN_CONFIG.enabledByDefault;
+    if (this.enableTerrainRelief) {
+      generateTerrainReliefForBounds(this.grid, { xStart: 0, yStart: 0, width: GAME_CONFIG.gridWidth, height: GAME_CONFIG.gridHeight });
+    }
     this.allowRoadDemolition = options.allowRoadDemolition ?? false;
     this.generator = new CityGenerator(options);
     this.seedInitialCity();
@@ -348,6 +355,9 @@ export class GameWorld {
 
     this.money -= district.cost;
     setGridBounds(newWidth, oldHeight);
+    if (this.enableTerrainRelief) {
+      generateTerrainReliefForBounds(this.grid, { xStart: oldWidth, yStart: 0, width: expansionWidth, height: oldHeight }, { densityScale: 0.72 });
+    }
     this.updateConnections();
     this.updateTrafficMap();
     this.recordHistorySample(true);
@@ -377,6 +387,7 @@ export class GameWorld {
     const disconnectedBuildings = this.buildings.filter((b) => !b.connected).length;
     const congestions = [...this.traffic.values()].map((t) => t.congestion);
     const averageCongestion = congestions.length ? congestions.reduce((a, b) => a + b, 0) / congestions.length : 0;
+    const terrainSummary = getTerrainSummary(this.grid);
     const bikeLaneTiles = this.getBikeLaneTileCount();
     return {
       money: Math.floor(this.money),
@@ -413,6 +424,10 @@ export class GameWorld {
       day: this.time.getDay(),
       timeLabel: this.time.getLabel(),
       dayPeriod: this.time.getPeriod(),
+      terrainReliefEnabled: this.enableTerrainRelief,
+      terrainBlockedTiles: terrainSummary.terrainBlockedTiles,
+      mountainTiles: terrainSummary.mountainTiles,
+      lakeTiles: terrainSummary.lakeTiles,
     };
   }
 
@@ -642,6 +657,7 @@ export class GameWorld {
   buildAt(x: number, y: number, tool: Tool): boolean {
     if (!inBounds(x, y)) return false;
     const tile = this.grid[y][x];
+    if (isTerrainBlocked(tile)) return false;
 
     if (tool === 'metroStation') {
       return this.buildMetroStationAt(x, y);
@@ -754,8 +770,9 @@ export class GameWorld {
       if (this.money < cost) return false;
       const oneWay = tile.type === 'road' || tile.type === 'avenue' ? tile.oneWay : undefined;
       const busLane = tile.type === 'road' || tile.type === 'avenue' ? tile.busLane : undefined;
+      const bikeLane = tile.type === 'road' || tile.type === 'avenue' ? tile.bikeLane : undefined;
       if (building) this.removeBuildingForRoad(building.id);
-      this.grid[y][x] = { x, y, type: tool, oneWay, busLane };
+      this.grid[y][x] = { x, y, type: tool, oneWay, busLane, bikeLane: tool === 'road' ? bikeLane : undefined };
       this.markStaticRenderDirty();
       this.money -= cost;
       this.rerouteCarsAffectedBy([{ x, y }]);
@@ -867,6 +884,7 @@ export class GameWorld {
     for (const pos of uniqueTiles) {
       if (!inBounds(pos.x, pos.y)) return { success: false, built: 0, cost: 0, reason: 'A linha sai do mapa.' };
       const tile = this.grid[pos.y][pos.x];
+      if (isTerrainBlocked(tile)) return { success: false, built: 0, cost: 0, reason: tile.type === 'lake' ? 'A linha passa por um lago.' : 'A linha passa por uma montanha.' };
       if (tile.type === 'building' && this.allowRoadDemolition) {
         const building = tile.buildingId ? this.getBuilding(tile.buildingId) : undefined;
         if (building) {
@@ -893,8 +911,9 @@ export class GameWorld {
         const current = this.grid[pos.y][pos.x];
         const oneWay = current.type === 'road' || current.type === 'avenue' ? current.oneWay : undefined;
         const busLane = current.type === 'road' || current.type === 'avenue' ? current.busLane : undefined;
+        const bikeLane = current.type === 'road' || current.type === 'avenue' ? current.bikeLane : undefined;
         if (current.type === 'building' && current.buildingId) this.removeBuildingForRoad(current.buildingId);
-        this.grid[pos.y][pos.x] = { x: pos.x, y: pos.y, type: roadType, oneWay, busLane };
+        this.grid[pos.y][pos.x] = { x: pos.x, y: pos.y, type: roadType, oneWay, busLane, bikeLane: roadType === 'road' ? bikeLane : undefined };
           this.markStaticRenderDirty();
       }
     }

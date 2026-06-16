@@ -4,6 +4,7 @@ import { GAME_CONFIG } from '../config/gameConfig';
 import type { BuildingSpawnMode, GameSetupOptions } from '../config/gameSetup';
 import { DEFAULT_GAME_SETUP } from '../config/gameSetup';
 import { createBuilding } from './buildings';
+import { isTerrainBlocked } from './grid';
 
 export class CityGenerator {
   private rng = seedrandom(`${Date.now()}-${Math.random()}`);
@@ -167,7 +168,8 @@ export class CityGenerator {
     for (let i = 0; i < 120; i++) {
       const x = this.randInt(minX, maxX);
       const y = this.randInt(minY, maxY);
-      if (grid[y]?.[x]?.type === 'empty') return { x, y };
+      const tile = grid[y]?.[x];
+      if (tile?.type === 'empty' && !isTerrainBlocked(tile)) return { x, y };
     }
     return null;
   }
@@ -201,7 +203,8 @@ export class CityGenerator {
 
   private isCoherentSpot(grid: Tile[][], buildings: Building[], x: number, y: number, cityRadius: number): boolean {
     if (x < 2 || y < 2 || x > gridWidth(grid) - 3 || y > gridHeight(grid) - 3) return false;
-    if (grid[y]?.[x]?.type !== 'empty') return false;
+    const tile = grid[y]?.[x];
+    if (!tile || tile.type !== 'empty' || isTerrainBlocked(tile)) return false;
     const tooClose = buildings.some((b) => Math.abs(b.x - x) + Math.abs(b.y - y) < 2);
     if (tooClose) return false;
     const nearCity = buildings.some((b) => Math.abs(b.x - x) + Math.abs(b.y - y) <= cityRadius);

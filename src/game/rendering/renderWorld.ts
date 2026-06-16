@@ -7,6 +7,7 @@ import { isRoadType, keyOf } from '../city/grid';
 import { MAP_COLORS } from './visualTheme';
 import { getAtmosphere, drawAtmosphereOverlay, drawBuildingLife, drawStreetFurniture } from './renderEffects';
 import { drawBaseTile, drawLotDecoration } from './renderTerrain';
+import { drawTerrainFeatureAnimation, drawTerrainFeatureBase } from './renderTerrainFeatures';
 import { drawBusStop, drawBusStopCoverage, drawRoad, drawRoadSignage, drawRoundaboutIsland, drawTrafficLights, drawOneWayArrow } from './renderRoads';
 import { drawHeatmapMode } from './renderHeatmap';
 import { drawBuildingVariant } from './renderBuildings';
@@ -92,6 +93,7 @@ function renderStaticLayer(
       const tile = world.grid[y]?.[x];
       if (!tile) continue;
       drawBaseTile(graphics, tile, x, y, ts);
+      if (tile.type === 'mountain' || tile.type === 'lake') drawTerrainFeatureBase(graphics, world.grid, tile, x, y, ts, timeSeconds);
       if (tile.type === 'empty') drawLotDecoration(graphics, x, y, ts);
       if (tile.type === 'road') drawRoad(graphics, world.grid, x, y, ts, 'road');
       if (tile.type === 'avenue') drawRoad(graphics, world.grid, x, y, ts, 'avenue');
@@ -140,11 +142,14 @@ function renderDynamicLayer(
     return;
   }
 
+  drawTerrainFeatureAnimation(graphics, world.grid, ts, timeSeconds);
+
   for (const stop of world.transitStops) {
     drawBusStop(graphics, world, stop.x, stop.y, ts, timeSeconds, atmosphere);
   }
 
   drawHeatmapMode(graphics, world, heatmapMode, ts, atmosphere);
+  drawTerrainFeatureAnimation(graphics, world, ts, timeSeconds);
   drawStreetFurniture(graphics, world, ts, timeSeconds, atmosphere);
   drawAtmosphereOverlay(graphics, world, atmosphere, heatmapMode, ts);
   renderMetroLayer(graphics, world, viewLayer, ts, timeSeconds);

@@ -78,9 +78,17 @@ export function DetailsPanel({ world, className = '', onClose }: { world: GameWo
 
       {selected.kind === 'tile' && (
         <div className="detail-card">
-          <h3><CircleDot size={15} /> Tile vazio</h3>
+          <h3><CircleDot size={15} /> {(selected.type === 'mountain' || selected.type === 'lake') ? 'Relevo natural' : 'Tile vazio'}</h3>
           <p><span>Coordenada</span><strong>{selected.x}, {selected.y}</strong></p>
-          <p className="muted">Use Rua ou Avenida para conectar prédios.</p>
+          {(selected.type === 'mountain' || selected.type === 'lake') ? (
+            <>
+              <p><span>Tipo</span><strong>{selected.type === 'lake' ? 'Lago' : 'Montanha'}</strong></p>
+              <p><span>Construção</span><strong className="bad">Bloqueada</strong></p>
+              <p className="muted">Contorne esse relevo com ruas, avenidas, transporte público e ciclovias.</p>
+            </>
+          ) : (
+            <p className="muted">Use Rua ou Avenida para conectar prédios.</p>
+          )}
         </div>
       )}
 

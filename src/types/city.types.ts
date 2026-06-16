@@ -1,10 +1,11 @@
 import type { MetroLine, MetroStation, MetroTrain } from './metro.types';
 
-export type TileType = 'empty' | 'road' | 'avenue' | 'roundabout' | 'roundaboutCenter' | 'building' | 'busStop' | 'metroStation';
+export type TileType = 'empty' | 'road' | 'avenue' | 'roundabout' | 'roundaboutCenter' | 'building' | 'busStop' | 'metroStation' | 'mountain' | 'lake';
 export type BuildingType = 'house' | 'shop' | 'office';
 export type BuildingLevel = 1 | 2 | 3;
 export type RoadType = 'road' | 'avenue' | 'roundabout';
 export type RoadDirection = 'north' | 'south' | 'east' | 'west';
+export type TerrainKind = 'mountain' | 'lake';
 
 export type DistrictStatus = 'owned' | 'available' | 'locked';
 export type DistrictDirection = 'center' | 'east';
@@ -33,6 +34,10 @@ export type Tile = {
   oneWay?: RoadDirection;
   busLane?: boolean;
   bikeLane?: boolean;
+  terrainVariant?: number;
+  terrainClusterId?: string;
+  terrainDepth?: number;
+  terrainEdgeMask?: number;
 };
 
 export type Building = {
@@ -154,6 +159,10 @@ export type CityStats = {
   day: number;
   timeLabel: string;
   dayPeriod: string;
+  terrainReliefEnabled: boolean;
+  terrainBlockedTiles: number;
+  mountainTiles: number;
+  lakeTiles: number;
 };
 
 export type BuildingTypeCounts = Record<BuildingType, number>;

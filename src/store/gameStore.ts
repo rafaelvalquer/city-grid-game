@@ -80,6 +80,10 @@ const initialStats: CityStats = {
   day: 1,
   timeLabel: '06:00',
   dayPeriod: 'morning',
+  terrainReliefEnabled: true,
+  terrainBlockedTiles: 0,
+  mountainTiles: 0,
+  lakeTiles: 0,
 };
 
 export const useGameStore = create<GameStore>((set) => ({

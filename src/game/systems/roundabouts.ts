@@ -1,6 +1,6 @@
 import type { Car } from '../../types/agent.types';
 import type { RoadDirection, Tile, Vec2 } from '../../types/city.types';
-import { getNeighbors4, inBounds, isRoadType, keyOf } from '../city/grid';
+import { getNeighbors4, inBounds, isRoadType, isTerrainBlocked, keyOf } from '../city/grid';
 
 const RING_OFFSETS: Vec2[] = [
   { x: 0, y: -1 },
@@ -57,6 +57,7 @@ export function canPlaceRoundabout(grid: Tile[][], center: Vec2, allowBuildingDe
     if (!inBounds(tilePos.x, tilePos.y)) return { valid: false, reason: 'A rotatória precisa caber em uma área 3x3.' };
     const tile = grid[tilePos.y]?.[tilePos.x];
     if (!tile) return { valid: false, reason: 'A rotatória precisa caber em uma área 3x3.' };
+    if (isTerrainBlocked(tile)) return { valid: false, reason: tile.type === 'lake' ? 'Não é possível construir rotatória sobre lago.' : 'Não é possível construir rotatória sobre montanha.' };
     if (tile.type === 'building' && !allowBuildingDemolition) return { valid: false, reason: 'Não é possível construir rotatória sobre prédio.' };
     if (tile.type === 'busStop') return { valid: false, reason: 'Remova o ponto de ônibus antes de construir a rotatória.' };
     if (tile.type === 'metroStation') return { valid: false, reason: 'Remova a estação de metrô antes de construir a rotatória.' };

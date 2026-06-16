@@ -57,3 +57,13 @@ export function getNeighbors4ForGrid(grid: Tile[][], pos: Vec2): Vec2[] {
 export function isRoadType(type: TileType | undefined): boolean {
   return type === 'road' || type === 'avenue' || type === 'roundabout';
 }
+
+
+export function isTerrainBlocked(tile: Tile | undefined): boolean {
+  return tile?.type === 'mountain' || tile?.type === 'lake';
+}
+
+
+export function isTerrainType(type: TileType | undefined): boolean {
+  return type === 'mountain' || type === 'lake';
+}
