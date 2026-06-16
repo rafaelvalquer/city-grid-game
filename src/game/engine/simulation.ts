@@ -74,6 +74,17 @@ type RerouteOptions = {
   stopBeforeMoving?: boolean;
 };
 
+type PerformanceViewportBounds = {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+};
+
+const REDUCED_CAR_UPDATE_THRESHOLD = 450;
+const DISTANT_CAR_UPDATE_EVERY_TICKS = 3;
+const DISTANT_CAR_VIEWPORT_PADDING_TILES = 8;
+
 export class GameWorld {
   private readonly baseGridWidth = GAME_CONFIG.gridWidth;
   private readonly baseGridHeight = GAME_CONFIG.gridHeight;
@@ -122,6 +133,8 @@ export class GameWorld {
   private trafficLightDebugTimers = new Map<string, number>();
   private readonly allowRoadDemolition: boolean;
   private staticRenderVersion = 0;
+  private activeViewportBounds?: PerformanceViewportBounds;
+  private performanceUpdateTick = 0;
 
   constructor(options: Partial<GameSetupOptions> = {}) {
     setGridBounds(GAME_CONFIG.gridWidth, GAME_CONFIG.gridHeight);
@@ -354,6 +367,10 @@ export class GameWorld {
 
   private markStaticRenderDirty(): void {
     this.staticRenderVersion = (this.staticRenderVersion + 1) % Number.MAX_SAFE_INTEGER;
+  }
+
+  setActiveViewportBounds(bounds?: PerformanceViewportBounds): void {
+    this.activeViewportBounds = bounds;
   }
 
   getSnapshot(): CityStats {
@@ -1676,6 +1693,7 @@ export class GameWorld {
   }
 
   private updateCars(dt: number): void {
+    this.performanceUpdateTick = (this.performanceUpdateTick + 1) % 300000;
     const arrived: Car[] = [];
     const failed: Car[] = [];
     const drivingCars = this.cars.filter((car) => car.lifecyclePhase === 'driving');
@@ -1683,8 +1701,13 @@ export class GameWorld {
     const intersectionControls = buildIntersectionControls(this.grid, drivingCars, carSpatialIndex);
     const sortedCars = [...this.cars].sort((a, b) => this.carUpdatePriority(b) - this.carUpdatePriority(a));
 
-    for (const car of sortedCars) {
+    for (let carIndex = 0; carIndex < sortedCars.length; carIndex += 1) {
+      const car = sortedCars[carIndex];
       car.travelTime += dt;
+      if (this.shouldUseReducedCarUpdate(car)) {
+        this.advanceDistantCarLightweight(car, dt);
+        continue;
+      }
       if (car.lifecyclePhase === 'spawnExit') {
         car.lifecycleProgress += dt / CAR_SPAWN_EXIT_SECONDS;
         car.currentSpeed = Math.min(car.desiredSpeed, car.currentSpeed + car.acceleration * dt);
@@ -1896,6 +1919,81 @@ export class GameWorld {
       this.cars = this.cars.filter((c) => c.status !== 'arrived' && c.status !== 'no_route');
       this.averageTravelTime = this.tripHistory.length ? this.tripHistory.reduce((a, b) => a + b, 0) / this.tripHistory.length : 0;
     }
+  }
+
+  private shouldUseReducedCarUpdate(car: Car): boolean {
+    if (!this.activeViewportBounds) return false;
+    if (this.cars.length < REDUCED_CAR_UPDATE_THRESHOLD) return false;
+    if (car.vehicleType === 'bus') return false;
+    if (this.selected.kind === 'car' && this.selected.carId === car.id) return false;
+    if (car.lifecyclePhase !== 'driving') return false;
+    if (car.status !== 'moving' || car.trafficState !== 'moving') return false;
+    if (car.currentSpeed < 0.35 || car.targetSpeed < 0.2) return false;
+    if (car.stuckSeconds > 0.2 || car.immobileSeconds > 0.2 || car.rerouteCooldownSeconds > 0) return false;
+    if (car.intersectionStopKey || car.signalTransitionGraceSeconds > 0) return false;
+
+    const current = { x: car.currentTileX, y: car.currentTileY };
+    const next = car.route[car.routeIndex + 1];
+    if (!next) return false;
+    if (this.isTileInsideActiveViewport(current.x, current.y, DISTANT_CAR_VIEWPORT_PADDING_TILES)) return false;
+    if (this.isTileInsideActiveViewport(next.x, next.y, DISTANT_CAR_VIEWPORT_PADDING_TILES)) return false;
+    if (isIntersection(this.grid, current) || isIntersection(this.grid, next)) return false;
+
+    return this.performanceUpdateTick % DISTANT_CAR_UPDATE_EVERY_TICKS !== this.carUpdateBucket(car);
+  }
+
+  private advanceDistantCarLightweight(car: Car, dt: number): void {
+    const desired = Math.max(0.25, car.desiredSpeed || car.baseSpeed);
+    const speed = Math.max(0.25, Math.min(desired, car.currentSpeed || car.targetSpeed || car.baseSpeed));
+    car.currentSpeed = speed;
+    car.targetSpeed = desired;
+    car.status = 'moving';
+    car.trafficState = 'moving';
+    car.stuckSeconds = Math.max(0, car.stuckSeconds - dt * 2);
+    car.immobileSeconds = Math.max(0, car.immobileSeconds - dt * 3);
+
+    car.progressToNext += speed * dt;
+    while (car.progressToNext >= 1 && car.routeIndex < car.route.length - 1) {
+      car.progressToNext -= 1;
+      car.routeIndex += 1;
+      const pos = car.route[car.routeIndex];
+      car.currentTileX = pos.x;
+      car.currentTileY = pos.y;
+      car.x = pos.x;
+      car.y = pos.y;
+      if (isIntersection(this.grid, pos)) break;
+    }
+
+    if (car.routeIndex >= car.route.length - 1) {
+      car.lifecyclePhase = 'destinationEntry';
+      car.lifecycleProgress = 0;
+      car.currentSpeed = Math.min(car.currentSpeed, 0.5);
+      car.targetSpeed = 0;
+      return;
+    }
+
+    const current = car.route[car.routeIndex];
+    const next = car.route[car.routeIndex + 1];
+    if (!current || !next) return;
+    car.x = current.x + (next.x - current.x) * car.progressToNext + car.laneOffset.x;
+    car.y = current.y + (next.y - current.y) * car.progressToNext + car.laneOffset.y;
+  }
+
+  private isTileInsideActiveViewport(x: number, y: number, paddingTiles = 0): boolean {
+    const bounds = this.activeViewportBounds;
+    if (!bounds) return true;
+    return x >= bounds.minX - paddingTiles
+      && x <= bounds.maxX + paddingTiles
+      && y >= bounds.minY - paddingTiles
+      && y <= bounds.maxY + paddingTiles;
+  }
+
+  private carUpdateBucket(car: Car): number {
+    let hash = 0;
+    for (let index = 0; index < car.id.length; index += 1) {
+      hash = ((hash << 5) - hash + car.id.charCodeAt(index)) | 0;
+    }
+    return Math.abs(hash) % DISTANT_CAR_UPDATE_EVERY_TICKS;
   }
 
   private hasBusLaneForCar(car: Car, next?: Vec2): boolean {

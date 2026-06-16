@@ -7,9 +7,17 @@ export type CameraState = {
   scale: number;
 };
 
+export type ViewportTileBounds = {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+};
+
 export type CameraController = {
   state: CameraState;
   toWorldTile: (clientX: number, clientY: number) => Vec2;
+  getVisibleTileBounds: (paddingTiles?: number) => ViewportTileBounds;
   handlePointerDown: (event: PointerEvent) => boolean;
   handlePointerMove: (event: PointerEvent) => boolean;
   handleWheel: (event: WheelEvent) => void;
@@ -30,6 +38,21 @@ export function createCameraController(canvas: HTMLCanvasElement, state: CameraS
       return {
         x: Math.floor(worldX / GAME_CONFIG.tileSize),
         y: Math.floor(worldY / GAME_CONFIG.tileSize),
+      };
+    },
+    getVisibleTileBounds(paddingTiles = 2) {
+      const rect = canvas.getBoundingClientRect();
+      const tileSize = GAME_CONFIG.tileSize;
+      const left = (-state.x) / state.scale;
+      const top = (-state.y) / state.scale;
+      const right = (rect.width - state.x) / state.scale;
+      const bottom = (rect.height - state.y) / state.scale;
+
+      return {
+        minX: Math.floor(left / tileSize) - paddingTiles,
+        minY: Math.floor(top / tileSize) - paddingTiles,
+        maxX: Math.ceil(right / tileSize) + paddingTiles,
+        maxY: Math.ceil(bottom / tileSize) + paddingTiles,
       };
     },
     handlePointerDown(event) {

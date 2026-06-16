@@ -1,5 +1,6 @@
 import type { Container, Graphics } from 'pixi.js';
 import type { HeatmapMode, HoverPreview, ViewLayer } from '../../store/gameStore';
+import type { Car } from '../../types/agent.types';
 import { GAME_CONFIG } from '../config/gameConfig';
 import type { GameWorld } from '../engine/simulation';
 import { isRoadType, keyOf } from '../city/grid';
@@ -14,6 +15,13 @@ import { getStaticRenderSignature } from './renderInvalidation';
 import { drawConstructionPreview, drawSelectedCarMarker, drawSelectedRoute, drawSelection } from './renderUiOverlays';
 import type { ParticleSystem } from './particleSystem';
 import { renderMetroLayer } from './renderMetro';
+
+type ViewportTileBounds = {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+};
 import { drawBikeTrips } from './renderBikes';
 
 export type RenderWorldState = {
@@ -45,6 +53,7 @@ export function renderWorld(
   scale: number,
   viewLayer: ViewLayer,
   particles?: ParticleSystem,
+  visibleBounds?: ViewportTileBounds,
 ): void {
   const ts = GAME_CONFIG.tileSize;
   const timeSeconds = performance.now() / 1000;
@@ -61,7 +70,7 @@ export function renderWorld(
   }
 
   emitRenderParticles(state, world, timeSeconds, particles);
-  renderDynamicLayer(dynamicGraphics, state, world, heatmapMode, hoverPreview, ts, timeSeconds, atmosphere, viewLayer);
+  renderDynamicLayer(dynamicGraphics, state, world, heatmapMode, hoverPreview, ts, timeSeconds, atmosphere, viewLayer, visibleBounds);
 }
 
 function applyCamera(container: Container, camX: number, camY: number, scale: number): void {
@@ -118,6 +127,7 @@ function renderDynamicLayer(
   timeSeconds: number,
   atmosphere: ReturnType<typeof getAtmosphere>,
   viewLayer: ViewLayer,
+  visibleBounds?: ViewportTileBounds,
 ): void {
   graphics.clear();
 
@@ -143,7 +153,10 @@ function renderDynamicLayer(
   drawTrafficLights(graphics, world, ts, timeSeconds);
   drawSelectedRoute(graphics, world, ts);
 
+  const carCullBounds = visibleBounds ? expandViewportBounds(visibleBounds, 2) : undefined;
   for (const car of world.cars) {
+    const selectedCar = world.selected.kind === 'car' && world.selected.carId === car.id;
+    if (carCullBounds && !selectedCar && !isCarInsideBounds(car, carCullBounds)) continue;
     drawCar(graphics, car, world, ts, timeSeconds, atmosphere);
   }
   drawBikeTrips(graphics, world, ts, timeSeconds);
@@ -158,6 +171,25 @@ function renderDynamicLayer(
   }
   drawSelectedCarMarker(graphics, world, ts);
   pruneSmokeHistory(state, timeSeconds);
+}
+
+function expandViewportBounds(bounds: ViewportTileBounds, paddingTiles: number): ViewportTileBounds {
+  return {
+    minX: bounds.minX - paddingTiles,
+    minY: bounds.minY - paddingTiles,
+    maxX: bounds.maxX + paddingTiles,
+    maxY: bounds.maxY + paddingTiles,
+  };
+}
+
+function isCarInsideBounds(car: Car, bounds: ViewportTileBounds): boolean {
+  if (car.x >= bounds.minX && car.x <= bounds.maxX && car.y >= bounds.minY && car.y <= bounds.maxY) return true;
+  const current = car.route[car.routeIndex];
+  const next = car.route[car.routeIndex + 1];
+  return Boolean(
+    (current && current.x >= bounds.minX && current.x <= bounds.maxX && current.y >= bounds.minY && current.y <= bounds.maxY)
+    || (next && next.x >= bounds.minX && next.x <= bounds.maxX && next.y >= bounds.minY && next.y <= bounds.maxY)
+  );
 }
 
 function emitRenderParticles(state: RenderWorldState, world: GameWorld, timeSeconds: number, particles?: ParticleSystem): void {

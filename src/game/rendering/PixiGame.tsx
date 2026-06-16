@@ -79,6 +79,8 @@ export function PixiGame({ world }: { world: GameWorld }) {
       view.app.ticker.add((ticker) => {
         const { paused, speed, heatmapMode, viewLayer, setStats, setSelected } = useGameStore.getState();
         const dt = ticker.deltaMS / 1000;
+        const visibleBounds = camera.getVisibleTileBounds(3);
+        world.setActiveViewportBounds(visibleBounds);
         world.update(dt, speed, paused);
         const hover = useGameStore.getState().hoverPreview;
         renderWorld(
@@ -94,6 +96,7 @@ export function PixiGame({ world }: { world: GameWorld }) {
           cameraRef.current.scale,
           viewLayer,
           particles,
+          visibleBounds,
         );
         applyParticleCamera(view.particleGraphics, view.particleLabels, cameraRef.current);
         particles.update(dt);
