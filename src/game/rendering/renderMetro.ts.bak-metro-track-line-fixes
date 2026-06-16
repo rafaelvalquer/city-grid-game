@@ -1,6 +1,5 @@
 import type { Graphics } from 'pixi.js';
 import type { ViewLayer } from '../../store/gameStore';
-import type { Vec2 } from '../../types/city.types';
 import type { GameWorld } from '../engine/simulation';
 import { GAME_CONFIG } from '../config/gameConfig';
 
@@ -40,26 +39,23 @@ export function renderMetroLayer(
 
   for (const track of world.metroTracks) {
     if (!track.active || track.tiles.length < 2) continue;
-    drawPolyline(graphics, track.tiles, ts, METRO_TRACK, 5, 0.38);
-    drawPolyline(graphics, track.tiles, ts, 0xffffff, 1, 0.18);
+    graphics.moveTo(track.tiles[0].x * ts + ts / 2, track.tiles[0].y * ts + ts / 2);
+    for (const tile of track.tiles.slice(1)) {
+      graphics.lineTo(tile.x * ts + ts / 2, tile.y * ts + ts / 2);
+    }
+    graphics.stroke({ color: METRO_TRACK, width: 5, alpha: 0.38 });
+    graphics.stroke({ color: 0xffffff, width: 1, alpha: 0.18 });
   }
 
   for (const line of world.metroLines) {
     if (!line.active || line.stationIds.length < 2) continue;
-    const color = parseLineColor(line.color);
-    for (let index = 0; index < line.stationIds.length - 1; index += 1) {
-      const fromId = line.stationIds[index];
-      const toId = line.stationIds[index + 1];
-      const tiles = world.getMetroTrackTilesBetween(fromId, toId);
-      if (tiles.length >= 2) {
-        drawPolyline(graphics, tiles, ts, color, 3, 0.96);
-        continue;
-      }
-
-      const from = world.getMetroStation(fromId);
-      const to = world.getMetroStation(toId);
-      if (from && to) drawPolyline(graphics, [from, to], ts, color, 3, 0.56);
+    const stations = line.stationIds.map((stationId) => world.getMetroStation(stationId)).filter(Boolean);
+    if (stations.length < 2) continue;
+    graphics.moveTo(stations[0]!.x * ts + ts / 2, stations[0]!.y * ts + ts / 2);
+    for (const station of stations.slice(1)) {
+      graphics.lineTo(station!.x * ts + ts / 2, station!.y * ts + ts / 2);
     }
+    graphics.stroke({ color: parseLineColor(line.color), width: 3, alpha: 0.96 });
   }
 
   for (const station of world.metroStations) {
@@ -72,42 +68,14 @@ export function renderMetroLayer(
     const from = world.getMetroStation(line.stationIds[train.stationIndex]);
     const to = world.getMetroStation(line.stationIds[train.nextStationIndex]);
     if (!from || !to) continue;
-
-    const trackTiles = world.getMetroTrackTilesBetween(from.id, to.id);
-    const pose = trackTiles.length >= 2
-      ? interpolateTrackPosition(trackTiles, train.progress)
-      : { x: from.x + (to.x - from.x) * train.progress, y: from.y + (to.y - from.y) * train.progress };
-
-    const px = pose.x * ts + ts / 2;
-    const py = pose.y * ts + ts / 2;
+    const x = from.x + (to.x - from.x) * train.progress;
+    const y = from.y + (to.y - from.y) * train.progress;
+    const px = x * ts + ts / 2;
+    const py = y * ts + ts / 2;
     graphics.circle(px, py, 15).fill({ color: parseLineColor(line.color), alpha: 0.2 });
     graphics.roundRect(px - 11, py - 5, 22, 10, 5).fill({ color: METRO_TRAIN, alpha: 0.98 });
     graphics.roundRect(px - 6, py - 2, 12, 4, 3).fill({ color: 0x07111f, alpha: 0.76 });
   }
-}
-
-function drawPolyline(graphics: Graphics, tiles: Vec2[], ts: number, color: number, width: number, alpha: number): void {
-  if (tiles.length < 2) return;
-  graphics.moveTo(tiles[0].x * ts + ts / 2, tiles[0].y * ts + ts / 2);
-  for (const tile of tiles.slice(1)) {
-    graphics.lineTo(tile.x * ts + ts / 2, tile.y * ts + ts / 2);
-  }
-  graphics.stroke({ color, width, alpha });
-}
-
-function interpolateTrackPosition(tiles: Vec2[], progress: number): Vec2 {
-  if (tiles.length < 2) return tiles[0] ?? { x: 0, y: 0 };
-  const clamped = Math.max(0, Math.min(1, progress));
-  const segmentCount = tiles.length - 1;
-  const scaled = clamped * segmentCount;
-  const index = Math.min(segmentCount - 1, Math.floor(scaled));
-  const local = scaled - index;
-  const from = tiles[index];
-  const to = tiles[index + 1];
-  return {
-    x: from.x + (to.x - from.x) * local,
-    y: from.y + (to.y - from.y) * local,
-  };
 }
 
 function drawSurfaceStationBuildings(graphics: Graphics, world: GameWorld, ts: number, timeSeconds: number): void {
@@ -134,6 +102,7 @@ function drawSurfaceStationBuildings(graphics: Graphics, world: GameWorld, ts: n
     graphics.circle(cx, cy - 1, 11).fill({ color: active ? METRO_STATION_ACTIVE : METRO_STATION, alpha: 0.9 });
     graphics.circle(cx, cy - 1, 7).fill({ color: 0x07111f, alpha: 0.82 });
 
+    // Simple “M” mark using strokes so no Pixi Text is needed here.
     graphics.moveTo(cx - 5, cy + 4);
     graphics.lineTo(cx - 5, cy - 5);
     graphics.lineTo(cx, cy + 1);

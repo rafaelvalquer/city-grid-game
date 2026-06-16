@@ -165,7 +165,7 @@ export function connectInputController(params: {
     applyTool(tile.x, tile.y);
   }, { signal });
 
-  window.addEventListener('pointerup', (event) => {
+  window.addEventListener('pointerup', () => {
     const drag = refs.roadLineDragRef.current;
     const oneWayDrag = refs.oneWayLineDragRef.current;
     if (drag) {
@@ -199,15 +199,6 @@ export function connectInputController(params: {
           : result.reason ?? preview.reason ?? 'Não foi possível aplicar mão única.');
       }
       state.setHoverPreview(null);
-    }
-    if (metroDragMode) {
-      addMetroStationUnderPointerOnRelease(
-        world,
-        camera.toWorldTile(event.clientX, event.clientY),
-        metroDragMode,
-        pendingMetroTrackStationIds,
-        pendingMetroLineStationIds,
-      );
     }
     if (metroDragMode === 'track') {
       const state = useGameStore.getState();
@@ -292,24 +283,6 @@ function addMetroDraftStation(world: GameWorld, stationIds: string[], stationId:
 
   const station = world.getMetroStation(stationId);
   return { changed, message: station ? 'Linha passando por ' + station.name + '.' : undefined };
-}
-
-function addMetroStationUnderPointerOnRelease(
-  world: GameWorld,
-  tile: Vec2,
-  mode: 'track' | 'line',
-  trackStationIds: string[],
-  lineStationIds: string[],
-): void {
-  const station = world.getMetroStationAt(tile.x, tile.y);
-  if (!station) return;
-
-  if (mode === 'track') {
-    addMetroDraftStation(world, trackStationIds, station.id, false);
-    return;
-  }
-
-  addMetroDraftStation(world, lineStationIds, station.id, true);
 }
 
 function commitMetroTrackDraft(world: GameWorld, stationIds: string[]): { message: string } {

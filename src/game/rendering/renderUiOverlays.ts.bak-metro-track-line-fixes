@@ -24,10 +24,6 @@ export function drawConstructionPreview(graphics: Graphics, world: GameWorld, pr
     drawOneWayLinePreview(graphics, preview, preview.oneWayDirection, ts, timeSeconds);
     return;
   }
-  if (preview.lineTiles?.length && (tool === 'metroTrack' || tool === 'metroLine')) {
-    drawMetroDraftPreview(graphics, preview, ts, timeSeconds);
-    return;
-  }
   if (!inBounds(x, y)) return;
   const color = valid ? MAP_COLORS.previewValid : MAP_COLORS.previewInvalid;
   const px = x * ts;
@@ -158,56 +154,6 @@ export function drawOneWayLinePreview(graphics: Graphics, preview: HoverPreview,
     drawOneWayArrow(graphics, tile.x, tile.y, ts, direction, false, invalid ? MAP_COLORS.previewInvalid : MAP_COLORS.previewValid, invalid ? 0.72 : 0.85);
   }
 }
-
-export function drawMetroDraftPreview(graphics: Graphics, preview: HoverPreview, ts: number, timeSeconds: number): void {
-  const lineTiles = preview.lineTiles ?? [];
-  const visibleTiles = lineTiles.filter((tile) => inBounds(tile.x, tile.y));
-  if (visibleTiles.length < 2) return;
-
-  const previewPulse = pulse(timeSeconds, preview.valid ? 1.1 : 1.7, preview.x * 0.17 + preview.y * 0.11);
-  const color = preview.valid ? MAP_COLORS.previewValid : MAP_COLORS.previewInvalid;
-  const alpha = preview.valid ? 0.68 + previewPulse * 0.18 : 0.78 + previewPulse * 0.16;
-  const centers = visibleTiles.map((tile) => ({ x: tile.x * ts + ts / 2, y: tile.y * ts + ts / 2 }));
-
-  for (let index = 0; index < centers.length - 1; index += 1) {
-    drawDashedSegment(graphics, centers[index], centers[index + 1], color, 3.5 + previewPulse, alpha, 12, 7);
-  }
-
-  for (const tile of visibleTiles) {
-    const px = tile.x * ts + ts / 2;
-    const py = tile.y * ts + ts / 2;
-    graphics.circle(px, py, 7).fill({ color, alpha: 0.16 + previewPulse * 0.08 });
-    graphics.circle(px, py, 3).fill({ color, alpha: 0.72 });
-  }
-}
-
-function drawDashedSegment(
-  graphics: Graphics,
-  from: { x: number; y: number },
-  to: { x: number; y: number },
-  color: number,
-  width: number,
-  alpha: number,
-  dash: number,
-  gap: number,
-): void {
-  const dx = to.x - from.x;
-  const dy = to.y - from.y;
-  const length = Math.hypot(dx, dy);
-  if (length <= 0) return;
-  const ux = dx / length;
-  const uy = dy / length;
-
-  let cursor = 0;
-  while (cursor < length) {
-    const end = Math.min(length, cursor + dash);
-    graphics.moveTo(from.x + ux * cursor, from.y + uy * cursor);
-    graphics.lineTo(from.x + ux * end, from.y + uy * end);
-    graphics.stroke({ color, width, alpha });
-    cursor += dash + gap;
-  }
-}
-
 
 export function drawSelectedCarMarker(graphics: Graphics, world: GameWorld, ts: number): void {
   if (world.selected.kind !== 'car') return;

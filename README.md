@@ -1,63 +1,46 @@
-# Cidade em Fluxo — Metrô Surface V2
+# Correções do traçado e criação visual do metrô
 
-Este pacote aplica a evolução do sistema de metrô:
+Este pacote corrige o comportamento do metrô na aplicação `city-grid-game`.
 
-- estação de metrô como construção de superfície, ocupando 1 tile vazio;
-- animação da estação na superfície e no subsolo;
-- métricas ampliadas por estação e por linha;
-- métricas do metrô na aba Transporte do Analytics;
-- painel de gerenciamento de linhas no modo Subsolo;
-- exclusão de linhas sem remover estações/trilhos;
-- manutenção do fluxo atual: se não houver metrô válido, o jogo continua tentando ônibus e depois carro.
+## O que corrige
+
+1. O trem deixa de se mover em linha reta entre as estações e passa a seguir os tiles do trilho físico.
+2. As linhas do metrô também passam a ser desenhadas sobre o caminho real do trilho.
+3. Ao selecionar **Trilho** ou **Criar linha**, a visualização muda automaticamente para **Subsolo**.
+4. A criação de trilhos e linhas passa a funcionar por arraste visual:
+   - clique em uma estação;
+   - arraste passando por outras estações;
+   - o preview tracejado aparece no caminho;
+   - ao soltar, o trilho ou linha é confirmado.
+5. Adiciona preview tracejado para trilhos/linhas em criação.
 
 ## Como aplicar
 
-Extraia o ZIP na raiz do projeto e execute:
+Extraia o ZIP na raiz do projeto e rode:
 
 ```powershell
-node apply-metro-surface-v2.cjs
+cd C:\Projetos\city-grid-game
+node apply-metro-track-line-fixes.cjs
 npm run build
 npm run dev
 ```
 
-O script detecta se o Metrô V1 já está aplicado. Se não estiver, aplica o `apply-metro-system.cjs` incluído antes de instalar a V2.
-
 ## Backups
 
-Arquivos alterados recebem backup com sufixo:
+O script cria backup dos arquivos alterados com o sufixo:
 
 ```txt
-.bak-metro-surface-v2
+.bak-metro-track-line-fixes
 ```
 
-Caso o V1 precise ser aplicado, ele também pode criar backups `.bak-metro-v1`.
+## Arquivos alterados pelo script
 
-## Arquivos novos ou atualizados
+- `src/store/gameStore.ts`
+- `src/game/engine/simulation.ts`
+- `src/game/rendering/renderMetro.ts`
+- `src/game/rendering/inputController.ts`
+- `src/game/rendering/renderUiOverlays.ts`
 
-```txt
-src/types/metro.types.ts
-src/game/rendering/renderMetro.ts
-src/components/MetroManagementPanel.tsx
-```
+## Observação
 
-## Arquivos alterados por script
-
-```txt
-src/types/city.types.ts
-src/store/gameStore.ts
-src/game/engine/simulation.ts
-src/game/rendering/inputController.ts
-src/game/rendering/PixiGame.tsx
-src/components/DetailsPanel.tsx
-src/components/AnalyticsPanel.tsx
-src/components/HudBar.tsx
-src/styles.css
-```
-
-## Observações
-
-- A estação agora só pode ser construída em tile `empty`.
-- A estação passa a gravar o tile como `type: 'metroStation'` e `metroStationId`.
-- Ruas/avenidas não podem ser construídas por cima da estação.
-- Excluir uma linha remove apenas linha e trens, mantendo estações e trilhos.
-- Remover uma estação remove a estação, seus trilhos conectados, linhas dependentes e trens dessas linhas.
+Este pacote é incremental. Ele assume que o pacote anterior do metrô já foi aplicado, incluindo os tipos `MetroStation`, `MetroTrack`, `MetroLine`, `MetroTrain` e a ferramenta `metroStation`, `metroTrack`, `metroLine`.

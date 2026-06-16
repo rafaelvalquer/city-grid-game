@@ -2,7 +2,6 @@ import type { MutableRefObject } from 'react';
 import { ROAD_CONFIG } from '../config/roadConfig';
 import { TRANSIT_CONFIG } from '../config/transitConfig';
 import { METRO_CONFIG } from '../config/metroConfig';
-import { buildMetroTrackTiles } from '../metro/metroLineBuilder';
 import { getBuildingDemolitionCost, type GameWorld } from '../engine/simulation';
 import { inBounds, isRoadType, keyOf } from '../city/grid';
 import { isIntersection } from '../systems/trafficRules';
@@ -47,9 +46,8 @@ export function connectInputController(params: {
     return world.cars.find((c) => Math.abs(c.x - tileX) < 0.45 && Math.abs(c.y - tileY) < 0.45);
   };
 
-  let metroDragMode: 'track' | 'line' | null = null;
-  let pendingMetroTrackStationIds: string[] = [];
-  let pendingMetroLineStationIds: string[] = [];
+  let pendingMetroTrackStationId: string | null = null;
+  let pendingMetroLineStationId: string | null = null;
 
   const applyTool = (tileX: number, tileY: number) => {
     const state = useGameStore.getState();
@@ -75,38 +73,51 @@ export function connectInputController(params: {
     }
 
     if (state.selectedTool === 'metroTrack') {
-      if (state.viewLayer !== 'underground') state.setViewLayer('underground');
-      const station = world.getMetroStationAt(tileX, tileY);
-      if (!station) {
-        if (metroDragMode === 'track' && pendingMetroTrackStationIds.length) {
-          state.setHoverPreview(getMetroDraftPreview(world, pendingMetroTrackStationIds, { x: tileX, y: tileY }, 'metroTrack', state.stats.money));
-        } else {
-          state.setActionFeedback('Selecione uma estação de metrô para iniciar o trilho.');
-        }
+      if (state.viewLayer !== 'underground') {
+        state.setActionFeedback('Ative a camada Subsolo para conectar trilhos.');
         return;
       }
-      metroDragMode = 'track';
-      const result = addMetroDraftStation(world, pendingMetroTrackStationIds, station.id, false);
-      state.setHoverPreview(getMetroDraftPreview(world, pendingMetroTrackStationIds, { x: tileX, y: tileY }, 'metroTrack', state.stats.money));
-      state.setActionFeedback(result.message ?? 'Arraste até outra estação para continuar o trilho.');
+      const station = world.getMetroStationAt(tileX, tileY);
+      if (!station) {
+        state.setActionFeedback('Selecione uma estação de metrô para iniciar ou concluir o trilho.');
+        return;
+      }
+      if (!pendingMetroTrackStationId) {
+        pendingMetroTrackStationId = station.id;
+        state.setActionFeedback(`Origem do trilho: ${station.name}. Clique em outra estação para conectar.`);
+        return;
+      }
+      const from = pendingMetroTrackStationId;
+      pendingMetroTrackStationId = null;
+      const result = world.buildMetroTrack(from, station.id);
+      state.setActionFeedback(result.success ? `Trilho construído por $ ${result.cost}.` : result.reason ?? 'Não foi possível construir o trilho.');
       return;
     }
 
     if (state.selectedTool === 'metroLine') {
-      if (state.viewLayer !== 'underground') state.setViewLayer('underground');
-      const station = world.getMetroStationAt(tileX, tileY);
-      if (!station) {
-        if (metroDragMode === 'line' && pendingMetroLineStationIds.length) {
-          state.setHoverPreview(getMetroDraftPreview(world, pendingMetroLineStationIds, { x: tileX, y: tileY }, 'metroLine', state.stats.money));
-        } else {
-          state.setActionFeedback('Clique e arraste a partir de uma estação para criar a linha.');
-        }
+      if (state.viewLayer !== 'underground') {
+        state.setActionFeedback('Ative a camada Subsolo para criar linhas de metrô.');
         return;
       }
-      metroDragMode = 'line';
-      const result = addMetroDraftStation(world, pendingMetroLineStationIds, station.id, true);
-      state.setHoverPreview(getMetroDraftPreview(world, pendingMetroLineStationIds, { x: tileX, y: tileY }, 'metroLine', state.stats.money));
-      state.setActionFeedback(result.message ?? 'Arraste sobre as próximas estações e solte para ativar a linha.');
+      const station = world.getMetroStationAt(tileX, tileY);
+      if (!station) {
+        state.setActionFeedback('Clique em uma estação de metrô para iniciar ou finalizar a linha.');
+        return;
+      }
+      if (!pendingMetroLineStationId) {
+        pendingMetroLineStationId = station.id;
+        state.setActionFeedback(`Início da linha: ${station.name}. Clique na estação de destino.`);
+        return;
+      }
+      const from = pendingMetroLineStationId;
+      pendingMetroLineStationId = null;
+      const route = world.findMetroRoute(from, station.id);
+      if (route.length < 2) {
+        state.setActionFeedback('Não existe trilho conectado entre as estações selecionadas.');
+        return;
+      }
+      const result = world.createMetroLine(route);
+      state.setActionFeedback(result.success ? `${result.name} ativada por $ ${result.cost}.` : result.reason ?? 'Não foi possível criar a linha.');
       return;
     }
     const preview = { ...getActionPreview(world, tileX, tileY, state.selectedTool, state.stats.money), tool: state.selectedTool };
@@ -130,14 +141,6 @@ export function connectInputController(params: {
       const lineTiles = getLineTiles(oneWayDrag.startTile, tile);
       const direction = getLineDirection(oneWayDrag.startTile, tile);
       state.setHoverPreview(getOneWayPreview(world, lineTiles, direction));
-      return;
-    }
-    if (metroDragMode === 'track') {
-      state.setHoverPreview(getMetroDraftPreview(world, pendingMetroTrackStationIds, tile, 'metroTrack', state.stats.money));
-      return;
-    }
-    if (metroDragMode === 'line') {
-      state.setHoverPreview(getMetroDraftPreview(world, pendingMetroLineStationIds, tile, 'metroLine', state.stats.money));
       return;
     }
     state.setHoverPreview({ ...getActionPreview(world, tile.x, tile.y, state.selectedTool, state.stats.money), tool: state.selectedTool });
@@ -165,7 +168,7 @@ export function connectInputController(params: {
     applyTool(tile.x, tile.y);
   }, { signal });
 
-  window.addEventListener('pointerup', (event) => {
+  window.addEventListener('pointerup', () => {
     const drag = refs.roadLineDragRef.current;
     const oneWayDrag = refs.oneWayLineDragRef.current;
     if (drag) {
@@ -200,31 +203,6 @@ export function connectInputController(params: {
       }
       state.setHoverPreview(null);
     }
-    if (metroDragMode) {
-      addMetroStationUnderPointerOnRelease(
-        world,
-        camera.toWorldTile(event.clientX, event.clientY),
-        metroDragMode,
-        pendingMetroTrackStationIds,
-        pendingMetroLineStationIds,
-      );
-    }
-    if (metroDragMode === 'track') {
-      const state = useGameStore.getState();
-      const result = commitMetroTrackDraft(world, pendingMetroTrackStationIds);
-      state.setActionFeedback(result.message);
-      state.setHoverPreview(null);
-      metroDragMode = null;
-      pendingMetroTrackStationIds = [];
-    }
-    if (metroDragMode === 'line') {
-      const state = useGameStore.getState();
-      const result = commitMetroLineDraft(world, pendingMetroLineStationIds);
-      state.setActionFeedback(result.message);
-      state.setHoverPreview(null);
-      metroDragMode = null;
-      pendingMetroLineStationIds = [];
-    }
     refs.roadLineDragRef.current = null;
     refs.oneWayLineDragRef.current = null;
     refs.isDrawingRef.current = false;
@@ -245,201 +223,12 @@ export function connectInputController(params: {
   canvas.addEventListener('pointerleave', () => {
     if (refs.roadLineDragRef.current) return;
     if (refs.oneWayLineDragRef.current) return;
-    if (metroDragMode) return;
     useGameStore.getState().setHoverPreview(null);
   }, { signal });
 
   canvas.addEventListener('wheel', (event) => {
     camera.handleWheel(event);
   }, { passive: false, signal });
-}
-
-
-type MetroDraftTool = 'metroTrack' | 'metroLine';
-
-type MetroDraftResult = { changed: boolean; message?: string };
-
-function addMetroDraftStation(world: GameWorld, stationIds: string[], stationId: string, useRoute: boolean): MetroDraftResult {
-  if (!stationIds.length) {
-    stationIds.push(stationId);
-    const station = world.getMetroStation(stationId);
-    return { changed: true, message: station ? 'Início: ' + station.name + '. Arraste até a próxima estação.' : undefined };
-  }
-
-  const lastStationId = stationIds[stationIds.length - 1];
-  if (lastStationId === stationId) return { changed: false };
-
-  if (!useRoute) {
-    stationIds.push(stationId);
-    const station = world.getMetroStation(stationId);
-    return { changed: true, message: station ? 'Conexão adicionada até ' + station.name + '.' : undefined };
-  }
-
-  const route = world.findMetroRoute(lastStationId, stationId);
-  if (route.length < 2) {
-    const station = world.getMetroStation(stationId);
-    return { changed: false, message: station ? station.name + ' ainda não está ligada por trilhos.' : 'Estação sem trilho conectado.' };
-  }
-
-  let changed = false;
-  for (const routeStationId of route.slice(1)) {
-    const previous = stationIds[stationIds.length - 1];
-    if (routeStationId === previous) continue;
-    if (stationIds.includes(routeStationId)) continue;
-    stationIds.push(routeStationId);
-    changed = true;
-  }
-
-  const station = world.getMetroStation(stationId);
-  return { changed, message: station ? 'Linha passando por ' + station.name + '.' : undefined };
-}
-
-function addMetroStationUnderPointerOnRelease(
-  world: GameWorld,
-  tile: Vec2,
-  mode: 'track' | 'line',
-  trackStationIds: string[],
-  lineStationIds: string[],
-): void {
-  const station = world.getMetroStationAt(tile.x, tile.y);
-  if (!station) return;
-
-  if (mode === 'track') {
-    addMetroDraftStation(world, trackStationIds, station.id, false);
-    return;
-  }
-
-  addMetroDraftStation(world, lineStationIds, station.id, true);
-}
-
-function commitMetroTrackDraft(world: GameWorld, stationIds: string[]): { message: string } {
-  const unique = dedupeIds(stationIds);
-  if (unique.length < 2) return { message: 'Trilho cancelado: arraste entre pelo menos duas estações.' };
-
-  let built = 0;
-  let reused = 0;
-  let totalCost = 0;
-  let lastReason = '';
-
-  for (let index = 0; index < unique.length - 1; index += 1) {
-    const from = unique[index];
-    const to = unique[index + 1];
-    if (world.hasMetroTrackBetween(from, to)) {
-      reused += 1;
-      continue;
-    }
-    const result = world.buildMetroTrack(from, to);
-    if (result.success) {
-      built += 1;
-      totalCost += result.cost ?? 0;
-    } else {
-      lastReason = result.reason ?? 'Não foi possível criar uma conexão.';
-      break;
-    }
-  }
-
-  if (built > 0) return { message: 'Trilho criado: ' + built + ' conexão(ões) por $ ' + totalCost + '.' + (reused ? ' ' + reused + ' já existia(m).' : '') };
-  if (reused > 0 && !lastReason) return { message: 'As estações selecionadas já estavam conectadas por trilhos.' };
-  return { message: lastReason || 'Não foi possível construir o trilho.' };
-}
-
-function commitMetroLineDraft(world: GameWorld, stationIds: string[]): { message: string } {
-  const unique = dedupeIds(stationIds);
-  if (unique.length < 2) return { message: 'Linha cancelada: arraste por pelo menos duas estações conectadas.' };
-  const result = world.createMetroLine(unique);
-  return { message: result.success ? String(result.name) + ' ativada por $ ' + result.cost + '.' : result.reason ?? 'Não foi possível criar a linha.' };
-}
-
-function getMetroDraftPreview(world: GameWorld, stationIds: string[], currentTile: Vec2, tool: MetroDraftTool, money: number): ActionPreview {
-  const unique = dedupeIds(stationIds);
-  const lineTiles = buildMetroDraftTiles(world, unique, currentTile, tool);
-  const label = tool === 'metroTrack'
-    ? unique.length < 2 ? 'Arraste o trilho até outra estação' : 'Trilho: ' + unique.length + ' estações'
-    : unique.length < 2 ? 'Arraste a linha até outra estação' : 'Linha de metrô: ' + unique.length + ' estações';
-
-  const cost = tool === 'metroTrack'
-    ? estimateMetroTrackDraftCost(world, unique)
-    : METRO_CONFIG.lineActivationCost;
-
-  const valid = tool === 'metroTrack'
-    ? unique.length >= 2 && money >= cost
-    : unique.length >= 2 && isMetroLineDraftConnected(world, unique) && money >= cost;
-
-  const reason = valid ? undefined : tool === 'metroTrack'
-    ? unique.length < 2 ? 'Arraste até outra estação para criar o trilho.' : money < cost ? 'Faltam $ ' + (cost - money) + ' para construir.' : 'Não foi possível criar o trilho.'
-    : unique.length < 2 ? 'Arraste por pelo menos duas estações.' : !isMetroLineDraftConnected(world, unique) ? 'Todas as estações da linha precisam estar conectadas por trilhos.' : 'Faltam $ ' + (cost - money) + ' para ativar a linha.';
-
-  return {
-    x: currentTile.x,
-    y: currentTile.y,
-    label,
-    cost,
-    valid,
-    reason,
-    tool,
-    lineTiles,
-    buildableTiles: unique.length,
-    successMessage: tool === 'metroTrack' ? 'Trilho selecionado.' : 'Linha selecionada.',
-  };
-}
-
-function buildMetroDraftTiles(world: GameWorld, stationIds: string[], currentTile: Vec2, tool: MetroDraftTool): Vec2[] {
-  const tiles: Vec2[] = [];
-  for (let index = 0; index < stationIds.length - 1; index += 1) {
-    const fromId = stationIds[index];
-    const toId = stationIds[index + 1];
-    const from = world.getMetroStation(fromId);
-    const to = world.getMetroStation(toId);
-    if (!from || !to) continue;
-    const segment = tool === 'metroLine'
-      ? world.getMetroTrackTilesBetween(fromId, toId)
-      : world.getMetroTrackTilesBetween(fromId, toId).length >= 2
-        ? world.getMetroTrackTilesBetween(fromId, toId)
-        : buildMetroTrackTiles(from, to);
-    appendPreviewTiles(tiles, segment.length >= 2 ? segment : [from, to]);
-  }
-
-  const lastStation = world.getMetroStation(stationIds[stationIds.length - 1]);
-  if (lastStation && (lastStation.x !== currentTile.x || lastStation.y !== currentTile.y)) {
-    const currentStation = world.getMetroStationAt(currentTile.x, currentTile.y);
-    const previewEnd = currentStation ?? currentTile;
-    const existingTrack = currentStation ? world.getMetroTrackTilesBetween(lastStation.id, currentStation.id) : [];
-    appendPreviewTiles(tiles, existingTrack.length >= 2 ? existingTrack : buildMetroTrackTiles(lastStation, previewEnd));
-  }
-
-  return dedupePreviewTiles(tiles);
-}
-
-function appendPreviewTiles(target: Vec2[], source: Vec2[]): void {
-  for (const tile of source) target.push({ x: tile.x, y: tile.y });
-}
-
-function estimateMetroTrackDraftCost(world: GameWorld, stationIds: string[]): number {
-  let cost = 0;
-  for (let index = 0; index < stationIds.length - 1; index += 1) {
-    const from = world.getMetroStation(stationIds[index]);
-    const to = world.getMetroStation(stationIds[index + 1]);
-    if (!from || !to || world.hasMetroTrackBetween(from.id, to.id)) continue;
-    cost += Math.max(1, buildMetroTrackTiles(from, to).length - 1) * METRO_CONFIG.trackCostPerTile;
-  }
-  return cost;
-}
-
-function isMetroLineDraftConnected(world: GameWorld, stationIds: string[]): boolean {
-  if (stationIds.length < 2) return false;
-  for (let index = 0; index < stationIds.length - 1; index += 1) {
-    if (!world.hasMetroTrackBetween(stationIds[index], stationIds[index + 1])) return false;
-  }
-  return true;
-}
-
-function dedupeIds(ids: string[]): string[] {
-  const result: string[] = [];
-  for (const id of ids) {
-    if (result[result.length - 1] === id) continue;
-    result.push(id);
-  }
-  return result;
 }
 
 function emitActionParticles(particles: ParticleSystem | undefined, pos: Vec2, tool: Tool, cost?: number): void {

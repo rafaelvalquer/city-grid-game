@@ -1980,19 +1980,6 @@ export class GameWorld {
     ));
   }
 
-  getMetroTrackBetween(fromStationId: string, toStationId: string): MetroTrack | undefined {
-    return this.metroTracks.find((track) => track.active && (
-      (track.fromStationId === fromStationId && track.toStationId === toStationId)
-      || (track.fromStationId === toStationId && track.toStationId === fromStationId)
-    ));
-  }
-
-  getMetroTrackTilesBetween(fromStationId: string, toStationId: string): Vec2[] {
-    const track = this.getMetroTrackBetween(fromStationId, toStationId);
-    if (!track) return [];
-    return track.fromStationId === fromStationId ? track.tiles : [...track.tiles].reverse();
-  }
-
   findMetroRoute(fromStationId: string, toStationId: string): string[] {
     return findMetroStationPath(this.metroStations, this.metroTracks, fromStationId, toStationId);
   }
@@ -2091,8 +2078,7 @@ export class GameWorld {
       const to = this.getMetroStation(line.stationIds[train.nextStationIndex]);
       if (!from || !to) continue;
 
-      const trackTiles = this.getMetroTrackTilesBetween(from.id, to.id);
-      const distance = Math.max(1, (trackTiles.length || manhattan(from, to) + 1) - 1);
+      const distance = Math.max(1, manhattan(from, to));
       train.progress += (train.speed / distance) * dt;
 
       if (train.progress < 1) continue;

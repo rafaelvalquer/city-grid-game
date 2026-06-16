@@ -80,11 +80,7 @@ export const useGameStore = create<GameStore>((set) => ({
   selected: { kind: 'none' },
   hoverPreview: null,
   actionFeedback: null,
-  setTool: (tool) => set((state) => ({
-    selectedTool: tool,
-    actionFeedback: null,
-    viewLayer: tool === 'metroTrack' || tool === 'metroLine' ? 'underground' : state.viewLayer,
-  })),
+  setTool: (tool) => set({ selectedTool: tool, actionFeedback: null }),
   setHeatmapMode: (mode) => set({ heatmapMode: mode }),
   setViewLayer: (viewLayer) => set({ viewLayer }),
   toggleViewLayer: () => set((s) => ({ viewLayer: s.viewLayer === 'surface' ? 'underground' : 'surface' })),
