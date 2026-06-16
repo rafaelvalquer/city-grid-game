@@ -1,6 +1,7 @@
 import type { Graphics } from 'pixi.js';
 import type { RoadDirection, RoadType, Tile, TrafficLightState, Vec2 } from '../../types/city.types';
 import { TRANSIT_CONFIG } from '../config/transitConfig';
+import { BIKE_LANE_CONFIG } from '../config/bikeConfig';
 import { GAME_CONFIG } from '../config/gameConfig';
 import type { GameWorld } from '../engine/simulation';
 import { isRoadType, keyOf } from '../city/grid';
@@ -24,6 +25,10 @@ type RoadAutoTile = {
   horizontal: boolean;
   vertical: boolean;
 };
+
+const BUS_LANE_COLOR = 0x1d9bf0;
+const BUS_LANE_EDGE = 0x8bdcff;
+const BUS_LANE_TEXT = 0xe7fbff;
 
 export function drawBusStop(graphics: Graphics, world: GameWorld, x: number, y: number, ts: number, timeSeconds: number, atmosphere: Atmosphere): void {
   const stop = world.transitStops.find((candidate) => candidate.x === x && candidate.y === y);
@@ -131,6 +136,68 @@ export function drawRoad(graphics: Graphics, grid: Tile[][], x: number, y: numbe
     drawRoundaboutMarkings(graphics, grid, x, y, ts);
   } else {
     drawLaneMarkings(graphics, px, py, ts, isAvenue, autoTile, grid[y]?.[x]?.oneWay);
+    if (grid[y]?.[x]?.busLane) drawBusLaneMarking(graphics, grid, x, y, ts, type, autoTile);
+    if (grid[y]?.[x]?.bikeLane) drawBikeLaneMarking(graphics, grid, x, y, ts, autoTile);
+  }
+}
+
+
+export function drawBikeLaneMarking(graphics: Graphics, grid: Tile[][], x: number, y: number, ts: number, autoTile: RoadAutoTile): void {
+  const tile = grid[y]?.[x];
+  if (tile?.type !== 'road' || !tile.bikeLane) return;
+  const px = x * ts;
+  const py = y * ts;
+  const center = ts / 2;
+  const horizontal = autoTile.horizontal || (!autoTile.vertical && (autoTile.connections.east || autoTile.connections.west));
+  const vertical = autoTile.vertical || (!autoTile.horizontal && (autoTile.connections.north || autoTile.connections.south));
+  const laneAlpha = autoTile.shape === 'cross' || autoTile.shape === 'tee' ? 0.68 : 0.92;
+
+  if (horizontal) {
+    graphics.roundRect(px + 5, py + center + 9, ts - 10, 4, 2)
+      .fill({ color: BIKE_LANE_CONFIG.laneColor, alpha: laneAlpha })
+      .stroke({ color: BIKE_LANE_CONFIG.laneEdgeColor, width: 0.7, alpha: 0.72 });
+  }
+  if (vertical) {
+    graphics.roundRect(px + center + 9, py + 5, 4, ts - 10, 2)
+      .fill({ color: BIKE_LANE_CONFIG.laneColor, alpha: laneAlpha })
+      .stroke({ color: BIKE_LANE_CONFIG.laneEdgeColor, width: 0.7, alpha: 0.72 });
+  }
+
+  if ((x + y) % 4 === 0 || autoTile.shape === 'deadEnd') {
+    drawTinyBikeLaneIcon(graphics, px + center, py + center, BIKE_LANE_CONFIG.laneIconColor, 0.92);
+  }
+}
+
+function drawTinyBikeLaneIcon(graphics: Graphics, cx: number, cy: number, color: number, alpha: number): void {
+  graphics.circle(cx - 4, cy + 3, 2.1).stroke({ color, width: 1, alpha });
+  graphics.circle(cx + 4, cy + 3, 2.1).stroke({ color, width: 1, alpha });
+  graphics.moveTo(cx - 4, cy + 3).lineTo(cx, cy - 1).lineTo(cx + 4, cy + 3).lineTo(cx - 1, cy + 3).lineTo(cx - 4, cy + 3)
+    .stroke({ color, width: 1.2, alpha });
+  graphics.circle(cx, cy - 4.5, 1.35).fill({ color, alpha });
+}
+
+
+export function drawBusLaneMarking(graphics: Graphics, grid: Tile[][], x: number, y: number, ts: number, type: RoadType, autoTile: RoadAutoTile): void {
+  if (type === 'roundabout') return;
+  const px = x * ts;
+  const py = y * ts;
+  const center = ts / 2;
+  const isAvenue = type === 'avenue';
+  const halfWidth = isAvenue ? 5.2 : 4.2;
+  drawRoadShapeLayer(graphics, px, py, ts, halfWidth + 1.5, BUS_LANE_EDGE, autoTile, 0.48);
+  drawRoadShapeLayer(graphics, px, py, ts, halfWidth, BUS_LANE_COLOR, autoTile, 0.82);
+
+  const hasTrueHorizontalSpan = autoTile.connections.east && autoTile.connections.west;
+  const hasTrueVerticalSpan = autoTile.connections.north && autoTile.connections.south;
+  if (hasTrueHorizontalSpan || (!hasTrueVerticalSpan && autoTile.horizontal)) {
+    graphics.rect(px + 8, py + center - 1, ts - 16, 2).fill({ color: BUS_LANE_TEXT, alpha: 0.55 });
+  }
+  if (hasTrueVerticalSpan || (!hasTrueHorizontalSpan && autoTile.vertical)) {
+    graphics.rect(px + center - 1, py + 8, 2, ts - 16).fill({ color: BUS_LANE_TEXT, alpha: 0.55 });
+  }
+
+  if ((x + y) % 3 === 0 || autoTile.shape === 'tee' || autoTile.shape === 'cross') {
+    drawTinyBusIcon(graphics, px + center, py + center, isAvenue ? 1.05 : 0.92, BUS_LANE_TEXT, 0.96);
   }
 }
 

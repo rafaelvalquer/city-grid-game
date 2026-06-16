@@ -1,8 +1,9 @@
 import type { LucideIcon } from 'lucide-react';
-import { ArrowRight, BusFront, Circle, CircleDot, Eye, Gauge, Route, TrafficCone, Trash2, Wrench } from 'lucide-react';
+import { ArrowRight, BusFront, Bike, Circle, CircleDot, Eye, Gauge, Route, TrafficCone, Trash2, Wrench } from 'lucide-react';
 import { ROAD_CONFIG } from '../game/config/roadConfig';
-import { TRANSIT_CONFIG } from '../game/config/transitConfig';
+import { TRANSIT_CONFIG, BUS_LANE_CONFIG } from '../game/config/transitConfig';
 import { METRO_CONFIG } from '../game/config/metroConfig';
+import { BIKE_LANE_CONFIG } from '../game/config/bikeConfig';
 import { TRAFFIC_LIGHT_BUILD_COST } from '../game/systems/trafficLights';
 import type { Tool } from '../types/game.types';
 
@@ -39,6 +40,8 @@ export const toolGroups: ToolGroup[] = [
       { id: 'trafficLight', label: 'Semáforo', cost: TRAFFIC_LIGHT_BUILD_COST, Icon: CircleDot },
       { id: 'oneWay', label: 'Mão única', Icon: ArrowRight },
       { id: 'busStop', label: 'Ponto de ônibus', cost: TRANSIT_CONFIG.busStopCost, Icon: BusFront },
+      { id: 'busLane', label: 'Corredor de ônibus', cost: BUS_LANE_CONFIG.buildCost, Icon: BusFront },
+      { id: 'bikeLane', label: 'Ciclovia', cost: BIKE_LANE_CONFIG.buildCost, Icon: Bike },
     ],
   },
   {

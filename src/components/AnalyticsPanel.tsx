@@ -1,5 +1,5 @@
 import { useMemo, useState, type PointerEvent } from 'react';
-import { BarChart3, Building2, BusFront, Car, Route, Users, X, type LucideIcon } from 'lucide-react';
+import { BarChart3, Building2, BusFront, Bike, Car, Route, Users, X, type LucideIcon } from 'lucide-react';
 import type { GameWorld } from '../game/engine/simulation';
 import type { CityHistorySample, TrafficHeatmapCell } from '../types/city.types';
 
@@ -99,6 +99,11 @@ function emptyHistoryReference(): CityHistorySample {
     failedTrips: 0,
     publicTripsCompleted: 0,
     carTripsAvoided: 0,
+    bikeLaneTiles: 0,
+    bikeLaneCoverageRatio: 0,
+    bikeTripsCompleted: 0,
+    bikeCarsAvoided: 0,
+    activeBikeTrips: 0,
     metroTripsCompleted: 0,
     metroCarsAvoided: 0,
     metroPassengers: 0,
@@ -225,7 +230,10 @@ function renderTab(tab: AnalyticsTab, samples: CityHistorySample[], world: GameW
           { label: 'Carros evitados', value: latest.carTripsAvoided, initial: samples[0].carTripsAvoided },
           { label: 'Viagens de metrô', value: latest.metroTripsCompleted ?? 0, initial: samples[0].metroTripsCompleted ?? 0 },
           { label: 'Carros evitados pelo metrô', value: latest.metroCarsAvoided ?? 0, initial: samples[0].metroCarsAvoided ?? 0 },
+          { label: 'Viagens de bicicleta', value: latest.bikeTripsCompleted ?? 0, initial: samples[0].bikeTripsCompleted ?? 0 },
+          { label: 'Carros evitados por bicicleta', value: latest.bikeCarsAvoided ?? 0, initial: samples[0].bikeCarsAvoided ?? 0 },
         ]} />
+        <BikeAnalyticsCard world={world} latest={latest} />
         <MetroAnalyticsCard world={world} latest={latest} />
         <ChartCard title="Fila e frota" samples={samples} series={[
           { label: 'Passageiros esperando', color: 'warn', values: samples.map((s) => s.waitingPassengers) },
@@ -234,6 +242,7 @@ function renderTab(tab: AnalyticsTab, samples: CityHistorySample[], world: GameW
         <ChartCard title="Impacto do transporte público" samples={samples} series={[
           { label: 'Viagens por ônibus', color: 'good', values: samples.map((s) => s.publicTripsCompleted) },
           { label: 'Viagens por metrô', color: 'accent', values: samples.map((s) => s.metroTripsCompleted ?? 0) },
+          { label: 'Viagens por bicicleta', color: 'good', values: samples.map((s) => s.bikeTripsCompleted ?? 0) },
           { label: 'Carros evitados', color: 'warn', values: samples.map((s) => s.carTripsAvoided) },
         ]} />
         <ChartCard title="Metrô: demanda e operação" samples={samples} series={[
@@ -291,6 +300,25 @@ function renderTab(tab: AnalyticsTab, samples: CityHistorySample[], world: GameW
         { label: 'Carros evitados', color: 'warn', values: samples.map((s) => s.carTripsAvoided) },
       ]} />
     </>
+  );
+}
+
+
+function BikeAnalyticsCard({ world, latest }: { world: GameWorld; latest: CityHistorySample }) {
+  const coverage = Math.round((latest.bikeLaneCoverageRatio ?? 0) * 100);
+  return (
+    <article className="analytics-card bike-analytics-card">
+      <header>
+        <h3><Bike size={16} /> Bicicleta</h3>
+        <span>{latest.bikeLaneTiles ?? 0} tiles de ciclovia</span>
+      </header>
+      <div className="metro-analytics-grid">
+        <p><span>Viagens de bicicleta</span><strong>{latest.bikeTripsCompleted ?? 0}</strong></p>
+        <p><span>Carros evitados</span><strong>{latest.bikeCarsAvoided ?? 0}</strong></p>
+        <p><span>Cobertura cicloviária</span><strong>{coverage}%</strong></p>
+        <p><span>Bicicletas visuais</span><strong>{latest.activeBikeTrips ?? world.bikeTrips.length}</strong></p>
+      </div>
+    </article>
   );
 }
 
@@ -364,6 +392,10 @@ function referenceValueForMetric(label: string, sample: CityHistorySample, fallb
       return sample.metroTripsCompleted ?? 0;
     case 'Carros evitados pelo metrô':
       return sample.metroCarsAvoided ?? 0;
+    case 'Carros evitados por bicicleta':
+      return sample.bikeCarsAvoided ?? 0;
+    case 'Viagens de bicicleta':
+      return sample.bikeTripsCompleted ?? 0;
     case 'Construções':
       return sample.buildingTypes.house + sample.buildingTypes.shop + sample.buildingTypes.office;
     case 'Casas':

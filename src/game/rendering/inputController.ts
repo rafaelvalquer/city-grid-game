@@ -1,7 +1,8 @@
 import type { MutableRefObject } from 'react';
 import { ROAD_CONFIG } from '../config/roadConfig';
-import { TRANSIT_CONFIG } from '../config/transitConfig';
+import { TRANSIT_CONFIG, BUS_LANE_CONFIG } from '../config/transitConfig';
 import { METRO_CONFIG } from '../config/metroConfig';
+import { BIKE_LANE_CONFIG } from '../config/bikeConfig';
 import { buildMetroTrackTiles } from '../metro/metroLineBuilder';
 import { getBuildingDemolitionCost, type GameWorld } from '../engine/simulation';
 import { inBounds, isRoadType, keyOf } from '../city/grid';
@@ -18,7 +19,7 @@ import type { ParticleSystem } from './particleSystem';
 export type RoadLineDrag = {
   startTile: Vec2;
   currentTile: Vec2;
-  tool: 'road' | 'avenue';
+  tool: 'road' | 'avenue' | 'busLane' | 'bikeLane' | 'bikeLane';
 };
 
 export type OneWayLineDrag = {
@@ -172,14 +173,30 @@ export function connectInputController(params: {
       const state = useGameStore.getState();
       const lineTiles = getLineTiles(drag.startTile, drag.currentTile);
       const preview = getLineBuildPreview(world, lineTiles, drag.tool, state.stats.money);
-      const result = world.buildRoadLine(lineTiles, drag.tool);
-      if (result.success) emitRoadLineParticles(particles, lineTiles, drag.tool, result.cost);
-      if (result.success && (result.demolished ?? 0) > 0) {
-        state.setActionFeedback(roadLineSuccessMessage(drag.tool, result.built, result.cost, result.demolished ?? 0));
-      } else state.setActionFeedback(result.success
-        ? `${ROAD_CONFIG[drag.tool].label} construída: ${result.built} tiles por $ ${result.cost}.`
-        : result.reason ?? preview.reason ?? 'Não foi possível construir a linha.');
-      state.setHoverPreview(null);
+      if (drag.tool === 'bikeLane') {
+        const result = world.setBikeLaneLine(lineTiles);
+        if (result.success) emitBikeLaneLineParticles(particles, lineTiles, result.cost);
+        state.setActionFeedback(result.success
+          ? bikeLaneSuccessMessage(result.changed, result.cost, Boolean(result.removed))
+          : result.reason ?? preview.reason ?? 'Não foi possível alterar a ciclovia.');
+        state.setHoverPreview(null);
+      } else if (drag.tool === 'busLane') {
+        const result = world.setBusLaneLine(lineTiles);
+        if (result.success) emitBusLaneLineParticles(particles, lineTiles, result.cost);
+        state.setActionFeedback(result.success
+          ? busLaneSuccessMessage(result.changed, result.cost, Boolean(result.removed))
+          : result.reason ?? preview.reason ?? 'Não foi possível alterar o corredor de ônibus.');
+        state.setHoverPreview(null);
+      } else {
+        const result = world.buildRoadLine(lineTiles, drag.tool);
+        if (result.success) emitRoadLineParticles(particles, lineTiles, drag.tool, result.cost);
+        if (result.success && (result.demolished ?? 0) > 0) {
+          state.setActionFeedback(roadLineSuccessMessage(drag.tool, result.built, result.cost, result.demolished ?? 0));
+        } else state.setActionFeedback(result.success
+          ? `${ROAD_CONFIG[drag.tool].label} construída: ${result.built} tiles por $ ${result.cost}.`
+          : result.reason ?? preview.reason ?? 'Não foi possível construir a linha.');
+        state.setHoverPreview(null);
+      }
     }
     if (oneWayDrag) {
       const state = useGameStore.getState();
@@ -449,7 +466,7 @@ function emitActionParticles(particles: ParticleSystem | undefined, pos: Vec2, t
   if (cost && cost > 0) particles.emitMoneyText(pos, -cost);
 }
 
-function emitRoadLineParticles(particles: ParticleSystem | undefined, lineTiles: Vec2[], tool: 'road' | 'avenue', cost: number): void {
+function emitRoadLineParticles(particles: ParticleSystem | undefined, lineTiles: Vec2[], tool: 'road' | 'avenue' | 'bikeLane', cost: number): void {
   if (!particles) return;
   const step = Math.max(1, Math.ceil(lineTiles.length / 18));
   for (let i = 0; i < lineTiles.length; i += step) {
@@ -459,7 +476,43 @@ function emitRoadLineParticles(particles: ParticleSystem | undefined, lineTiles:
   if (anchor && cost > 0) particles.emitMoneyText(anchor, -cost);
 }
 
-function roadLineSuccessMessage(tool: 'road' | 'avenue', built: number, cost: number, demolished: number): string {
+function emitBusLaneLineParticles(particles: ParticleSystem | undefined, lineTiles: Vec2[], cost: number): void {
+  if (!particles) return;
+  const step = Math.max(1, Math.ceil(lineTiles.length / 16));
+  for (let i = 0; i < lineTiles.length; i += step) {
+    particles.emitRoadDust(lineTiles[i], 6);
+  }
+  const anchor = lineTiles[lineTiles.length - 1];
+  if (anchor && cost > 0) particles.emitMoneyText(anchor, -cost);
+}
+
+function emitBikeLaneLineParticles(particles: ParticleSystem | undefined, lineTiles: Vec2[], cost: number): void {
+  if (!particles) return;
+  const step = Math.max(1, Math.ceil(lineTiles.length / 18));
+  for (let i = 0; i < lineTiles.length; i += step) {
+    particles.emitRoadDust(lineTiles[i], 5);
+  }
+  const anchor = lineTiles[lineTiles.length - 1];
+  if (anchor && cost > 0) particles.emitMoneyText(anchor, -cost);
+}
+
+function bikeLaneSuccessMessage(changed: number, cost: number, removed: boolean): string {
+  const tileText = changed + ' tile' + (changed === 1 ? '' : 's');
+  return removed
+    ? 'Ciclovia removida: ' + tileText + ' por $ ' + cost + '.'
+    : 'Ciclovia implantada: ' + tileText + ' por $ ' + cost + '.';
+}
+
+
+function busLaneSuccessMessage(changed: number, cost: number, removed: boolean): string {
+  const tileText = `${changed} tile${changed === 1 ? '' : 's'}`;
+  return removed
+    ? `Corredor de ônibus removido: ${tileText} por $ ${cost}.`
+    : `Corredor de ônibus implantado: ${tileText} por $ ${cost}.`;
+}
+
+
+function roadLineSuccessMessage(tool: 'road' | 'avenue' | 'bikeLane', built: number, cost: number, demolished: number): string {
   const label = ROAD_CONFIG[tool].label;
   const demolitionText = demolished > 0
     ? ` ${demolished} prédio${demolished > 1 ? 's' : ''} demolido${demolished > 1 ? 's' : ''}.`
@@ -467,8 +520,8 @@ function roadLineSuccessMessage(tool: 'road' | 'avenue', built: number, cost: nu
   return `${label} construída: ${built} tiles por $ ${cost}.${demolitionText}`;
 }
 
-export function isRoadLineTool(tool: Tool): tool is 'road' | 'avenue' {
-  return tool === 'road' || tool === 'avenue';
+export function isRoadLineTool(tool: Tool): tool is 'road' | 'avenue' | 'busLane' | 'bikeLane' {
+  return tool === 'road' || tool === 'avenue' || tool === 'busLane' || tool === 'bikeLane';
 }
 
 
@@ -487,8 +540,10 @@ export function getLineTiles(start: Vec2, end: Vec2): Vec2[] {
 }
 
 
-export function getLineBuildPreview(world: GameWorld, tiles: Vec2[], tool: 'road' | 'avenue', money: number): ActionPreview {
+export function getLineBuildPreview(world: GameWorld, tiles: Vec2[], tool: 'road' | 'avenue' | 'busLane' | 'bikeLane', money: number): ActionPreview {
   const uniqueTiles = dedupePreviewTiles(tiles);
+  if (tool === 'busLane') return getBusLaneBuildPreview(world, uniqueTiles, money);
+  if (tool === 'bikeLane') return getBikeLaneBuildPreview(world, uniqueTiles, money);
   const invalidTiles: Vec2[] = [];
   let buildableTiles = 0;
   let demolishedBuildings = 0;
@@ -553,6 +608,109 @@ export function getLineBuildPreview(world: GameWorld, tiles: Vec2[], tool: 'road
     buildableTiles,
     demolishedBuildings,
     successMessage: `${tool === 'road' ? 'Rua' : 'Avenida'} construída: ${buildableTiles} tiles por $ ${cost}.`,
+  };
+}
+
+
+function getBusLaneBuildPreview(world: GameWorld, uniqueTiles: Vec2[], money: number): ActionPreview {
+  const invalidTiles: Vec2[] = [];
+  let reason: string | undefined;
+  let eligible = 0;
+  let enabled = 0;
+
+  for (const pos of uniqueTiles) {
+    if (!inBounds(pos.x, pos.y)) {
+      invalidTiles.push(pos);
+      reason ??= 'A linha sai do mapa.';
+      continue;
+    }
+    const tile = world.grid[pos.y]?.[pos.x];
+    if (!tile || (tile.type !== 'road' && tile.type !== 'avenue')) {
+      invalidTiles.push(pos);
+      reason ??= 'Corredor de ônibus só pode ser aplicado em ruas e avenidas.';
+      continue;
+    }
+    if (isRoundaboutTile(tile) || isRoundaboutCenter(tile)) {
+      invalidTiles.push(pos);
+      reason ??= 'Corredor de ônibus não pode ser aplicado em rotatórias.';
+      continue;
+    }
+    eligible += 1;
+    if (tile.busLane) enabled += 1;
+  }
+
+  const remove = eligible > 0 && enabled === eligible;
+  const changed = remove ? enabled : eligible - enabled;
+  const cost = remove
+    ? Math.ceil(changed * BUS_LANE_CONFIG.buildCost * BUS_LANE_CONFIG.removeCostRatio)
+    : changed * BUS_LANE_CONFIG.buildCost;
+
+  if (!reason && eligible === 0) reason = 'Nenhuma via válida selecionada.';
+  if (!reason && changed === 0) reason = remove ? 'O corredor já está removido.' : 'O corredor já existe em todo o trecho.';
+  if (!reason && money < cost) reason = `Faltam $ ${cost - money} para ${remove ? 'remover' : 'implantar'} o corredor.`;
+
+  return {
+    x: uniqueTiles[uniqueTiles.length - 1]?.x ?? 0,
+    y: uniqueTiles[uniqueTiles.length - 1]?.y ?? 0,
+    label: remove ? `Remover corredor: ${changed} tiles` : `Corredor de ônibus: ${changed} tiles`,
+    cost,
+    valid: !reason,
+    reason,
+    tool: 'busLane',
+    lineTiles: uniqueTiles,
+    invalidTiles,
+    buildableTiles: changed,
+    successMessage: remove
+      ? `Corredor removido em ${changed} tile${changed === 1 ? '' : 's'} por $ ${cost}.`
+      : `Corredor implantado em ${changed} tile${changed === 1 ? '' : 's'} por $ ${cost}.`,
+  };
+}
+
+
+function getBikeLaneBuildPreview(world: GameWorld, uniqueTiles: Vec2[], money: number): ActionPreview {
+  const invalidTiles: Vec2[] = [];
+  let reason: string | undefined;
+  let eligible = 0;
+  let enabled = 0;
+
+  for (const pos of uniqueTiles) {
+    if (!inBounds(pos.x, pos.y)) {
+      invalidTiles.push(pos);
+      reason ??= 'A linha sai do mapa.';
+      continue;
+    }
+    const tile = world.grid[pos.y]?.[pos.x];
+    if (!tile || tile.type !== 'road') {
+      invalidTiles.push(pos);
+      reason ??= 'Ciclovia só pode ser aplicada em ruas.';
+      continue;
+    }
+    eligible += 1;
+    if (tile.bikeLane) enabled += 1;
+  }
+
+  const remove = eligible > 0 && enabled === eligible;
+  const changed = remove ? enabled : eligible - enabled;
+  const cost = remove
+    ? Math.ceil(changed * BIKE_LANE_CONFIG.buildCost * BIKE_LANE_CONFIG.removeCostRatio)
+    : changed * BIKE_LANE_CONFIG.buildCost;
+
+  if (!reason && eligible === 0) reason = 'Nenhuma rua válida selecionada.';
+  if (!reason && changed === 0) reason = remove ? 'A ciclovia já está removida.' : 'A ciclovia já existe em todo o trecho.';
+  if (!reason && money < cost) reason = 'Faltam $ ' + (cost - money) + ' para ' + (remove ? 'remover' : 'implantar') + ' a ciclovia.';
+
+  return {
+    x: uniqueTiles[uniqueTiles.length - 1]?.x ?? 0,
+    y: uniqueTiles[uniqueTiles.length - 1]?.y ?? 0,
+    label: remove ? 'Remover ciclovia: ' + changed + ' tiles' : 'Ciclovia: ' + changed + ' tiles',
+    cost,
+    valid: !reason,
+    reason,
+    tool: 'bikeLane',
+    lineTiles: uniqueTiles,
+    invalidTiles,
+    buildableTiles: changed,
+    successMessage: bikeLaneSuccessMessage(changed, cost, remove),
   };
 }
 

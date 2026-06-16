@@ -1,18 +1,20 @@
 import { nanoid } from 'nanoid';
-import type { Building, BuildingLevel, CityHistorySample, CityStats, District, RoadDirection, RoadType, SelectedEntity, Tile, TrafficCell, TrafficHeatmapCell, TrafficHeatmapSample, TrafficHeatmapSummary, TrafficLightAxis, TrafficLightState, TransitLine, TransitPassengerGroup, TransitStop, Vec2 } from '../../types/city.types';
+import type { Building, BuildingLevel, CityHistorySample, CityStats, District, RoadDirection, RoadType, SelectedEntity, Tile, TrafficCell, TrafficHeatmapCell, TrafficHeatmapSample, TrafficHeatmapSummary, BikeTripVisual, TrafficLightAxis, TrafficLightState, TransitLine, TransitPassengerGroup, TransitStop, Vec2 } from '../../types/city.types';
 import type { Car } from '../../types/agent.types';
 import type { MetroLine, MetroLineStats, MetroStation, MetroTrack, MetroTrain } from '../../types/metro.types';
 import type { Tool } from '../../types/game.types';
 import { GAME_CONFIG } from '../config/gameConfig';
 import type { GameSetupOptions } from '../config/gameSetup';
 import { ROAD_CONFIG } from '../config/roadConfig';
-import { TRANSIT_CONFIG } from '../config/transitConfig';
+import { TRANSIT_CONFIG, BUS_LANE_CONFIG } from '../config/transitConfig';
 import { METRO_CONFIG } from '../config/metroConfig';
+import { BIKE_LANE_CONFIG } from '../config/bikeConfig';
 import { DISTRICT_EXPANSION_CONFIG } from '../config/districtConfig';
 import { createGrid, inBounds, isRoadType, keyOf, setGridBounds } from '../city/grid';
 import { CityGenerator } from '../city/cityGenerator';
 import { applyBuildingLevel, createBuilding, updateBuildingConnection } from '../city/buildings';
 import { findFastestPath } from '../pathfinding/pathfinder';
+import { findBikeLanePath } from '../pathfinding/bikePathfinder';
 import { buildIntersectionControls, computeTrafficDecision, getDirection, getLaneOffset, isIntersection } from '../systems/trafficRules';
 import { createCarSpatialIndex } from '../systems/carSpatialIndex';
 import { canPlaceRoundabout, findRoundaboutCenterForTile, getDrivableNeighbors, getRoundaboutArea, getRoundaboutRing, isLegalRoadMove, isRoundaboutCenter, isRoundaboutTile } from '../systems/roundabouts';
@@ -79,8 +81,9 @@ export class GameWorld {
   districts: District[] = [];
   buildings: Building[] = [];
   cars: Car[] = [];
+  bikeTrips: BikeTripVisual[] = [];
   transitStops: TransitStop[] = [];
-  transitLine: TransitLine = { id: 'bus-loop', stopIds: [], route: [], active: false, reason: 'Adicione ao menos dois pontos de ônibus.' };
+  transitLine: TransitLine = { id: 'bus-loop', stopIds: [], route: [], active: false, busCount: BUS_LANE_CONFIG.defaultBuses, reason: 'Adicione ao menos dois pontos de ônibus.' };
   metroStations: MetroStation[] = [];
   metroTracks: MetroTrack[] = [];
   metroLines: MetroLine[] = [];
@@ -96,6 +99,8 @@ export class GameWorld {
   failedTrips = 0;
   publicTripsCompleted = 0;
   carTripsAvoided = 0;
+  bikeTripsCompleted = 0;
+  bikeCarsAvoided = 0;
   averageTravelTime = 0;
   cityLevel = 1;
   historySamples: CityHistorySample[] = [];
@@ -177,7 +182,100 @@ export class GameWorld {
   }
 
   getMaxBuses(): number {
-    return DISTRICT_EXPANSION_CONFIG.baseMaxBuses * this.getOwnedDistrictCount();
+    return this.getMaxTransitBusCount();
+  }
+
+  getMaxTransitBusCount(): number {
+    return Math.max(BUS_LANE_CONFIG.defaultBuses, this.getOwnedDistrictCount() * BUS_LANE_CONFIG.maxBusesPerDistrict);
+  }
+
+  private getDesiredTransitBusCount(): number {
+    const configured = this.transitLine.busCount ?? BUS_LANE_CONFIG.defaultBuses;
+    return Math.max(1, Math.min(this.getMaxTransitBusCount(), Math.round(configured)));
+  }
+
+  private getRoadCapacityForTraffic(tile: Tile, roadType: RoadType): number {
+    const baseCapacity = ROAD_CONFIG[roadType].capacity;
+    if ((tile.type === 'road' || tile.type === 'avenue') && tile.busLane) {
+      return Math.max(1, Math.floor(baseCapacity * BUS_LANE_CONFIG.carCapacityMultiplier));
+    }
+    return baseCapacity;
+  }
+
+  private getVehicleTrafficWeight(car: Car): number {
+    const baseWeight = car.vehicleType === 'bus' ? TRANSIT_CONFIG.busTrafficWeight : 1;
+    if (car.vehicleType === 'bus' && this.grid[car.currentTileY]?.[car.currentTileX]?.busLane) {
+      return baseWeight * BUS_LANE_CONFIG.busTrafficWeightMultiplier;
+    }
+    return baseWeight;
+  }
+
+  getTransitBusLaneTileCount(): number {
+    return this.grid.reduce((sum, row) => sum + row.filter((tile) => (tile.type === 'road' || tile.type === 'avenue') && tile.busLane).length, 0);
+  }
+
+  getTransitBusLaneCoverageRatio(): number {
+    if (!this.transitLine.route.length) return 0;
+    const busLaneTiles = this.transitLine.route.filter((pos) => this.grid[pos.y]?.[pos.x]?.busLane).length;
+    return Math.round((busLaneTiles / Math.max(1, this.transitLine.route.length)) * 100) / 100;
+  }
+
+  private getTransitPassengerCount(): number {
+    return this.getTransitBuses().reduce((sum, bus) => sum + passengerGroupCount(bus.passengers ?? []), 0);
+  }
+
+  private getTransitPassengerConversionChance(): number {
+    return Math.min(
+      0.94,
+      TRANSIT_CONFIG.passengerConversionChance + this.getTransitBusLaneCoverageRatio() * BUS_LANE_CONFIG.passengerConversionBonus,
+    );
+  }
+
+  getTransitLineStats(): {
+    active: boolean;
+    reason?: string;
+    stops: number;
+    routeTiles: number;
+    busCount: number;
+    maxBuses: number;
+    activeBuses: number;
+    waitingPassengers: number;
+    passengers: number;
+    busLaneTiles: number;
+    busLaneCoverageRatio: number;
+    carsAvoided: number;
+    purchaseCost: number;
+  } {
+    const busLaneTiles = this.transitLine.route.filter((pos) => this.grid[pos.y]?.[pos.x]?.busLane).length;
+    return {
+      active: this.transitLine.active,
+      reason: this.transitLine.reason,
+      stops: this.transitLine.stopIds.length,
+      routeTiles: this.transitLine.route.length,
+      busCount: this.getDesiredTransitBusCount(),
+      maxBuses: this.getMaxTransitBusCount(),
+      activeBuses: this.getTransitBuses().length,
+      waitingPassengers: this.getWaitingPassengerCount(),
+      passengers: this.getTransitPassengerCount(),
+      busLaneTiles,
+      busLaneCoverageRatio: this.getTransitBusLaneCoverageRatio(),
+      carsAvoided: Math.max(0, this.carTripsAvoided - this.metroCarsAvoided),
+      purchaseCost: BUS_LANE_CONFIG.busPurchaseCost,
+    };
+  }
+
+  setTransitBusCount(count: number): { success: boolean; count: number; max: number; cost?: number; reason?: string } {
+    const max = this.getMaxTransitBusCount();
+    const nextCount = Math.max(1, Math.min(max, Math.round(count)));
+    const currentCount = this.getDesiredTransitBusCount();
+    if (nextCount === currentCount) return { success: true, count: currentCount, max, cost: 0 };
+    const cost = nextCount > currentCount ? (nextCount - currentCount) * BUS_LANE_CONFIG.busPurchaseCost : 0;
+    if (this.money < cost) return { success: false, count: currentCount, max, cost, reason: `Faltam $ ${cost - this.money} para aumentar a frota.` };
+    this.money -= cost;
+    this.transitLine = { ...this.transitLine, busCount: nextCount };
+    this.rebuildTransitLine();
+    this.emit();
+    return { success: true, count: nextCount, max, cost };
   }
 
   isEastDistrictPurchased(): boolean {
@@ -262,6 +360,7 @@ export class GameWorld {
     const disconnectedBuildings = this.buildings.filter((b) => !b.connected).length;
     const congestions = [...this.traffic.values()].map((t) => t.congestion);
     const averageCongestion = congestions.length ? congestions.reduce((a, b) => a + b, 0) / congestions.length : 0;
+    const bikeLaneTiles = this.getBikeLaneTileCount();
     return {
       money: Math.floor(this.money),
       population: this.buildings.reduce((sum, b) => sum + b.population, 0),
@@ -281,6 +380,11 @@ export class GameWorld {
       maxCars: this.getMaxCars(),
       maxBuses: this.getMaxBuses(),
       eastDistrictPurchased: this.isEastDistrictPurchased(),
+      bikeLaneTiles,
+      bikeLaneCoverageRatio: this.getBikeLaneCoverageRatio(),
+      bikeTripsCompleted: this.bikeTripsCompleted,
+      bikeCarsAvoided: this.bikeCarsAvoided,
+      activeBikeTrips: this.bikeTrips.length,
       metroStations: this.metroStations.length,
       metroLines: this.metroLines.filter((line) => line.active).length,
       metroPassengers: this.metroTrains.reduce((sum, train) => sum + train.passengers, 0) + this.getMetroWaitingPassengerCount(),
@@ -373,6 +477,11 @@ export class GameWorld {
       failedTrips: snapshot.failedTrips,
       publicTripsCompleted: snapshot.publicTripsCompleted,
       carTripsAvoided: snapshot.carTripsAvoided,
+      bikeLaneTiles: snapshot.bikeLaneTiles,
+      bikeLaneCoverageRatio: snapshot.bikeLaneCoverageRatio,
+      bikeTripsCompleted: snapshot.bikeTripsCompleted,
+      bikeCarsAvoided: snapshot.bikeCarsAvoided,
+      activeBikeTrips: snapshot.activeBikeTrips,
       metroTripsCompleted: snapshot.metroTripsCompleted,
       metroCarsAvoided: snapshot.metroCarsAvoided,
       metroPassengers: snapshot.metroPassengers,
@@ -481,6 +590,7 @@ export class GameWorld {
 
     this.updateTransitStops(dt);
     this.updateMetro(dt);
+    this.updateBikeTrips(dt);
     this.updateConnections();
     this.refreshSelectedBuilding();
 
@@ -522,6 +632,14 @@ export class GameWorld {
 
     if (tool === 'metroTrack' || tool === 'metroLine') {
       return false;
+    }
+
+    if (tool === 'bikeLane') {
+      return this.toggleBikeLaneAt(x, y).success;
+    }
+
+    if (tool === 'busLane') {
+      return this.toggleBusLaneAt(x, y).success;
     }
 
     if (tool === 'roundabout') {
@@ -618,8 +736,9 @@ export class GameWorld {
       const cost = ROAD_CONFIG[tool].buildCost + (building ? getBuildingDemolitionCost(building) : 0);
       if (this.money < cost) return false;
       const oneWay = tile.type === 'road' || tile.type === 'avenue' ? tile.oneWay : undefined;
+      const busLane = tile.type === 'road' || tile.type === 'avenue' ? tile.busLane : undefined;
       if (building) this.removeBuildingForRoad(building.id);
-      this.grid[y][x] = { x, y, type: tool, oneWay };
+      this.grid[y][x] = { x, y, type: tool, oneWay, busLane };
       this.markStaticRenderDirty();
       this.money -= cost;
       this.rerouteCarsAffectedBy([{ x, y }]);
@@ -669,6 +788,58 @@ export class GameWorld {
     return false;
   }
 
+  toggleBusLaneAt(x: number, y: number): { success: boolean; enabled?: boolean; cost?: number; reason?: string } {
+    const tile = this.grid[y]?.[x];
+    const wasEnabled = Boolean(tile?.busLane);
+    const result = this.setBusLaneLine([{ x, y }]);
+    if (!result.success) return { success: false, reason: result.reason, cost: result.cost };
+    return { success: true, enabled: !wasEnabled, cost: result.cost };
+  }
+
+  setBusLaneLine(tiles: Vec2[]): { success: boolean; changed: number; cost: number; removed?: boolean; reason?: string } {
+    const uniqueTiles = dedupeTiles(tiles);
+    if (!uniqueTiles.length) return { success: false, changed: 0, cost: 0, reason: 'Nenhum tile selecionado.' };
+
+    let eligible = 0;
+    let enabled = 0;
+    for (const pos of uniqueTiles) {
+      if (!inBounds(pos.x, pos.y)) return { success: false, changed: 0, cost: 0, reason: 'A linha sai do mapa.' };
+      const tile = this.grid[pos.y]?.[pos.x];
+      if (!tile || (tile.type !== 'road' && tile.type !== 'avenue')) {
+        return { success: false, changed: 0, cost: 0, reason: 'Corredor de ônibus só pode ser aplicado em ruas e avenidas.' };
+      }
+      if (isRoundaboutTile(tile) || isRoundaboutCenter(tile)) {
+        return { success: false, changed: 0, cost: 0, reason: 'Corredor de ônibus não pode ser aplicado em rotatórias.' };
+      }
+      eligible += 1;
+      if (tile.busLane) enabled += 1;
+    }
+
+    const remove = eligible > 0 && enabled === eligible;
+    const changed = remove ? enabled : eligible - enabled;
+    if (changed <= 0) return { success: false, changed: 0, cost: 0, reason: 'Nenhuma alteração necessária.' };
+    const cost = remove
+      ? Math.ceil(changed * BUS_LANE_CONFIG.buildCost * BUS_LANE_CONFIG.removeCostRatio)
+      : changed * BUS_LANE_CONFIG.buildCost;
+    if (this.money < cost) return { success: false, changed, cost, reason: `Faltam $ ${cost - this.money} para ${remove ? 'remover' : 'implantar'} o corredor.` };
+
+    for (const pos of uniqueTiles) {
+      const tile = this.grid[pos.y][pos.x];
+      if (tile.type !== 'road' && tile.type !== 'avenue') continue;
+      if (remove && tile.busLane) this.grid[pos.y][pos.x] = { ...tile, busLane: undefined };
+      if (!remove && !tile.busLane) this.grid[pos.y][pos.x] = { ...tile, busLane: true };
+    }
+
+    this.money -= cost;
+    this.markStaticRenderDirty();
+    this.updateTrafficMap();
+    this.rebuildTransitLine();
+    this.refreshSelectedRoad();
+    this.emit();
+    return { success: true, changed, cost, removed: remove };
+  }
+
+
   buildRoadLine(tiles: Vec2[], roadType: 'road' | 'avenue'): { success: boolean; built: number; cost: number; demolished?: number; reason?: string } {
     const uniqueTiles = dedupeTiles(tiles);
     if (!uniqueTiles.length) return { success: false, built: 0, cost: 0, reason: 'Nenhum tile selecionado.' };
@@ -704,8 +875,9 @@ export class GameWorld {
       if (this.grid[pos.y][pos.x].type !== roadType) {
         const current = this.grid[pos.y][pos.x];
         const oneWay = current.type === 'road' || current.type === 'avenue' ? current.oneWay : undefined;
+        const busLane = current.type === 'road' || current.type === 'avenue' ? current.busLane : undefined;
         if (current.type === 'building' && current.buildingId) this.removeBuildingForRoad(current.buildingId);
-        this.grid[pos.y][pos.x] = { x: pos.x, y: pos.y, type: roadType, oneWay };
+        this.grid[pos.y][pos.x] = { x: pos.x, y: pos.y, type: roadType, oneWay, busLane };
           this.markStaticRenderDirty();
       }
     }
@@ -720,6 +892,48 @@ export class GameWorld {
     this.rebuildTransitLine();
     this.emit();
     return { success: true, built, cost, demolished };
+  }
+
+  setBikeLaneLine(tiles: Vec2[]): { success: boolean; changed: number; removed?: boolean; cost: number; reason?: string } {
+    const uniqueTiles = dedupeTiles(tiles);
+    if (!uniqueTiles.length) return { success: false, changed: 0, cost: 0, reason: 'Nenhum tile selecionado.' };
+
+    let eligible = 0;
+    let enabled = 0;
+    for (const pos of uniqueTiles) {
+      if (!inBounds(pos.x, pos.y)) return { success: false, changed: 0, cost: 0, reason: 'A linha sai do mapa.' };
+      const tile = this.grid[pos.y]?.[pos.x];
+      if (!tile || tile.type !== 'road') return { success: false, changed: 0, cost: 0, reason: 'Ciclovia só pode ser aplicada em ruas.' };
+      eligible += 1;
+      if (tile.bikeLane) enabled += 1;
+    }
+
+    const remove = eligible > 0 && enabled === eligible;
+    const changed = remove ? enabled : eligible - enabled;
+    if (changed === 0) return { success: false, changed: 0, cost: 0, reason: remove ? 'A ciclovia já está removida.' : 'A ciclovia já existe em todo o trecho.' };
+    const cost = remove
+      ? Math.ceil(changed * BIKE_LANE_CONFIG.buildCost * BIKE_LANE_CONFIG.removeCostRatio)
+      : changed * BIKE_LANE_CONFIG.buildCost;
+    if (this.money < cost) return { success: false, changed, cost, reason: 'Faltam $ ' + (cost - this.money) + ' para ' + (remove ? 'remover' : 'implantar') + ' a ciclovia.' };
+
+    for (const pos of uniqueTiles) {
+      const tile = this.grid[pos.y][pos.x];
+      if (remove) this.grid[pos.y][pos.x] = { ...tile, bikeLane: undefined };
+      else if (!tile.bikeLane) this.grid[pos.y][pos.x] = { ...tile, bikeLane: true };
+    }
+
+    this.money -= cost;
+    this.markStaticRenderDirty();
+    this.refreshSelectedRoad();
+    this.emit();
+    return { success: true, changed, removed: remove, cost };
+  }
+
+  toggleBikeLaneAt(x: number, y: number): { success: boolean; enabled?: boolean; cost?: number; reason?: string } {
+    const result = this.setBikeLaneLine([{ x, y }]);
+    return result.success
+      ? { success: true, enabled: !result.removed, cost: result.cost }
+      : { success: false, cost: result.cost, reason: result.reason };
   }
 
   setOneWayLine(tiles: Vec2[], direction: RoadDirection): { success: boolean; changed: number; reason?: string } {
@@ -795,7 +1009,7 @@ export class GameWorld {
       this.selected = station ? { kind: 'metroStation', station } : { kind: 'tile', x, y, type: tile.type };
     } else if (isRoadType(tile.type)) {
       const t = this.traffic.get(keyOf(x, y)) ?? { x, y, cars: 0, capacity: ROAD_CONFIG[tile.type as RoadType].capacity, congestion: 0 };
-      this.selected = { kind: 'road', x, y, roadType: tile.type as RoadType, traffic: t, trafficLight: this.trafficLights.get(getTrafficLightKey(x, y)), oneWay: tile.oneWay };
+      this.selected = { kind: 'road', x, y, roadType: tile.type as RoadType, traffic: t, trafficLight: this.trafficLights.get(getTrafficLightKey(x, y)), oneWay: tile.oneWay, busLane: tile.busLane };
     } else {
       this.selected = { kind: 'tile', x, y, type: tile.type };
     }
@@ -875,6 +1089,7 @@ export class GameWorld {
   }
 
   private rebuildTransitLine(): void {
+    const desiredBusCount = this.getDesiredTransitBusCount();
     this.cars = this.cars.filter((car) => car.vehicleType !== 'bus');
 
     const orderedStops = this.orderTransitStops();
@@ -884,6 +1099,7 @@ export class GameWorld {
         stopIds: orderedStops.map((stop) => stop.id),
         route: [],
         active: false,
+        busCount: desiredBusCount,
         reason: 'Adicione ao menos dois pontos de ônibus.',
       };
       return;
@@ -895,13 +1111,14 @@ export class GameWorld {
       const to = orderedStops[(index + 1) % orderedStops.length].accessRoad;
       const segment = keyOf(from.x, from.y) === keyOf(to.x, to.y)
         ? [from]
-        : findFastestPath(this.grid, this.traffic, from, to);
+        : findFastestPath(this.grid, this.traffic, from, to, { vehicleType: 'bus' });
       if (segment.length < 2 && keyOf(from.x, from.y) !== keyOf(to.x, to.y)) {
         this.transitLine = {
           id: 'bus-loop',
           stopIds: orderedStops.map((stop) => stop.id),
           route,
           active: false,
+          busCount: desiredBusCount,
           reason: 'Linha de ônibus interrompida: conecte as vias entre os pontos.',
         };
         return;
@@ -915,6 +1132,7 @@ export class GameWorld {
       stopIds: orderedStops.map((stop) => stop.id),
       route,
       active: route.length >= 2,
+      busCount: desiredBusCount,
     };
     this.spawnTransitBuses();
   }
@@ -944,10 +1162,9 @@ export class GameWorld {
 
   private spawnTransitBuses(): void {
     if (!this.transitLine.active || this.transitLine.route.length < 2) return;
-    const baseBusCount = this.transitLine.stopIds.length >= 5 ? 2 : 1;
     const busCount = Math.min(
-      this.getMaxBuses(),
-      Math.max(1, baseBusCount * this.getOwnedDistrictCount()),
+      this.getMaxTransitBusCount(),
+      this.getDesiredTransitBusCount(),
       Math.max(1, this.transitLine.stopIds.length),
     );
     for (let index = 0; index < busCount; index += 1) {
@@ -1024,7 +1241,7 @@ export class GameWorld {
 
   private tryCreateTransitTrip(origin: Building, destination: Building): boolean {
     if (!this.transitLine.active) return false;
-    if (Math.random() > TRANSIT_CONFIG.passengerConversionChance) return false;
+    if (Math.random() > this.getTransitPassengerConversionChance()) return false;
     const originStop = this.findNearbyTransitStop(origin);
     const destinationStop = this.findNearbyTransitStop(destination);
     if (!originStop || !destinationStop || originStop.id === destinationStop.id) return false;
@@ -1034,6 +1251,69 @@ export class GameWorld {
     addPassengerGroup(originStop.waiting, destinationStop.id, 1);
     originStop.arrivalPulse = 1;
     this.carTripsAvoided += 1;
+    return true;
+  }
+
+  private updateBikeTrips(dt: number): void {
+    for (const bike of this.bikeTrips) {
+      bike.progress += bike.speed * dt;
+    }
+    this.bikeTrips = this.bikeTrips.filter((bike) => bike.progress < bike.route.length - 1 + BIKE_LANE_CONFIG.visualLifePaddingSeconds);
+  }
+
+  private getBikeLaneTileCount(): number {
+    return this.grid.reduce((sum, row) => sum + row.filter((tile) => tile.type === 'road' && tile.bikeLane).length, 0);
+  }
+
+  private getBikeLaneCoverageRatio(): number {
+    const roadTiles = this.grid.reduce((sum, row) => sum + row.filter((tile) => tile.type === 'road').length, 0);
+    return Math.round((this.getBikeLaneTileCount() / Math.max(1, roadTiles)) * 100) / 100;
+  }
+
+  private findNearbyBikeLane(building: Building): Vec2 | undefined {
+    const candidates: Vec2[] = [];
+    for (let y = building.y - BIKE_LANE_CONFIG.coverageRadius; y <= building.y + BIKE_LANE_CONFIG.coverageRadius; y += 1) {
+      for (let x = building.x - BIKE_LANE_CONFIG.coverageRadius; x <= building.x + BIKE_LANE_CONFIG.coverageRadius; x += 1) {
+        if (!inBounds(x, y)) continue;
+        if (Math.abs(building.x - x) + Math.abs(building.y - y) > BIKE_LANE_CONFIG.coverageRadius) continue;
+        const tile = this.grid[y]?.[x];
+        if (tile?.type === 'road' && tile.bikeLane) candidates.push({ x, y });
+      }
+    }
+    return candidates.sort((a, b) => manhattan(a, building) - manhattan(b, building))[0];
+  }
+
+  private tryCreateBikeTrip(origin: Building, destination: Building): boolean {
+    const tripDistance = manhattan(origin, destination);
+    if (tripDistance > BIKE_LANE_CONFIG.maxTripDistance) return false;
+    if (Math.random() > BIKE_LANE_CONFIG.bikeTripChance) return false;
+
+    const originAccess = this.findNearbyBikeLane(origin);
+    const destinationAccess = this.findNearbyBikeLane(destination);
+    if (!originAccess || !destinationAccess) return false;
+
+    const route = findBikeLanePath(this.grid, originAccess, destinationAccess);
+    if (route.length < 2) return false;
+
+    if (this.bikeTrips.length < BIKE_LANE_CONFIG.maxActiveBikeVisuals) {
+      this.bikeTrips.push({
+        id: nanoid(8),
+        route,
+        progress: 0,
+        speed: BIKE_LANE_CONFIG.bikeSpeedTilesPerSecond,
+        originBuildingId: origin.id,
+        destinationBuildingId: destination.id,
+        createdAtDay: this.time.getDay(),
+      });
+    }
+
+    this.bikeTripsCompleted += 1;
+    this.bikeCarsAvoided += 1;
+    this.carTripsAvoided += 1;
+    this.completedTrips += 1;
+    this.tripHistory.push(Math.max(2, route.length / BIKE_LANE_CONFIG.bikeSpeedTilesPerSecond));
+    if (this.tripHistory.length > TRAVEL_TIME_HISTORY_LIMIT) this.tripHistory.shift();
+    this.averageTravelTime = this.tripHistory.length ? this.tripHistory.reduce((a, b) => a + b, 0) / this.tripHistory.length : 0;
     return true;
   }
 
@@ -1275,7 +1555,7 @@ export class GameWorld {
             x: tile.x,
             y: tile.y,
             cars: 0,
-            capacity: ROAD_CONFIG[roadType].capacity,
+            capacity: this.getRoadCapacityForTraffic(tile, roadType),
             congestion: 0,
           });
         }
@@ -1286,7 +1566,7 @@ export class GameWorld {
       const k = keyOf(car.currentTileX, car.currentTileY);
       const info = map.get(k);
       if (info) {
-        const vehicleWeight = car.vehicleType === 'bus' ? TRANSIT_CONFIG.busTrafficWeight : 1;
+        const vehicleWeight = this.getVehicleTrafficWeight(car);
         info.cars += vehicleWeight;
         if (car.trafficState === 'queued' || car.trafficState === 'intersection' || car.status === 'stopped') {
           pressure.set(k, (pressure.get(k) ?? 0) + vehicleWeight * 1.35 + Math.min(2.5, car.stuckSeconds * 0.15));
@@ -1324,6 +1604,11 @@ export class GameWorld {
         continue;
       }
       if (tripDistance < METRO_CONFIG.longTripDistance && this.tryCreateMetroTrip(trip.origin, trip.destination)) {
+        trip.origin.tripsToday += 1;
+        trip.destination.tripsToday += 1;
+        continue;
+      }
+      if (tripDistance <= BIKE_LANE_CONFIG.maxTripDistance && this.tryCreateBikeTrip(trip.origin, trip.destination)) {
         trip.origin.tripsToday += 1;
         trip.destination.tripsToday += 1;
         continue;
@@ -1471,10 +1756,12 @@ export class GameWorld {
       }
 
       const traffic = this.traffic.get(keyOf(car.currentTileX, car.currentTileY));
-      const congestion = traffic?.congestion ?? 0;
+      const rawCongestion = traffic?.congestion ?? 0;
+      const congestion = this.getCongestionForCar(car, rawCongestion, nextRouteTile);
       const decision = computeTrafficDecision(this.grid, car, drivingCars, intersectionControls, this.trafficLights, congestion, carSpatialIndex);
-      car.desiredSpeed = decision.desiredSpeed;
-      car.targetSpeed = decision.targetSpeed;
+      const busLaneSpeedMultiplier = this.getBusLaneSpeedMultiplierForCar(car, nextRouteTile);
+      car.desiredSpeed = decision.desiredSpeed * busLaneSpeedMultiplier;
+      car.targetSpeed = decision.targetSpeed * busLaneSpeedMultiplier;
       car.laneOffset = decision.laneOffset;
       car.laneIndex = decision.laneIndex;
       car.laneCount = decision.laneCount;
@@ -1485,7 +1772,7 @@ export class GameWorld {
       car.intersectionQueuePosition = decision.intersectionQueuePosition;
       car.intersectionQueueLength = decision.intersectionQueueLength;
       car.intersectionReason = decision.intersectionReason;
-      applySmoothSpeed(car, decision.targetSpeed, dt, decision.hardStop);
+      applySmoothSpeed(car, car.targetSpeed, dt, decision.hardStop);
       car.status = car.currentSpeed < 0.08 ? 'stopped' : 'moving';
       car.turnSlowdown = decision.turning ? Math.max(car.turnSlowdown, 0.32) : Math.max(0, car.turnSlowdown - dt);
 
@@ -1524,7 +1811,7 @@ export class GameWorld {
         car.insideIntersectionSeconds = Math.max(0, car.insideIntersectionSeconds - dt * 2);
       }
 
-      if (car.currentSpeed < 0.08 && decision.targetSpeed < 0.2) {
+      if (car.currentSpeed < 0.08 && car.targetSpeed < 0.2) {
         car.stuckSeconds += dt;
       } else if (car.currentSpeed > 0.25) {
         car.stuckSeconds = Math.max(0, car.stuckSeconds - dt * 2.5);
@@ -1610,6 +1897,22 @@ export class GameWorld {
       this.averageTravelTime = this.tripHistory.length ? this.tripHistory.reduce((a, b) => a + b, 0) / this.tripHistory.length : 0;
     }
   }
+
+  private hasBusLaneForCar(car: Car, next?: Vec2): boolean {
+    if (car.vehicleType !== 'bus') return false;
+    const currentTile = this.grid[car.currentTileY]?.[car.currentTileX];
+    const nextTile = next ? this.grid[next.y]?.[next.x] : undefined;
+    return Boolean(currentTile?.busLane || nextTile?.busLane);
+  }
+
+  private getCongestionForCar(car: Car, congestion: number, next?: Vec2): number {
+    return this.hasBusLaneForCar(car, next) ? congestion * BUS_LANE_CONFIG.busCongestionResistance : congestion;
+  }
+
+  private getBusLaneSpeedMultiplierForCar(car: Car, next?: Vec2): number {
+    return this.hasBusLaneForCar(car, next) ? BUS_LANE_CONFIG.busSpeedMultiplier : 1;
+  }
+
 
   private carUpdatePriority(car: Car): number {
     const insideIntersection = isIntersection(this.grid, { x: car.currentTileX, y: car.currentTileY }) ? 1000 : 0;
@@ -2544,7 +2847,8 @@ function estimateRouteCost(grid: Tile[][], traffic: Map<string, TrafficCell>, ro
     const roadType = tile.type as RoadType;
     const trafficCell = traffic.get(keyOf(pos.x, pos.y));
     const congestionPenalty = trafficCell ? Math.max(0, trafficCell.congestion - 0.2) * 12 : 0;
-    total += ROAD_CONFIG[roadType].pathCost + congestionPenalty;
+    const busLanePenalty = tile.busLane && roadType !== 'roundabout' ? BUS_LANE_CONFIG.carPathPenalty : 1;
+    total += ROAD_CONFIG[roadType].pathCost * busLanePenalty + congestionPenalty;
   }
   return total;
 }

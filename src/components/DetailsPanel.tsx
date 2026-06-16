@@ -175,6 +175,8 @@ export function DetailsPanel({ world, className = '', onClose }: { world: GameWo
           <p><span>Congestionamento</span><strong>{Math.round(selected.traffic.congestion * 100)}%</strong></p>
           <p><span>Velocidade base</span><strong>{ROAD_CONFIG[selected.roadType].speed}x</strong></p>
           <p><span>Sentido</span><strong>{selected.oneWay ? oneWayLabel[selected.oneWay] : 'Mão dupla'}</strong></p>
+          <p><span>Ciclovia</span><strong className={selected.bikeLane ? 'good' : ''}>{selected.bikeLane ? 'Ativa' : 'Inativa'}</strong></p>
+          <p><span>Corredor de ônibus</span><strong className={selected.busLane ? 'good' : undefined}>{selected.busLane ? 'Ativo' : 'Não'}</strong></p>
           {selected.trafficLight && (
             <>
               <p><span>Semáforo</span><strong>{trafficLightPhaseLabel[selected.trafficLight.phase]}</strong></p>

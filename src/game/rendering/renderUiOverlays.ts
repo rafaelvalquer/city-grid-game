@@ -90,15 +90,17 @@ export function drawConstructionPreview(graphics: Graphics, world: GameWorld, pr
 }
 
 
-export function drawRoadLinePreview(graphics: Graphics, preview: HoverPreview, tool: 'road' | 'avenue', ts: number, timeSeconds: number): void {
+export function drawRoadLinePreview(graphics: Graphics, preview: HoverPreview, tool: 'road' | 'avenue' | 'busLane' | 'bikeLane' | 'bikeLane', ts: number, timeSeconds: number): void {
   const lineTiles = preview.lineTiles ?? [];
   const visibleTiles = lineTiles.filter((tile) => inBounds(tile.x, tile.y));
   if (!visibleTiles.length) return;
 
   const previewPulse = pulse(timeSeconds, preview.valid ? 1.15 : 1.7, (preview.x * 0.19) + (preview.y * 0.13));
   const color = preview.valid ? MAP_COLORS.previewValid : MAP_COLORS.previewInvalid;
-  const roadColor = preview.valid ? (tool === 'avenue' ? MAP_COLORS.avenue : MAP_COLORS.road) : MAP_COLORS.previewInvalid;
-  const roadW = tool === 'avenue' ? 32 : 23;
+  const isBusLanePreview = tool === 'busLane';
+  const isBikeLanePreview = tool === 'bikeLane';
+  const roadColor = preview.valid ? (isBikeLanePreview ? 0x2dd4bf : isBusLanePreview ? 0x1d9bf0 : tool === 'avenue' ? MAP_COLORS.avenue : MAP_COLORS.road) : MAP_COLORS.previewInvalid;
+  const roadW = isBikeLanePreview ? 8 : isBusLanePreview ? 13 : tool === 'avenue' ? 32 : 23;
   const minX = Math.min(...visibleTiles.map((tile) => tile.x));
   const maxX = Math.max(...visibleTiles.map((tile) => tile.x));
   const minY = Math.min(...visibleTiles.map((tile) => tile.y));

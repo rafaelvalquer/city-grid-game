@@ -130,11 +130,9 @@ export function PixiGame({ world }: { world: GameWorld }) {
       </div>
       <LayerToggle />
       <CanvasToolDock />
-      {viewLayerUi === 'underground' && (
-        <button className="metro-manager-toggle" type="button" onClick={() => setMetroManagerOpen((open) => !open)}>
-          🚇 Gerenciar linhas
-        </button>
-      )}
+      <button className={`metro-manager-toggle ${viewLayerUi}`} type="button" onClick={() => setMetroManagerOpen((open) => !open)}>
+        {viewLayerUi === 'underground' ? '🚇' : '🚌'} Gerenciar linhas
+      </button>
       {metroManagerOpen && <MetroManagementPanel world={world} onClose={() => setMetroManagerOpen(false)} />}
       {hoverPreview && (
         <div className={`tile-preview ${hoverPreview.valid ? 'valid' : 'invalid'}`}>

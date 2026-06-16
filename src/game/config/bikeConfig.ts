@@ -1,0 +1,17 @@
+export const BIKE_LANE_CONFIG = {
+  buildCost: 35,
+  removeCostRatio: 0.3,
+  coverageRadius: 3,
+  maxTripDistance: 9,
+  bikeTripChance: 0.42,
+  bikeSpeedTilesPerSecond: 2.4,
+  visualLifePaddingSeconds: 0.8,
+  carAvoidedSatisfactionWeight: 0.02,
+  maxActiveBikeVisuals: 80,
+  laneColor: 0x2dd4bf,
+  laneEdgeColor: 0x99f6e4,
+  laneIconColor: 0xecfeff,
+  bikeBodyColor: 0x22c55e,
+  bikeWheelColor: 0xecfeff,
+  bikeTrailColor: 0x22c55e,
+} as const;

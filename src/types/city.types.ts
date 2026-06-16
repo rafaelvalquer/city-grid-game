@@ -31,6 +31,8 @@ export type Tile = {
   buildingId?: string;
   metroStationId?: string;
   oneWay?: RoadDirection;
+  busLane?: boolean;
+  bikeLane?: boolean;
 };
 
 export type Building = {
@@ -80,7 +82,18 @@ export type TransitLine = {
   stopIds: string[];
   route: Vec2[];
   active: boolean;
+  busCount?: number;
   reason?: string;
+};
+
+export type BikeTripVisual = {
+  id: string;
+  route: Vec2[];
+  progress: number;
+  speed: number;
+  originBuildingId: string;
+  destinationBuildingId: string;
+  createdAtDay: number;
 };
 
 export type TrafficLightAxis = 'horizontal' | 'vertical';
@@ -118,11 +131,18 @@ export type CityStats = {
   carTripsAvoided: number;
   waitingPassengers: number;
   activeBuses: number;
+  busLaneTiles: number;
+  busLaneCoverageRatio: number;
   districtsOwned: number;
   cityAreaTiles: number;
   maxCars: number;
   maxBuses: number;
   eastDistrictPurchased: boolean;
+  bikeLaneTiles: number;
+  bikeLaneCoverageRatio: number;
+  bikeTripsCompleted: number;
+  bikeCarsAvoided: number;
+  activeBikeTrips: number;
   metroStations: number;
   metroLines: number;
   metroPassengers: number;
@@ -208,7 +228,7 @@ export type SelectedEntity =
   | { kind: 'tile'; x: number; y: number; type: TileType }
   | { kind: 'building'; building: Building }
   | { kind: 'busStop'; stop: TransitStop }
-  | { kind: 'road'; x: number; y: number; roadType: RoadType; traffic: TrafficCell; trafficLight?: TrafficLightState; oneWay?: RoadDirection }
+  | { kind: 'road'; x: number; y: number; roadType: RoadType; traffic: TrafficCell; trafficLight?: TrafficLightState; oneWay?: RoadDirection; busLane?: boolean; bikeLane?: boolean }
   | { kind: 'car'; carId: string }
   | { kind: 'metroStation'; station: MetroStation }
   | { kind: 'metroLine'; line: MetroLine }

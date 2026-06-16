@@ -2504,3 +2504,115 @@ h3 {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+
+.mobility-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin: 10px 0 12px;
+}
+
+.mobility-tabs button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid rgba(150, 167, 189, 0.22);
+  border-radius: 10px;
+  background: rgba(11, 21, 36, 0.82);
+  color: var(--muted);
+  padding: 9px 10px;
+  cursor: pointer;
+}
+
+.mobility-tabs button.active {
+  color: #e7fbff;
+  border-color: rgba(92, 200, 255, 0.58);
+  background: rgba(36, 167, 223, 0.18);
+}
+
+.bus-line-card {
+  display: grid;
+  gap: 12px;
+  border: 1px solid rgba(92, 200, 255, 0.25);
+  border-radius: 12px;
+  background: rgba(11, 21, 36, 0.74);
+  padding: 12px;
+}
+
+.bus-line-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.bus-line-heading h3 {
+  margin: 0 0 3px;
+  font-size: 15px;
+}
+
+.bus-line-heading p {
+  margin: 0;
+  font-size: 12px;
+}
+
+.mobility-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.mobility-kpi-grid span {
+  display: grid;
+  gap: 2px;
+  border: 1px solid rgba(150, 167, 189, 0.16);
+  border-radius: 9px;
+  background: rgba(16, 26, 42, 0.72);
+  padding: 8px;
+}
+
+.mobility-kpi-grid small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.bus-line-progress {
+  height: 9px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(38, 56, 80, 0.8);
+  border: 1px solid rgba(139, 220, 255, 0.22);
+}
+
+.bus-line-progress i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #1d9bf0, #8bdcff);
+}
+
+.bus-line-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.bus-line-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid rgba(150, 167, 189, 0.22);
+  border-radius: 9px;
+  background: rgba(20, 32, 51, 0.86);
+  color: var(--text);
+  padding: 8px;
+  cursor: pointer;
+}
+
+.bus-line-actions button:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}

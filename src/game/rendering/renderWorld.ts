@@ -14,6 +14,7 @@ import { getStaticRenderSignature } from './renderInvalidation';
 import { drawConstructionPreview, drawSelectedCarMarker, drawSelectedRoute, drawSelection } from './renderUiOverlays';
 import type { ParticleSystem } from './particleSystem';
 import { renderMetroLayer } from './renderMetro';
+import { drawBikeTrips } from './renderBikes';
 
 export type RenderWorldState = {
   staticSignature: string | null;
@@ -145,6 +146,7 @@ function renderDynamicLayer(
   for (const car of world.cars) {
     drawCar(graphics, car, world, ts, timeSeconds, atmosphere);
   }
+  drawBikeTrips(graphics, world, ts, timeSeconds);
 
   if (hoverPreview) drawConstructionPreview(graphics, world, hoverPreview, ts, timeSeconds);
   if (world.selected.kind === 'tile') drawSelection(graphics, world.selected.x, world.selected.y, ts);
