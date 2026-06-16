@@ -14,53 +14,57 @@ function interpolate(route: Vec2[], progress: number): { x: number; y: number; a
   return { x, y, angle: Math.atan2(to.y - from.y, to.x - from.x), from, to };
 }
 
-function localPoint(cx: number, cy: number, angle: number, forward: number, side: number): { x: number; y: number } {
-  const fx = Math.cos(angle);
-  const fy = Math.sin(angle);
-  const sx = -fy;
-  const sy = fx;
-  return { x: cx + fx * forward + sx * side, y: cy + fy * forward + sy * side };
+function bikeSidewalkOffset(angle: number, ts: number): { x: number; y: number } {
+  // Posiciona a bicicleta sobre a calçada/borda pintada de azul, não no meio da rua.
+  // O deslocamento usa o vetor perpendicular à direção da viagem.
+  const sideX = -Math.sin(angle);
+  const sideY = Math.cos(angle);
+  return { x: sideX * ts * 0.34, y: sideY * ts * 0.34 };
+}
+
+function bikePixelPose(route: Vec2[], progress: number, ts: number): { x: number; y: number; angle: number } | null {
+  const pose = interpolate(route, progress);
+  if (!pose) return null;
+  const offset = bikeSidewalkOffset(pose.angle, ts);
+  return {
+    x: pose.x * ts + ts / 2 + offset.x,
+    y: pose.y * ts + ts / 2 + offset.y,
+    angle: pose.angle,
+  };
 }
 
 function drawBikeTrail(graphics: Graphics, route: Vec2[], progress: number, ts: number): void {
-  const current = interpolate(route, progress);
-  const previous = interpolate(route, Math.max(0, progress - 0.75));
+  const current = bikePixelPose(route, progress, ts);
+  const previous = bikePixelPose(route, Math.max(0, progress - 0.55), ts);
   if (!current || !previous) return;
   graphics
-    .moveTo(previous.x * ts + ts / 2, previous.y * ts + ts / 2)
-    .lineTo(current.x * ts + ts / 2, current.y * ts + ts / 2)
-    .stroke({ color: BIKE_LANE_CONFIG.bikeTrailColor, width: 3, alpha: 0.18 });
+    .moveTo(previous.x, previous.y)
+    .lineTo(current.x, current.y)
+    .stroke({ color: BIKE_LANE_CONFIG.bikeTrailColor, width: 2.2, alpha: 0.16 });
 }
 
-function drawBike(graphics: Graphics, cx: number, cy: number, angle: number, timeSeconds: number): void {
-  const pedal = Math.sin(timeSeconds * 10) * 0.9;
-  const wheelPulse = 0.8 + Math.abs(Math.sin(timeSeconds * 12)) * 0.22;
-  const rear = localPoint(cx, cy, angle, -5, 3);
-  const front = localPoint(cx, cy, angle, 5, 3);
-  const bodyTop = localPoint(cx, cy, angle, 0, -2 + pedal);
-  const bodyLow = localPoint(cx, cy, angle, -1, 3);
-  const head = localPoint(cx, cy, angle, 0, -6 + pedal * 0.35);
+function drawBikeSquare(graphics: Graphics, cx: number, cy: number, angle: number, timeSeconds: number): void {
+  // Representação discreta: um pequeno quadradinho verde sobre a calçada azul.
+  // Sem rodas/corpo grande para não parecer que está andando no meio da rua.
+  const pulse = 0.5 + Math.sin(timeSeconds * 6.5 + cx * 0.01 + cy * 0.01) * 0.5;
+  const size = 5.2 + pulse * 0.45;
+  const glowSize = size + 3.2;
+  const lean = Math.sin(angle) * 0.6;
 
-  graphics.circle(rear.x, rear.y, 2.6 + wheelPulse * 0.2)
-    .stroke({ color: BIKE_LANE_CONFIG.bikeWheelColor, width: 1.25, alpha: 0.94 });
-  graphics.circle(front.x, front.y, 2.6 + wheelPulse * 0.2)
-    .stroke({ color: BIKE_LANE_CONFIG.bikeWheelColor, width: 1.25, alpha: 0.94 });
-
-  graphics.moveTo(rear.x, rear.y)
-    .lineTo(bodyTop.x, bodyTop.y)
-    .lineTo(front.x, front.y)
-    .lineTo(bodyLow.x, bodyLow.y)
-    .lineTo(rear.x, rear.y)
-    .stroke({ color: BIKE_LANE_CONFIG.bikeBodyColor, width: 1.7, alpha: 0.97 });
-
-  graphics.circle(head.x, head.y, 1.8).fill({ color: BIKE_LANE_CONFIG.bikeWheelColor, alpha: 0.97 });
+  graphics.roundRect(cx - glowSize / 2 + lean, cy - glowSize / 2, glowSize, glowSize, 2.5)
+    .fill({ color: BIKE_LANE_CONFIG.bikeBodyColor, alpha: 0.11 });
+  graphics.roundRect(cx - size / 2 + lean, cy - size / 2, size, size, 1.6)
+    .fill({ color: BIKE_LANE_CONFIG.bikeBodyColor, alpha: 0.92 })
+    .stroke({ color: BIKE_LANE_CONFIG.bikeWheelColor, width: 0.75, alpha: 0.78 });
+  graphics.rect(cx - 1.2 + lean, cy - 1.2, 2.4, 2.4)
+    .fill({ color: 0x052e16, alpha: 0.24 });
 }
 
 export function drawBikeTrips(graphics: Graphics, world: GameWorld, ts: number, timeSeconds: number): void {
   for (const trip of world.bikeTrips) {
-    const pose = interpolate(trip.route, trip.progress);
+    const pose = bikePixelPose(trip.route, trip.progress, ts);
     if (!pose) continue;
     drawBikeTrail(graphics, trip.route, trip.progress, ts);
-    drawBike(graphics, pose.x * ts + ts / 2, pose.y * ts + ts / 2, pose.angle, timeSeconds);
+    drawBikeSquare(graphics, pose.x, pose.y, pose.angle, timeSeconds);
   }
 }

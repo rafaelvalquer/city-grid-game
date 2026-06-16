@@ -145,36 +145,33 @@ export function drawRoad(graphics: Graphics, grid: Tile[][], x: number, y: numbe
 export function drawBikeLaneMarking(graphics: Graphics, grid: Tile[][], x: number, y: number, ts: number, autoTile: RoadAutoTile): void {
   const tile = grid[y]?.[x];
   if (tile?.type !== 'road' || !tile.bikeLane) return;
+
   const px = x * ts;
   const py = y * ts;
   const center = ts / 2;
-  const horizontal = autoTile.horizontal || (!autoTile.vertical && (autoTile.connections.east || autoTile.connections.west));
-  const vertical = autoTile.vertical || (!autoTile.horizontal && (autoTile.connections.north || autoTile.connections.south));
-  const laneAlpha = autoTile.shape === 'cross' || autoTile.shape === 'tee' ? 0.68 : 0.92;
+  const horizontal = autoTile.horizontal || autoTile.connections.east || autoTile.connections.west || autoTile.shape === 'isolated';
+  const vertical = autoTile.vertical || autoTile.connections.north || autoTile.connections.south || autoTile.shape === 'isolated';
+  const alpha = autoTile.shape === 'cross' || autoTile.shape === 'tee' ? 0.74 : 0.94;
 
+  // A ciclovia é representada como a própria borda/calçada da rua pintada de azul.
+  // Não desenha ícone grande nem faixa no centro da pista.
   if (horizontal) {
-    graphics.roundRect(px + 5, py + center + 9, ts - 10, 4, 2)
-      .fill({ color: BIKE_LANE_CONFIG.laneColor, alpha: laneAlpha })
-      .stroke({ color: BIKE_LANE_CONFIG.laneEdgeColor, width: 0.7, alpha: 0.72 });
+    drawBikeSidewalkStrip(graphics, px + 4, py + center - 17, ts - 8, 4, alpha);
+    drawBikeSidewalkStrip(graphics, px + 4, py + center + 13, ts - 8, 4, alpha);
   }
+
   if (vertical) {
-    graphics.roundRect(px + center + 9, py + 5, 4, ts - 10, 2)
-      .fill({ color: BIKE_LANE_CONFIG.laneColor, alpha: laneAlpha })
-      .stroke({ color: BIKE_LANE_CONFIG.laneEdgeColor, width: 0.7, alpha: 0.72 });
-  }
-
-  if ((x + y) % 4 === 0 || autoTile.shape === 'deadEnd') {
-    drawTinyBikeLaneIcon(graphics, px + center, py + center, BIKE_LANE_CONFIG.laneIconColor, 0.92);
+    drawBikeSidewalkStrip(graphics, px + center - 17, py + 4, 4, ts - 8, alpha);
+    drawBikeSidewalkStrip(graphics, px + center + 13, py + 4, 4, ts - 8, alpha);
   }
 }
 
-function drawTinyBikeLaneIcon(graphics: Graphics, cx: number, cy: number, color: number, alpha: number): void {
-  graphics.circle(cx - 4, cy + 3, 2.1).stroke({ color, width: 1, alpha });
-  graphics.circle(cx + 4, cy + 3, 2.1).stroke({ color, width: 1, alpha });
-  graphics.moveTo(cx - 4, cy + 3).lineTo(cx, cy - 1).lineTo(cx + 4, cy + 3).lineTo(cx - 1, cy + 3).lineTo(cx - 4, cy + 3)
-    .stroke({ color, width: 1.2, alpha });
-  graphics.circle(cx, cy - 4.5, 1.35).fill({ color, alpha });
+function drawBikeSidewalkStrip(graphics: Graphics, x: number, y: number, width: number, height: number, alpha: number): void {
+  graphics.roundRect(x, y, width, height, 2)
+    .fill({ color: BIKE_LANE_CONFIG.laneColor, alpha })
+    .stroke({ color: BIKE_LANE_CONFIG.laneEdgeColor, width: 0.8, alpha: Math.min(0.86, alpha + 0.08) });
 }
+
 
 
 export function drawBusLaneMarking(graphics: Graphics, grid: Tile[][], x: number, y: number, ts: number, type: RoadType, autoTile: RoadAutoTile): void {
