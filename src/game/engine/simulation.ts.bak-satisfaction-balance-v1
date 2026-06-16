@@ -2451,37 +2451,11 @@ export class GameWorld {
     this.money += recentTrips * 1.5 + connectedShops * 4 + connectedOffices * 6;
 
     const snapshot = this.getSnapshot();
-
-    // Regra V1 balanceada:
-    // - Mantém prédios desconectados como problema importante, mas menos punitivo.
-    // - Cria tolerância para congestionamento comum de cidade média/grande.
-    // - Alivia tempo médio de viagem para não punir agressivamente rotas longas.
-    // - Reduz o peso de viagens falhadas recentes.
-    // - Dá pequeno bônus para transporte público/metrô e cidade totalmente conectada.
-    const disconnectedPenalty = Math.min(32, snapshot.disconnectedBuildings * 3.2);
-
-    const congestionTolerance = 25;
-    const congestionOverTolerance = Math.max(0, snapshot.averageCongestion - congestionTolerance);
-    const congestionPenalty = Math.min(34, congestionOverTolerance * 0.16);
-
-    const failedPenalty = Math.min(18, this.failedTripPressure * 0.65);
-
-    const travelComfortSeconds = 12;
-    const travelOverComfort = Math.max(0, this.averageTravelTime - travelComfortSeconds);
-    const travelPenalty = Math.min(18, Math.pow(travelOverComfort, 0.9) * 0.75);
-
-    const publicTransportRelief = Math.min(8, (snapshot.publicTripsCompleted + snapshot.metroTripsCompleted) * 0.015);
-    const connectivityBonus = snapshot.disconnectedBuildings === 0 ? 3 : 0;
-
-    const targetSatisfaction = 100
-      - disconnectedPenalty
-      - congestionPenalty
-      - failedPenalty
-      - travelPenalty
-      + publicTransportRelief
-      + connectivityBonus;
-
-    this.satisfaction = Math.max(0, Math.min(100, targetSatisfaction));
+    const disconnectedPenalty = snapshot.disconnectedBuildings * 4.5;
+    const congestionPenalty = Math.min(52, snapshot.averageCongestion * 0.28);
+    const failedPenalty = Math.min(25, this.failedTripPressure * FAILED_TRIP_PENALTY_FACTOR);
+    const travelPenalty = Math.min(25, Math.max(0, this.averageTravelTime - 7) * 1.8);
+    this.satisfaction = Math.max(0, Math.min(100, 100 - disconnectedPenalty - congestionPenalty - failedPenalty - travelPenalty));
     this.failedTripPressure *= FAILED_TRIP_PRESSURE_DECAY;
   }
 
