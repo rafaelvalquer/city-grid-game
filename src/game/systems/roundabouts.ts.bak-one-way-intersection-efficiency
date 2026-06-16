@@ -141,29 +141,10 @@ export function getDrivableNeighbors(grid: Tile[][], current: Vec2): Vec2[] {
   if (!tile || isRoundaboutCenter(tile)) return [];
 
   const neighbors = getNeighbors4(current).filter((next) => isRoadType(grid[next.y]?.[next.x]?.type));
-
   if (!isRoundaboutTile(tile)) {
-    const currentIsIntersection = isRoadIntersectionTile(grid, current);
-
     return neighbors.filter((next) => {
-      const nextTile = grid[next.y]?.[next.x];
-      const direction = movementDirection(current, next);
-
-      // Em trechos normais, respeita a mão única do tile atual.
-      // Em cruzamentos, libera a escolha da melhor saída para o pathfinding poder cruzar reto
-      // ou sair da avenida antes do fim quando isso for mais eficiente.
-      if (tile.oneWay && !currentIsIntersection && direction !== tile.oneWay) return false;
-
-      // Evita entrar no meio de uma via de mão única pelo sentido errado.
-      // A exceção é o próprio cruzamento: ele funciona como uma caixa de conversão/cruzamento,
-      // permitindo atravessar ou acessar a saída mais eficiente sem prender o carro na direção da avenida.
-      if (
-        nextTile?.oneWay
-        && !isRoadIntersectionTile(grid, next)
-        && direction !== nextTile.oneWay
-      ) return false;
-
-      return !isRoundaboutTile(nextTile) || isEntrySide(grid, current, next);
+      if (tile.oneWay && movementDirection(current, next) !== tile.oneWay) return false;
+      return !isRoundaboutTile(grid[next.y]?.[next.x]) || isEntrySide(grid, current, next);
     });
   }
 
@@ -178,13 +159,6 @@ export function getDrivableNeighbors(grid: Tile[][], current: Vec2): Vec2[] {
     allowed.set(keyOf(next.x, next.y), next);
   }
   return [...allowed.values()];
-}
-
-function isRoadIntersectionTile(grid: Tile[][], pos: Vec2): boolean {
-  const tile = grid[pos.y]?.[pos.x];
-  if (!tile || !isRoadType(tile.type)) return false;
-  if (isRoundaboutTile(tile) || isRoundaboutCenter(tile)) return false;
-  return getNeighbors4(pos).filter((next) => isRoadType(grid[next.y]?.[next.x]?.type)).length >= 3;
 }
 
 export function isLegalRoadMove(grid: Tile[][], from: Vec2, to: Vec2): boolean {
