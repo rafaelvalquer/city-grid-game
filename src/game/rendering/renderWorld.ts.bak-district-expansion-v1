@@ -77,10 +77,9 @@ function renderStaticLayer(
 ): void {
   graphics.clear();
 
-  for (let y = 0; y < world.grid.length; y++) {
-    for (let x = 0; x < (world.grid[y]?.length ?? 0); x++) {
-      const tile = world.grid[y]?.[x];
-      if (!tile) continue;
+  for (let y = 0; y < GAME_CONFIG.gridHeight; y++) {
+    for (let x = 0; x < GAME_CONFIG.gridWidth; x++) {
+      const tile = world.grid[y][x];
       drawBaseTile(graphics, tile, x, y, ts);
       if (tile.type === 'empty') drawLotDecoration(graphics, x, y, ts);
       if (tile.type === 'road') drawRoad(graphics, world.grid, x, y, ts, 'road');
@@ -90,10 +89,9 @@ function renderStaticLayer(
     }
   }
 
-  for (let y = 0; y < world.grid.length; y++) {
-    for (let x = 0; x < (world.grid[y]?.length ?? 0); x++) {
-      const tile = world.grid[y]?.[x];
-      if (!tile) continue;
+  for (let y = 0; y < GAME_CONFIG.gridHeight; y++) {
+    for (let x = 0; x < GAME_CONFIG.gridWidth; x++) {
+      const tile = world.grid[y][x];
       if (isRoadType(tile.type) && tile.type !== 'roundabout') drawRoadSignage(graphics, world, x, y, ts);
       if ((tile.type === 'road' || tile.type === 'avenue') && tile.oneWay) drawOneWayArrow(graphics, x, y, ts, tile.oneWay, tile.type === 'avenue');
     }
@@ -209,7 +207,7 @@ function moneyParticleAnchor(world: GameWorld): { x: number; y: number } {
   const activeBuilding = world.buildings.find((building) => building.connected && (building.type === 'shop' || building.type === 'office'))
     ?? world.buildings.find((building) => building.connected);
   if (activeBuilding) return { x: activeBuilding.x, y: activeBuilding.y };
-  return { x: Math.floor((world.grid[0]?.length ?? GAME_CONFIG.gridWidth) / 2), y: Math.floor((world.grid.length || GAME_CONFIG.gridHeight) / 2) };
+  return { x: Math.floor(GAME_CONFIG.gridWidth / 2), y: Math.floor(GAME_CONFIG.gridHeight / 2) };
 }
 
 function drawDisconnectedBuildingAlerts(graphics: Graphics, world: GameWorld, ts: number, timeSeconds: number): void {

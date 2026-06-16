@@ -80,8 +80,8 @@ export class CityGenerator {
     }
 
     for (let i = 0; i < tries; i++) {
-      const x = this.randInt(2, gridWidth(grid) - 3);
-      const y = this.randInt(2, gridHeight(grid) - 3);
+      const x = this.randInt(2, GAME_CONFIG.gridWidth - 3);
+      const y = this.randInt(2, GAME_CONFIG.gridHeight - 3);
       if (this.isCoherentSpot(grid, buildings, x, y, cityRadius + 5)) return { x, y };
     }
     return null;
@@ -127,11 +127,11 @@ export class CityGenerator {
     for (let i = 0; i < 380; i += 1) {
       const followHorizontal = this.rand() < 0.55;
       const x = followHorizontal
-        ? this.randInt(Math.max(2, this.corridorAxes.x - spanX), Math.min(gridWidth(grid) - 3, this.corridorAxes.x + spanX))
+        ? this.randInt(Math.max(2, this.corridorAxes.x - spanX), Math.min(GAME_CONFIG.gridWidth - 3, this.corridorAxes.x + spanX))
         : Math.round(this.corridorAxes.x + this.randInt(-2, 2));
       const y = followHorizontal
         ? Math.round(this.corridorAxes.y + this.randInt(-2, 2))
-        : this.randInt(Math.max(2, this.corridorAxes.y - spanY), Math.min(gridHeight(grid) - 3, this.corridorAxes.y + spanY));
+        : this.randInt(Math.max(2, this.corridorAxes.y - spanY), Math.min(GAME_CONFIG.gridHeight - 3, this.corridorAxes.y + spanY));
       if (this.isCoherentSpot(grid, buildings, x, y, cityRadius) && this.isNearCorridor(x, y, 3)) return { x, y };
     }
     return this.findOrganicSpot(grid, buildings);
@@ -200,7 +200,7 @@ export class CityGenerator {
   }
 
   private isCoherentSpot(grid: Tile[][], buildings: Building[], x: number, y: number, cityRadius: number): boolean {
-    if (x < 2 || y < 2 || x > gridWidth(grid) - 3 || y > gridHeight(grid) - 3) return false;
+    if (x < 2 || y < 2 || x > GAME_CONFIG.gridWidth - 3 || y > GAME_CONFIG.gridHeight - 3) return false;
     if (grid[y]?.[x]?.type !== 'empty') return false;
     const tooClose = buildings.some((b) => Math.abs(b.x - x) + Math.abs(b.y - y) < 2);
     if (tooClose) return false;
@@ -217,13 +217,4 @@ export class CityGenerator {
     if (!spot) return null;
     return createBuilding(type, spot.x, spot.y);
   }
-}
-
-
-function gridWidth(grid: Tile[][]): number {
-  return grid[0]?.length ?? GAME_CONFIG.gridWidth;
-}
-
-function gridHeight(grid: Tile[][]): number {
-  return grid.length || GAME_CONFIG.gridHeight;
 }

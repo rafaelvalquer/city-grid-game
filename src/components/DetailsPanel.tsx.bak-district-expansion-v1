@@ -5,7 +5,6 @@ import { BUILDING_CONFIG, getBuildingLevelConfig } from '../game/config/building
 import { ROAD_CONFIG } from '../game/config/roadConfig';
 import { getTrafficLightOpenAxis } from '../game/systems/trafficLights';
 import { TrafficChart } from './TrafficChart';
-import { DistrictExpansionCard } from './DistrictExpansionCard';
 
 const trafficStateLabel = {
   moving: 'Movendo',
@@ -70,8 +69,6 @@ export function DetailsPanel({ world, className = '', onClose }: { world: GameWo
         <h2>Detalhes</h2>
         <button className="panel-close" aria-label="Fechar detalhes" onClick={onClose}><X size={17} /></button>
       </div>
-      <DistrictExpansionCard world={world} />
-
       {selected.kind === 'none' && <p className="muted">Selecione uma rua, prédio ou carro.</p>}
 
       <TrafficChart world={world} />

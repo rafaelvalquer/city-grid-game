@@ -287,7 +287,6 @@ function renderTab(tab: AnalyticsTab, samples: CityHistorySample[], world: GameW
       ]} />
       <ChartCard title="Transporte público nas viagens" samples={samples} series={[
         { label: 'Viagens por ônibus', color: 'accent', values: samples.map((s) => s.publicTripsCompleted) },
-        { label: 'Viagens por metrô', color: 'good', values: samples.map((s) => s.metroTripsCompleted ?? 0) },
         { label: 'Carros evitados', color: 'warn', values: samples.map((s) => s.carTripsAvoided) },
       ]} />
     </>

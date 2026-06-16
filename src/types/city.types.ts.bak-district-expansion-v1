@@ -6,22 +6,6 @@ export type BuildingLevel = 1 | 2 | 3;
 export type RoadType = 'road' | 'avenue' | 'roundabout';
 export type RoadDirection = 'north' | 'south' | 'east' | 'west';
 
-export type DistrictStatus = 'owned' | 'available' | 'locked';
-export type DistrictDirection = 'center' | 'east';
-
-export type District = {
-  id: string;
-  name: string;
-  direction: DistrictDirection;
-  status: DistrictStatus;
-  xStart: number;
-  yStart: number;
-  width: number;
-  height: number;
-  cost: number;
-  purchasedAtDay?: number;
-};
-
 export type Vec2 = { x: number; y: number };
 
 export type Tile = {
@@ -118,11 +102,6 @@ export type CityStats = {
   carTripsAvoided: number;
   waitingPassengers: number;
   activeBuses: number;
-  districtsOwned: number;
-  cityAreaTiles: number;
-  maxCars: number;
-  maxBuses: number;
-  eastDistrictPurchased: boolean;
   metroStations: number;
   metroLines: number;
   metroPassengers: number;
@@ -148,10 +127,6 @@ export type CityHistorySample = {
   population: number;
   activeCars: number;
   activeBuses: number;
-  districtsOwned: number;
-  cityAreaTiles: number;
-  maxCars: number;
-  maxBuses: number;
   waitingPassengers: number;
   completedTrips: number;
   failedTrips: number;
