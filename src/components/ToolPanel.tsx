@@ -1,6 +1,7 @@
 import { CircleDot, Eye, Hammer, Pause, Play, Radar, Route, Trash2, X } from 'lucide-react';
 import { useGameStore, type HeatmapMode } from '../store/gameStore';
 import type { SimulationSpeed } from '../types/game.types';
+import { MobilityFocusToggle } from './MobilityFocusToggle';
 
 const heatmapModes: Array<{ id: HeatmapMode; label: string }> = [
   { id: 'traffic', label: 'Trânsito' },
@@ -39,6 +40,7 @@ export function ToolPanel({ className = '', onClose }: { className?: string; onC
           ))}
         </div>
         <div className="hint"><Radar size={14} /> Camadas para diagnosticar a cidade.</div>
+        <MobilityFocusToggle variant="panel" />
       </div>
 
       <div className="panel-section">

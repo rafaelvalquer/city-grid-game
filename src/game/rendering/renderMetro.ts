@@ -26,8 +26,8 @@ export function renderMetroLayer(
     return;
   }
 
-  const width = GAME_CONFIG.gridWidth * ts;
-  const height = GAME_CONFIG.gridHeight * ts;
+  const width = (world.grid[0]?.length ?? GAME_CONFIG.gridWidth) * ts;
+  const height = (world.grid.length || GAME_CONFIG.gridHeight) * ts;
   graphics.rect(0, 0, width, height).fill({ color: METRO_SURFACE_DIM, alpha: 0.74 });
 
   for (const station of world.metroStations) {

@@ -1,5 +1,5 @@
 import type { Container, Graphics } from 'pixi.js';
-import type { HeatmapMode, HoverPreview, ViewLayer } from '../../store/gameStore';
+import type { HeatmapMode, HoverPreview, ViewLayer, MobilityFocusMode } from '../../store/gameStore';
 import type { Car } from '../../types/agent.types';
 import { GAME_CONFIG } from '../config/gameConfig';
 import type { GameWorld } from '../engine/simulation';
@@ -16,6 +16,7 @@ import { getStaticRenderSignature } from './renderInvalidation';
 import { drawConstructionPreview, drawSelectedCarMarker, drawSelectedRoute, drawSelection } from './renderUiOverlays';
 import type { ParticleSystem } from './particleSystem';
 import { renderMetroLayer } from './renderMetro';
+import { drawMobilityFocusOverlay } from './renderMobilityFocus';
 
 type ViewportTileBounds = {
   minX: number;
@@ -53,6 +54,7 @@ export function renderWorld(
   camY: number,
   scale: number,
   viewLayer: ViewLayer,
+  mobilityFocusMode: MobilityFocusMode = 'off',
   particles?: ParticleSystem,
   visibleBounds?: ViewportTileBounds,
 ): void {
@@ -71,7 +73,7 @@ export function renderWorld(
   }
 
   emitRenderParticles(state, world, timeSeconds, particles);
-  renderDynamicLayer(dynamicGraphics, state, world, heatmapMode, hoverPreview, ts, timeSeconds, atmosphere, viewLayer, visibleBounds);
+  renderDynamicLayer(dynamicGraphics, state, world, heatmapMode, hoverPreview, ts, timeSeconds, atmosphere, viewLayer, mobilityFocusMode, visibleBounds);
 }
 
 function applyCamera(container: Container, camX: number, camY: number, scale: number): void {
@@ -129,12 +131,14 @@ function renderDynamicLayer(
   timeSeconds: number,
   atmosphere: ReturnType<typeof getAtmosphere>,
   viewLayer: ViewLayer,
+  mobilityFocusMode: MobilityFocusMode,
   visibleBounds?: ViewportTileBounds,
 ): void {
   graphics.clear();
 
   if (viewLayer === 'underground') {
     renderMetroLayer(graphics, world, viewLayer, ts, timeSeconds);
+    drawMobilityFocusOverlay(graphics, world, mobilityFocusMode, ts, timeSeconds);
     if (hoverPreview) drawConstructionPreview(graphics, world, hoverPreview, ts, timeSeconds);
     if (world.selected.kind === 'tile') drawSelection(graphics, world.selected.x, world.selected.y, ts);
     if (world.selected.kind === 'metroStation') drawSelection(graphics, world.selected.station.x, world.selected.station.y, ts);
@@ -165,6 +169,7 @@ function renderDynamicLayer(
     drawCar(graphics, car, world, ts, timeSeconds, atmosphere);
   }
   drawBikeTrips(graphics, world, ts, timeSeconds);
+  drawMobilityFocusOverlay(graphics, world, mobilityFocusMode, ts, timeSeconds);
 
   if (hoverPreview) drawConstructionPreview(graphics, world, hoverPreview, ts, timeSeconds);
   if (world.selected.kind === 'tile') drawSelection(graphics, world.selected.x, world.selected.y, ts);

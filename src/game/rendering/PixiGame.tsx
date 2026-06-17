@@ -32,6 +32,7 @@ export function PixiGame({ world }: { world: GameWorld }) {
   const viewLayerUi = useGameStore((s) => s.viewLayer);
   const [metroManagerOpen, setMetroManagerOpen] = useState(false);
   const viewLayer = useGameStore((s) => s.viewLayer);
+  const mobilityFocusMode = useGameStore((s) => s.mobilityFocusMode);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -95,6 +96,7 @@ export function PixiGame({ world }: { world: GameWorld }) {
           cameraRef.current.y,
           cameraRef.current.scale,
           viewLayer,
+          mobilityFocusMode,
           particles,
           visibleBounds,
         );

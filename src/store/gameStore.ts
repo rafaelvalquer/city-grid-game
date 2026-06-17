@@ -5,6 +5,7 @@ import type { SimulationSpeed, Tool } from '../types/game.types';
 
 export type HeatmapMode = 'traffic' | 'satisfaction' | 'flow' | 'off';
 export type ViewLayer = 'surface' | 'underground';
+export type MobilityFocusMode = 'off' | 'bike' | 'bus' | 'metro';
 
 export type HoverPreview = {
   x: number;
@@ -24,6 +25,7 @@ export type GameStore = {
   selectedTool: Tool;
   heatmapMode: HeatmapMode;
   viewLayer: ViewLayer;
+  mobilityFocusMode: MobilityFocusMode;
   paused: boolean;
   speed: SimulationSpeed;
   stats: CityStats;
@@ -33,6 +35,7 @@ export type GameStore = {
   setTool: (tool: Tool) => void;
   setHeatmapMode: (mode: HeatmapMode) => void;
   setViewLayer: (viewLayer: ViewLayer) => void;
+  setMobilityFocusMode: (mode: MobilityFocusMode) => void;
   toggleViewLayer: () => void;
   togglePaused: () => void;
   setPaused: (paused: boolean) => void;
@@ -90,6 +93,7 @@ export const useGameStore = create<GameStore>((set) => ({
   selectedTool: 'road',
   heatmapMode: 'traffic',
   viewLayer: 'surface',
+  mobilityFocusMode: 'off',
   paused: false,
   speed: 1,
   stats: initialStats,
@@ -103,6 +107,11 @@ export const useGameStore = create<GameStore>((set) => ({
   })),
   setHeatmapMode: (mode) => set({ heatmapMode: mode }),
   setViewLayer: (viewLayer) => set({ viewLayer }),
+  setMobilityFocusMode: (mode) => set((state) => ({
+    mobilityFocusMode: mode,
+    viewLayer: mode === 'metro' ? 'underground' : mode === 'bike' || mode === 'bus' ? 'surface' : state.viewLayer,
+  })),
+  setMobilityFocusMode: (mobilityFocusMode) => set({ mobilityFocusMode }),
   toggleViewLayer: () => set((s) => ({ viewLayer: s.viewLayer === 'surface' ? 'underground' : 'surface' })),
   togglePaused: () => set((s) => ({ paused: !s.paused })),
   setPaused: (paused) => set({ paused }),
