@@ -1,4 +1,44 @@
-import type { Graphics } from 'pixi.js';
+const fs = require('fs');
+const path = require('path');
+
+const root = process.cwd();
+const backupSuffix = '.bak-terrain-relief-v1-3-mountain-polish';
+
+function filePath(rel) {
+  return path.join(root, rel);
+}
+
+function ensureDir(rel) {
+  fs.mkdirSync(path.dirname(filePath(rel)), { recursive: true });
+}
+
+function read(rel) {
+  return fs.readFileSync(filePath(rel), 'utf8');
+}
+
+function write(rel, content) {
+  ensureDir(rel);
+  const abs = filePath(rel);
+  if (fs.existsSync(abs) && !fs.existsSync(abs + backupSuffix)) {
+    fs.copyFileSync(abs, abs + backupSuffix);
+  }
+  fs.writeFileSync(abs, content, 'utf8');
+  console.log('updated', rel);
+}
+
+function patch(rel, updater) {
+  const abs = filePath(rel);
+  if (!fs.existsSync(abs)) {
+    console.warn('skip missing', rel);
+    return;
+  }
+  const original = read(rel);
+  const next = updater(original);
+  if (next !== original) write(rel, next);
+  else console.log('unchanged', rel);
+}
+
+const renderTerrainFeatures = String.raw`import type { Graphics } from 'pixi.js';
 import type { Tile } from '../../types/city.types';
 import { TERRAIN_CONFIG } from '../config/terrainConfig';
 import { hash2 } from './renderUtils';
@@ -441,3 +481,102 @@ function drawMountainAtmosphere(graphics: Graphics, grid: Tile[][], tile: Tile, 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
+`;
+
+write('src/game/rendering/renderTerrainFeatures.ts', renderTerrainFeatures);
+
+patch('src/game/city/terrainGenerator.ts', (source) => {
+  let s = source;
+
+  if (s.includes('function enhanceMountainOrganicShape(')) {
+    return s;
+  }
+
+  s = s.replace(
+    /smoothTerrainClusters\(grid, bounds\);\s*computeTerrainMetadata\(grid\);/,
+    `smoothTerrainClusters(grid, bounds);
+  enhanceMountainOrganicShape(grid, bounds);
+  computeTerrainMetadata(grid);`,
+  );
+
+  if (!s.includes('enhanceMountainOrganicShape(grid, bounds);')) {
+    s = s.replace(/computeTerrainMetadata\(grid\);/, `enhanceMountainOrganicShape(grid, bounds);
+  computeTerrainMetadata(grid);`);
+  }
+
+  const helpers = String.raw`
+
+function enhanceMountainOrganicShape(grid: Tile[][], bounds: TerrainBounds): void {
+  const toMountain: Vec2[] = [];
+  const toEmpty: Vec2[] = [];
+
+  for (let y = bounds.yStart; y < bounds.yStart + bounds.height; y += 1) {
+    for (let x = bounds.xStart; x < bounds.xStart + bounds.width; x += 1) {
+      const tile = grid[y]?.[x];
+      if (!tile) continue;
+      const mountainNeighbors = getSameTerrainNeighborCount(grid, x, y, 'mountain');
+      if (tile.type === 'empty' && mountainNeighbors >= 5 && canPlaceTerrainAt(grid, { x, y }, bounds)) {
+        toMountain.push({ x, y });
+      }
+      if (tile.type === 'mountain' && mountainNeighbors <= 1) {
+        toEmpty.push({ x, y });
+      }
+    }
+  }
+
+  for (const pos of toMountain.slice(0, 18)) {
+    grid[pos.y][pos.x] = { x: pos.x, y: pos.y, type: 'mountain' };
+  }
+  for (const pos of toEmpty) {
+    grid[pos.y][pos.x] = { x: pos.x, y: pos.y, type: 'empty' };
+  }
+}
+
+function getSameTerrainNeighborCount(grid: Tile[][], x: number, y: number, kind: TerrainKind): number {
+  let count = 0;
+  for (let yy = y - 1; yy <= y + 1; yy += 1) {
+    for (let xx = x - 1; xx <= x + 1; xx += 1) {
+      if (xx === x && yy === y) continue;
+      if (grid[yy]?.[xx]?.type === kind) count += 1;
+    }
+  }
+  return count;
+}
+`;
+
+  // Insere antes da função de hash ou no fim do arquivo.
+  if (s.includes('function hashTerrain(')) {
+    s = s.replace(/\nfunction hashTerrain\(/, `${helpers}\nfunction hashTerrain(`);
+  } else {
+    s += helpers;
+  }
+
+  return s;
+});
+
+patch('src/game/rendering/renderWorld.ts', (source) => {
+  let s = source;
+  // Garante que tanto o nome singular quanto o plural funcionem. Mantemos o nome que já estiver no arquivo.
+  if (s.includes("from './renderTerrainFeatures'") && !s.includes('drawTerrainFeatureBase')) {
+    s = s.replace(
+      /import \{([^}]+)\} from '\.\/renderTerrainFeatures';/,
+      (match, imports) => {
+        const names = new Set(imports.split(',').map((part) => part.trim()).filter(Boolean));
+        names.add('drawTerrainFeatureBase');
+        names.add('drawTerrainFeatureAnimation');
+        return `import { ${[...names].join(', ')} } from './renderTerrainFeatures';`;
+      },
+    );
+  }
+  return s;
+});
+
+function validate() {
+  const render = read('src/game/rendering/renderTerrainFeatures.ts');
+  for (const required of ['drawTerrainFeatureBase', 'drawTerrainFeatureAnimation', 'drawTerrainFeatureAnimations']) {
+    if (!render.includes(required)) throw new Error('renderTerrainFeatures.ts não contém ' + required + '.');
+  }
+}
+
+validate();
+console.log('Terrain Relief V1.3 Mountain Polish aplicado com sucesso.');

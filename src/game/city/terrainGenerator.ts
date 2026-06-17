@@ -40,6 +40,7 @@ export function generateTerrainReliefForBounds(
   }
 
   smoothTerrainClusters(grid, bounds);
+  enhanceMountainOrganicShape(grid, bounds);
   computeTerrainMetadata(grid);
 }
 
@@ -322,6 +323,44 @@ function gridWidth(bounds: TerrainBounds): number {
 
 function gridHeight(bounds: TerrainBounds): number {
   return bounds.height || GAME_CONFIG.gridHeight;
+}
+
+
+function enhanceMountainOrganicShape(grid: Tile[][], bounds: TerrainBounds): void {
+  const toMountain: Vec2[] = [];
+  const toEmpty: Vec2[] = [];
+
+  for (let y = bounds.yStart; y < bounds.yStart + bounds.height; y += 1) {
+    for (let x = bounds.xStart; x < bounds.xStart + bounds.width; x += 1) {
+      const tile = grid[y]?.[x];
+      if (!tile) continue;
+      const mountainNeighbors = getSameTerrainNeighborCount(grid, x, y, 'mountain');
+      if (tile.type === 'empty' && mountainNeighbors >= 5 && canPlaceTerrainAt(grid, { x, y }, bounds)) {
+        toMountain.push({ x, y });
+      }
+      if (tile.type === 'mountain' && mountainNeighbors <= 1) {
+        toEmpty.push({ x, y });
+      }
+    }
+  }
+
+  for (const pos of toMountain.slice(0, 18)) {
+    grid[pos.y][pos.x] = { x: pos.x, y: pos.y, type: 'mountain' };
+  }
+  for (const pos of toEmpty) {
+    grid[pos.y][pos.x] = { x: pos.x, y: pos.y, type: 'empty' };
+  }
+}
+
+function getSameTerrainNeighborCount(grid: Tile[][], x: number, y: number, kind: TerrainKind): number {
+  let count = 0;
+  for (let yy = y - 1; yy <= y + 1; yy += 1) {
+    for (let xx = x - 1; xx <= x + 1; xx += 1) {
+      if (xx === x && yy === y) continue;
+      if (grid[yy]?.[xx]?.type === kind) count += 1;
+    }
+  }
+  return count;
 }
 
 function hashTerrain(x: number, y: number, kind: TerrainKind): number {
