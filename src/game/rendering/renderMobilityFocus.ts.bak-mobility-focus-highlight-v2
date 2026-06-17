@@ -36,11 +36,11 @@ function drawMobilityFocusDim(graphics: Graphics, world: GameWorld, ts: number):
   const width = (world.grid[0]?.length ?? 0) * ts;
   const height = world.grid.length * ts;
   if (width <= 0 || height <= 0) return;
-  graphics.rect(0, 0, width, height).fill({ color: DIM_COLOR, alpha: 0.72 });
+  graphics.rect(0, 0, width, height).fill({ color: DIM_COLOR, alpha: 0.68 });
 }
 
 function drawBikeFocusOverlay(graphics: Graphics, world: GameWorld, ts: number, timeSeconds: number): void {
-  const pulse = 0.48 + Math.sin(timeSeconds * 3.2) * 0.18;
+  const pulse = 0.45 + Math.sin(timeSeconds * 3.2) * 0.18;
 
   for (let y = 0; y < world.grid.length; y += 1) {
     const row = world.grid[y];
@@ -51,23 +51,24 @@ function drawBikeFocusOverlay(graphics: Graphics, world: GameWorld, ts: number, 
       const py = y * ts;
       const horizontal = isMostlyHorizontalRoad(world.grid, x, y);
       if (horizontal) {
-        graphics.roundRect(px + 4, py + ts - 8, ts - 8, 4, 3).fill({ color: BIKE_LANE, alpha: 0.92 });
-        graphics.roundRect(px + 7, py + ts - 12, ts - 14, 11, 6).stroke({ color: BIKE_LANE, width: 1.5, alpha: 0.28 + pulse });
+        graphics.roundRect(px + 4, py + ts - 8, ts - 8, 4, 3).fill({ color: BIKE_LANE, alpha: 0.95 });
+        graphics.roundRect(px + 7, py + ts - 11, ts - 14, 10, 6).stroke({ color: BIKE_LANE, width: 1.4, alpha: 0.28 + pulse });
       } else {
-        graphics.roundRect(px + ts - 8, py + 4, 4, ts - 8, 3).fill({ color: BIKE_LANE, alpha: 0.92 });
-        graphics.roundRect(px + ts - 12, py + 7, 11, ts - 14, 6).stroke({ color: BIKE_LANE, width: 1.5, alpha: 0.28 + pulse });
+        graphics.roundRect(px + ts - 8, py + 4, 4, ts - 8, 3).fill({ color: BIKE_LANE, alpha: 0.95 });
+        graphics.roundRect(px + ts - 11, py + 7, 10, ts - 14, 6).stroke({ color: BIKE_LANE, width: 1.4, alpha: 0.28 + pulse });
       }
     }
   }
 
-  for (const bike of world.bikeTrips ?? []) {
+  const bikeTrips = Array.isArray(world.bikeTrips) ? world.bikeTrips : [];
+  for (const bike of bikeTrips) {
     if (!bike.route?.length) continue;
     drawBikeRouteTrail(graphics, bike.route, bike.progress, ts);
     const pos = interpolateRoute(bike.route, bike.progress);
     const px = pos.x * ts + ts / 2;
     const py = pos.y * ts + ts / 2;
     graphics.roundRect(px - 5, py - 5, 10, 10, 3).fill({ color: BIKE, alpha: 0.98 });
-    graphics.roundRect(px - 8, py - 8, 16, 16, 6).stroke({ color: BIKE, width: 1.4, alpha: 0.28 + pulse });
+    graphics.roundRect(px - 8, py - 8, 16, 16, 6).stroke({ color: BIKE, width: 1.4, alpha: 0.25 + pulse });
   }
 }
 
@@ -85,7 +86,7 @@ function drawBusFocusOverlay(graphics: Graphics, world: GameWorld, ts: number, t
   }
 
   drawPolyline(graphics, world.transitLine?.route ?? [], ts, BUS_LINE, 5, 0.68);
-  drawPolyline(graphics, world.transitLine?.route ?? [], ts, 0xffffff, 1.2, 0.36);
+  drawPolyline(graphics, world.transitLine?.route ?? [], ts, 0xffffff, 1.2, 0.38);
 
   for (const stop of world.transitStops ?? []) {
     const cx = stop.x * ts + ts / 2;
@@ -105,8 +106,8 @@ function drawMetroFocusOverlay(graphics: Graphics, world: GameWorld, ts: number,
 
   for (const track of world.metroTracks ?? []) {
     if (!track.active || !track.tiles || track.tiles.length < 2) continue;
-    drawPolyline(graphics, track.tiles, ts, METRO_LINE, 7, 0.36);
-    drawPolyline(graphics, track.tiles, ts, METRO_STATION, 2, 0.3);
+    drawPolyline(graphics, track.tiles, ts, METRO_LINE, 7, 0.34);
+    drawPolyline(graphics, track.tiles, ts, METRO_STATION, 2, 0.28);
   }
 
   for (const line of world.metroLines ?? []) {
@@ -117,11 +118,11 @@ function drawMetroFocusOverlay(graphics: Graphics, world: GameWorld, ts: number,
       const toId = line.stationIds[index + 1];
       const tiles = world.getMetroTrackTilesBetween(fromId, toId);
       if (tiles.length >= 2) {
-        drawPolyline(graphics, tiles, ts, color, 5, 0.96);
+        drawPolyline(graphics, tiles, ts, color, 5, 0.9);
       } else {
         const from = world.getMetroStation(fromId);
         const to = world.getMetroStation(toId);
-        if (from && to) drawPolyline(graphics, [from, to], ts, color, 5, 0.58);
+        if (from && to) drawPolyline(graphics, [from, to], ts, color, 5, 0.55);
       }
     }
   }
@@ -130,9 +131,9 @@ function drawMetroFocusOverlay(graphics: Graphics, world: GameWorld, ts: number,
     const cx = station.x * ts + ts / 2;
     const cy = station.y * ts + ts / 2;
     const active = station.activeLineIds?.length > 0;
-    graphics.circle(cx, cy, 18 + pulse * 5).fill({ color: active ? METRO : METRO_LINE, alpha: 0.18 + pulse * 0.1 });
-    graphics.circle(cx, cy, 10).fill({ color: active ? METRO : METRO_LINE, alpha: 0.95 });
-    graphics.circle(cx, cy, 5).fill({ color: METRO_STATION, alpha: 0.98 });
+    graphics.circle(cx, cy, 18 + pulse * 5).fill({ color: active ? METRO : METRO_LINE, alpha: 0.16 + pulse * 0.08 });
+    graphics.circle(cx, cy, 10).fill({ color: active ? METRO : METRO_LINE, alpha: 0.94 });
+    graphics.circle(cx, cy, 5).fill({ color: METRO_STATION, alpha: 0.96 });
   }
 
   for (const train of world.metroTrains ?? []) {
@@ -147,7 +148,7 @@ function drawMetroFocusOverlay(graphics: Graphics, world: GameWorld, ts: number,
       : { x: from.x + (to.x - from.x) * train.progress, y: from.y + (to.y - from.y) * train.progress };
     const px = pos.x * ts + ts / 2;
     const py = pos.y * ts + ts / 2;
-    graphics.circle(px, py, 16).fill({ color: parseLineColor(line), alpha: 0.24 });
+    graphics.circle(px, py, 16).fill({ color: parseLineColor(line), alpha: 0.22 });
     graphics.roundRect(px - 11, py - 6, 22, 12, 5).fill({ color: METRO_TRAIN, alpha: 0.98 });
     graphics.roundRect(px - 6, py - 2, 12, 4, 3).fill({ color: DIM_COLOR, alpha: 0.78 });
   }
@@ -195,7 +196,7 @@ function interpolateNormalizedTrack(tiles: Vec2[], progress: number): Vec2 {
   const clamped = Math.max(0, Math.min(1, progress));
   const segmentCount = tiles.length - 1;
   const scaled = clamped * segmentCount;
-  const index = Math.max(0, Math.min(segmentCount - 1, Math.floor(scaled)));
+  const index = Math.min(segmentCount - 1, Math.floor(scaled));
   const local = scaled - index;
   const from = tiles[index];
   const to = tiles[index + 1];
@@ -203,15 +204,15 @@ function interpolateNormalizedTrack(tiles: Vec2[], progress: number): Vec2 {
 }
 
 function parseLineColor(line: MetroLine): number {
-  return Number(String(line.color ?? '').replace('#', '0x')) || METRO;
+  return Number(String(line.color ?? '').replace('#', '0x')) || METRO_LINE;
 }
 
-function isMostlyHorizontalRoad(grid: Array<Array<{ type?: string } | undefined>>, x: number, y: number): boolean {
-  const west = grid[y]?.[x - 1]?.type;
-  const east = grid[y]?.[x + 1]?.type;
-  const north = grid[y - 1]?.[x]?.type;
-  const south = grid[y + 1]?.[x]?.type;
-  const horizontal = Number(west === 'road' || west === 'avenue') + Number(east === 'road' || east === 'avenue');
-  const vertical = Number(north === 'road' || north === 'avenue') + Number(south === 'road' || south === 'avenue');
-  return horizontal >= vertical;
+function isMostlyHorizontalRoad(grid: Array<Array<{ type?: string }>>, x: number, y: number): boolean {
+  const left = grid[y]?.[x - 1]?.type === 'road';
+  const right = grid[y]?.[x + 1]?.type === 'road';
+  const up = grid[y - 1]?.[x]?.type === 'road';
+  const down = grid[y + 1]?.[x]?.type === 'road';
+  if ((left || right) && !(up || down)) return true;
+  if ((up || down) && !(left || right)) return false;
+  return left || right;
 }

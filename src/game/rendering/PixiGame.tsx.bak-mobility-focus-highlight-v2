@@ -32,6 +32,7 @@ export function PixiGame({ world }: { world: GameWorld }) {
   const viewLayerUi = useGameStore((s) => s.viewLayer);
   const [metroManagerOpen, setMetroManagerOpen] = useState(false);
   const viewLayer = useGameStore((s) => s.viewLayer);
+  const mobilityFocusMode = useGameStore((s) => s.mobilityFocusMode);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -77,7 +78,7 @@ export function PixiGame({ world }: { world: GameWorld }) {
       let uiTimer = UI_SYNC_INTERVAL_SECONDS;
 
       view.app.ticker.add((ticker) => {
-        const { paused, speed, heatmapMode, viewLayer, mobilityFocusMode, setStats, setSelected } = useGameStore.getState();
+        const { paused, speed, heatmapMode, viewLayer, setStats, setSelected } = useGameStore.getState();
         const dt = ticker.deltaMS / 1000;
         const visibleBounds = camera.getVisibleTileBounds(3);
         world.setActiveViewportBounds(visibleBounds);
