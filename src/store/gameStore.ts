@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { CityStats, RoadDirection, SelectedEntity } from '../types/city.types';
 import type { Vec2 } from '../types/city.types';
 import type { SimulationSpeed, Tool } from '../types/game.types';
+import type { PerformanceMetrics } from '../game/performance/performanceTypes';
 
 export type HeatmapMode = 'traffic' | 'satisfaction' | 'flow' | 'off';
 export type ViewLayer = 'surface' | 'underground';
@@ -32,6 +33,7 @@ export type GameStore = {
   selected: SelectedEntity;
   hoverPreview: HoverPreview | null;
   actionFeedback: string | null;
+  performanceMetrics: PerformanceMetrics | null;
   setTool: (tool: Tool) => void;
   setHeatmapMode: (mode: HeatmapMode) => void;
   setViewLayer: (viewLayer: ViewLayer) => void;
@@ -44,6 +46,7 @@ export type GameStore = {
   setSelected: (selected: SelectedEntity) => void;
   setHoverPreview: (preview: HoverPreview | null) => void;
   setActionFeedback: (message: string | null) => void;
+  setPerformanceMetrics: (metrics: PerformanceMetrics | null) => void;
 };
 
 const initialStats: CityStats = {
@@ -100,6 +103,7 @@ export const useGameStore = create<GameStore>((set) => ({
   selected: { kind: 'none' },
   hoverPreview: null,
   actionFeedback: null,
+  performanceMetrics: null,
   setTool: (tool) => set((state) => ({
     selectedTool: tool,
     actionFeedback: null,
@@ -111,7 +115,6 @@ export const useGameStore = create<GameStore>((set) => ({
     mobilityFocusMode: mode,
     viewLayer: mode === 'metro' ? 'underground' : mode === 'bike' || mode === 'bus' ? 'surface' : state.viewLayer,
   })),
-  setMobilityFocusMode: (mobilityFocusMode) => set({ mobilityFocusMode }),
   toggleViewLayer: () => set((s) => ({ viewLayer: s.viewLayer === 'surface' ? 'underground' : 'surface' })),
   togglePaused: () => set((s) => ({ paused: !s.paused })),
   setPaused: (paused) => set({ paused }),
@@ -120,4 +123,5 @@ export const useGameStore = create<GameStore>((set) => ({
   setSelected: (selected) => set({ selected }),
   setHoverPreview: (preview) => set({ hoverPreview: preview }),
   setActionFeedback: (message) => set({ actionFeedback: message }),
+  setPerformanceMetrics: (metrics) => set({ performanceMetrics: metrics }),
 }));

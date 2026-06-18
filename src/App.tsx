@@ -65,7 +65,7 @@ export default function App() {
       <HudBar analyticsOpen={analyticsOpen} onToggleAnalytics={toggleAnalytics} />
       <div className="main-layout">
         <ToolPanel className={mobilePanel === 'tools' ? 'is-open' : ''} onClose={() => setMobilePanel(null)} />
-        <PixiGame world={world} />
+        <PixiGame world={world} graphics={setupOptions.graphics} />
         <DetailsPanel className={mobilePanel === 'details' ? 'is-open' : ''} world={world} onClose={() => setMobilePanel(null)} />
         {mobilePanel && <button className="drawer-scrim" aria-label="Fechar painel" onClick={() => setMobilePanel(null)} />}
         <nav className="mobile-dock" aria-label="Painéis">

@@ -3,7 +3,14 @@ import type { Building } from '../../types/city.types';
 import { MAP_COLORS } from './visualTheme';
 import type { Atmosphere } from './renderTypes';
 import { hash2, pulse } from './renderUtils';
-export function drawBuildingVariant(graphics: Graphics, building: Building, ts: number, timeSeconds: number, atmosphere: Atmosphere): void {
+export function drawBuildingVariant(
+  graphics: Graphics,
+  building: Building,
+  ts: number,
+  timeSeconds: number,
+  atmosphere: Atmosphere,
+  lightsEnabled = true,
+): void {
   const { type, x, y, connected } = building;
   const px = x * ts;
   const py = y * ts;
@@ -22,7 +29,7 @@ export function drawBuildingVariant(graphics: Graphics, building: Building, ts: 
       graphics.roundRect(px + bodyInset, py + 5, ts - bodyInset * 2, 7, 2).fill(MAP_COLORS.houseRoof);
     }
     graphics.roundRect(px + bodyInset, py + (growth === 2 ? 9 : 13), ts - bodyInset * 2, ts - 16 + growth * 2, 3).fill(MAP_COLORS.house);
-    const homeLight = buildingLightAlpha(building, atmosphere, timeSeconds, 0);
+    const homeLight = lightsEnabled ? buildingLightAlpha(building, atmosphere, timeSeconds, 0) : 0;
     graphics.rect(px + bodyInset + 6, py + 21, 5, 7).fill({ color: homeLight > 0.2 ? MAP_COLORS.windowLit : MAP_COLORS.carWindow, alpha: Math.max(0.42 + activity * 0.22, homeLight) });
     graphics.rect(px + ts - bodyInset - 11, py + 18, 6, 5).fill({ color: homeLight > 0.2 ? MAP_COLORS.windowWarm : MAP_COLORS.laneSoft, alpha: Math.max(0.34 + activity * 0.3, homeLight * 0.88) });
     if (growth > 0) graphics.rect(px + ts / 2 - 4, py + 25, 8, 7).fill({ color: MAP_COLORS.houseTrim, alpha: 0.72 });
@@ -32,7 +39,7 @@ export function drawBuildingVariant(graphics: Graphics, building: Building, ts: 
     }
   } else if (type === 'shop') {
     const heightBoost = growth * 2;
-    const shopLight = buildingLightAlpha(building, atmosphere, timeSeconds, 1);
+    const shopLight = lightsEnabled ? buildingLightAlpha(building, atmosphere, timeSeconds, 1) : 0;
     graphics.roundRect(px + 5, py + 6 - heightBoost, ts - 10, ts - 10 + heightBoost, 3).fill(MAP_COLORS.shop);
     graphics.rect(px + 7, py + 8 - heightBoost, ts - 14, 4).fill(MAP_COLORS.shopSign);
     for (let i = 0; i < 4; i += 1) {
@@ -49,9 +56,9 @@ export function drawBuildingVariant(graphics: Graphics, building: Building, ts: 
     graphics.rect(px + ts - 11, top + 4, 4, height - 8).fill({ color: MAP_COLORS.officeDark, alpha: 0.38 });
     for (let row = 0; row < floors; row += 1) {
       const yy = top + 4 + row * 5;
-      const litA = buildingLightAlpha(building, atmosphere, timeSeconds, row + 2);
-      const litB = buildingLightAlpha(building, atmosphere, timeSeconds, row + 7);
-      const litC = buildingLightAlpha(building, atmosphere, timeSeconds, row + 13);
+      const litA = lightsEnabled ? buildingLightAlpha(building, atmosphere, timeSeconds, row + 2) : 0;
+      const litB = lightsEnabled ? buildingLightAlpha(building, atmosphere, timeSeconds, row + 7) : 0;
+      const litC = lightsEnabled ? buildingLightAlpha(building, atmosphere, timeSeconds, row + 13) : 0;
       graphics.rect(px + 8, yy, 3, 2).fill({ color: litA > 0.35 ? MAP_COLORS.windowLit : MAP_COLORS.officeGlass, alpha: Math.max(0.55 + activity * 0.25, litA) });
       graphics.rect(px + 14, yy, 3, 2).fill({ color: litB > 0.35 ? MAP_COLORS.windowWarm : MAP_COLORS.officeGlass, alpha: Math.max(0.55 + activity * 0.25, litB) });
       graphics.rect(px + 22, yy, 3, 2).fill({ color: litC > 0.35 ? MAP_COLORS.windowLit : MAP_COLORS.officeGlass, alpha: Math.max(0.45 + activity * 0.22, litC) });

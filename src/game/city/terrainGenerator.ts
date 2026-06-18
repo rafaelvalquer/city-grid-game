@@ -335,7 +335,7 @@ function enhanceMountainOrganicShape(grid: Tile[][], bounds: TerrainBounds): voi
       const tile = grid[y]?.[x];
       if (!tile) continue;
       const mountainNeighbors = getSameTerrainNeighborCount(grid, x, y, 'mountain');
-      if (tile.type === 'empty' && mountainNeighbors >= 5 && canPlaceTerrainAt(grid, { x, y }, bounds)) {
+      if (tile.type === 'empty' && mountainNeighbors >= 5 && canPlaceTerrainAt(grid, { x, y })) {
         toMountain.push({ x, y });
       }
       if (tile.type === 'mountain' && mountainNeighbors <= 1) {

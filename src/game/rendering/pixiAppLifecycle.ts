@@ -1,18 +1,33 @@
 import { Application, Container, Graphics } from 'pixi.js';
 import { MAP_COLORS } from './visualTheme';
+import type { GraphicsSettings } from '../config/graphicsSettings';
+import { getGraphicsRendererOptions } from '../config/graphicsSettings';
 
 export type PixiWorldView = {
   app: Application;
   root: Container;
   staticGraphics: Graphics;
-  dynamicGraphics: Graphics;
+  environmentGraphics: Graphics;
+  vehicleGraphics: Graphics;
+  overlayGraphics: Graphics;
   particleGraphics: Graphics;
   particleLabels: Container;
   labels: Container;
 };
 
-export async function createPixiApp(hostElement: HTMLDivElement, app = new Application()): Promise<PixiWorldView> {
-  await app.init({ background: MAP_COLORS.bg, antialias: true, resizeTo: hostElement });
+export async function createPixiApp(
+  hostElement: HTMLDivElement,
+  graphics: GraphicsSettings,
+  app = new Application(),
+): Promise<PixiWorldView> {
+  const rendererOptions = getGraphicsRendererOptions(graphics, globalThis.devicePixelRatio);
+  await app.init({
+    background: MAP_COLORS.bg,
+    antialias: rendererOptions.antialias,
+    autoDensity: true,
+    resolution: rendererOptions.resolution,
+    resizeTo: hostElement,
+  });
   hostElement.appendChild(app.canvas);
   app.canvas.className = 'game-canvas';
 
@@ -20,17 +35,31 @@ export async function createPixiApp(hostElement: HTMLDivElement, app = new Appli
   app.stage.addChild(root);
 
   const staticGraphics = new Graphics();
-  const dynamicGraphics = new Graphics();
+  const environmentGraphics = new Graphics();
+  const vehicleGraphics = new Graphics();
+  const overlayGraphics = new Graphics();
   const particleGraphics = new Graphics();
   const particleLabels = new Container();
   const labels = new Container();
   root.addChild(staticGraphics);
-  root.addChild(dynamicGraphics);
+  root.addChild(environmentGraphics);
+  root.addChild(vehicleGraphics);
+  root.addChild(overlayGraphics);
   root.addChild(particleGraphics);
   root.addChild(particleLabels);
   root.addChild(labels);
 
-  return { app, root, staticGraphics, dynamicGraphics, particleGraphics, particleLabels, labels };
+  return {
+    app,
+    root,
+    staticGraphics,
+    environmentGraphics,
+    vehicleGraphics,
+    overlayGraphics,
+    particleGraphics,
+    particleLabels,
+    labels,
+  };
 }
 
 export function safelyDestroyPixiApp(app: Application): void {

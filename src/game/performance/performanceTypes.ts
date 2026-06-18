@@ -1,0 +1,121 @@
+export type PerformanceMetrics = {
+  fps: number;
+  frameMs: number;
+  frameP95Ms: number;
+  fixedSteps: number;
+  backlogDiscardedMs: number;
+  backlogDiscardedSteps: number;
+  highLoadMode: number;
+  activeCars: number;
+  visibleCars: number;
+
+  updateMs: number;
+  updateStepMs: number;
+  timeSystemMs: number;
+  buildingActivityMs: number;
+  trafficLightsMs: number;
+  transitStopsMs: number;
+  metroMs: number;
+  bikeTripsMs: number;
+  updateConnectionsMs: number;
+  connectionSkips: number;
+  refreshSelectedMs: number;
+  updateCarsMs: number;
+  carGroupingMs: number;
+  lightweightCarsMs: number;
+  detailedCarsMs: number;
+  trafficMapMs: number;
+  trafficWorkerMs: number;
+  generateTripsMs: number;
+  tripAttemptsSkipped: number;
+  tripSpawnsSkipped: number;
+  growCityMs: number;
+  buildingUpgradeMs: number;
+  economyMs: number;
+  historyMs: number;
+  snapshotMs: number;
+  renderWorldMs: number;
+  vehicleLodCars: number;
+
+  pathfindingSyncMs: number;
+  pathfindingWorkerMs: number;
+  pathfindingPending: number;
+  pathfindingCompleted: number;
+  pathfindingFailed: number;
+  pathfindingDropped: number;
+  pathfindingDeduped: number;
+  pathfindingThrottled: number;
+
+  sortedPriorityCars: number;
+  sortedNormalCars: number;
+  reducedCars: number;
+  criticalCars: number;
+  visibleDetailedCars: number;
+  backgroundCars: number;
+  backgroundCarsUpdated: number;
+  entityIndexMs: number;
+  environmentRenderMs: number;
+  vehicleRenderMs: number;
+  overlayRenderMs: number;
+};
+
+export const EMPTY_PERFORMANCE_METRICS: PerformanceMetrics = {
+  fps: 0,
+  frameMs: 0,
+  frameP95Ms: 0,
+  fixedSteps: 0,
+  backlogDiscardedMs: 0,
+  backlogDiscardedSteps: 0,
+  highLoadMode: 0,
+  activeCars: 0,
+  visibleCars: 0,
+
+  updateMs: 0,
+  updateStepMs: 0,
+  timeSystemMs: 0,
+  buildingActivityMs: 0,
+  trafficLightsMs: 0,
+  transitStopsMs: 0,
+  metroMs: 0,
+  bikeTripsMs: 0,
+  updateConnectionsMs: 0,
+  connectionSkips: 0,
+  refreshSelectedMs: 0,
+  updateCarsMs: 0,
+  carGroupingMs: 0,
+  lightweightCarsMs: 0,
+  detailedCarsMs: 0,
+  trafficMapMs: 0,
+  trafficWorkerMs: 0,
+  generateTripsMs: 0,
+  tripAttemptsSkipped: 0,
+  tripSpawnsSkipped: 0,
+  growCityMs: 0,
+  buildingUpgradeMs: 0,
+  economyMs: 0,
+  historyMs: 0,
+  snapshotMs: 0,
+  renderWorldMs: 0,
+  vehicleLodCars: 0,
+
+  pathfindingSyncMs: 0,
+  pathfindingWorkerMs: 0,
+  pathfindingPending: 0,
+  pathfindingCompleted: 0,
+  pathfindingFailed: 0,
+  pathfindingDropped: 0,
+  pathfindingDeduped: 0,
+  pathfindingThrottled: 0,
+
+  sortedPriorityCars: 0,
+  sortedNormalCars: 0,
+  reducedCars: 0,
+  criticalCars: 0,
+  visibleDetailedCars: 0,
+  backgroundCars: 0,
+  backgroundCarsUpdated: 0,
+  entityIndexMs: 0,
+  environmentRenderMs: 0,
+  vehicleRenderMs: 0,
+  overlayRenderMs: 0,
+};

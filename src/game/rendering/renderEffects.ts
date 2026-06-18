@@ -7,6 +7,7 @@ import type { Atmosphere } from './renderTypes';
 import { lotDecorAt } from './renderTerrain';
 import { buildingLightAlpha } from './renderBuildings';
 import { hash2, pulse, prefersReducedMotion } from './renderUtils';
+import type { GraphicsSettings } from '../config/graphicsSettings';
 export function getAtmosphere(rawPeriod: string, timeSeconds: number): Atmosphere {
   const period = normalizePeriod(rawPeriod);
   const reducedMotion = prefersReducedMotion();
@@ -93,7 +94,14 @@ export function drawAtmosphereOverlay(graphics: Graphics, world: GameWorld, atmo
 }
 
 
-export function drawStreetFurniture(graphics: Graphics, world: GameWorld, ts: number, timeSeconds: number, atmosphere: Atmosphere): void {
+export function drawStreetFurniture(
+  graphics: Graphics,
+  world: GameWorld,
+  ts: number,
+  timeSeconds: number,
+  atmosphere: Atmosphere,
+  settings: Pick<GraphicsSettings, 'streetFurniture' | 'streetLights' | 'pedestrians'>,
+): void {
   for (let y = 0; y < world.grid.length; y += 1) {
     const row = world.grid[y];
     if (!row) continue;
@@ -101,10 +109,12 @@ export function drawStreetFurniture(graphics: Graphics, world: GameWorld, ts: nu
       const tile = row[x];
       if (!tile) continue;
       if (tile.type === 'empty') {
-        drawEmptyLotMicroDetails(graphics, x, y, ts, timeSeconds, atmosphere);
+        if (settings.streetFurniture) {
+          drawEmptyLotMicroDetails(graphics, x, y, ts, timeSeconds, atmosphere, settings.pedestrians);
+        }
         continue;
       }
-      if ((tile.type === 'road' || tile.type === 'avenue') && hash2(x, y, 29) % 7 === 0) {
+      if (settings.streetLights && (tile.type === 'road' || tile.type === 'avenue') && hash2(x, y, 29) % 7 === 0) {
         drawStreetLamp(graphics, x, y, ts, atmosphere, timeSeconds, false);
       }
     }
@@ -112,7 +122,15 @@ export function drawStreetFurniture(graphics: Graphics, world: GameWorld, ts: nu
 }
 
 
-export function drawEmptyLotMicroDetails(graphics: Graphics, x: number, y: number, ts: number, timeSeconds: number, atmosphere: Atmosphere): void {
+export function drawEmptyLotMicroDetails(
+  graphics: Graphics,
+  x: number,
+  y: number,
+  ts: number,
+  timeSeconds: number,
+  atmosphere: Atmosphere,
+  pedestriansEnabled = true,
+): void {
   const decor = lotDecorAt(x, y);
   const px = x * ts;
   const py = y * ts;
@@ -120,7 +138,7 @@ export function drawEmptyLotMicroDetails(graphics: Graphics, x: number, y: numbe
     graphics.roundRect(px + 12, py + 28, 13, 3, 1).fill({ color: MAP_COLORS.bench, alpha: 0.56 });
     graphics.rect(px + 10, py + 28, 2, 5).fill({ color: MAP_COLORS.bench, alpha: 0.5 });
     graphics.rect(px + 25, py + 28, 2, 5).fill({ color: MAP_COLORS.bench, alpha: 0.5 });
-    if (hash2(x, y, 31) % 2 === 0) drawPeopleCluster(graphics, px + 20, py + 18, 2 + (hash2(x, y, 33) % 2), timeSeconds, atmosphere, (hash2(x, y, 35) % 997) / 997);
+    if (pedestriansEnabled && hash2(x, y, 31) % 2 === 0) drawPeopleCluster(graphics, px + 20, py + 18, 2 + (hash2(x, y, 33) % 2), timeSeconds, atmosphere, (hash2(x, y, 35) % 997) / 997);
   }
   if (decor === 'parking' || hash2(x, y, 37) % 18 === 0) {
     graphics.roundRect(px + ts - 10, py + ts - 12, 4, 6, 1).fill({ color: MAP_COLORS.trashCan, alpha: 0.6 });
@@ -129,23 +147,30 @@ export function drawEmptyLotMicroDetails(graphics: Graphics, x: number, y: numbe
 }
 
 
-export function drawBuildingLife(graphics: Graphics, world: GameWorld, ts: number, timeSeconds: number, atmosphere: Atmosphere): void {
+export function drawBuildingLife(
+  graphics: Graphics,
+  world: GameWorld,
+  ts: number,
+  timeSeconds: number,
+  atmosphere: Atmosphere,
+  settings: Pick<GraphicsSettings, 'buildingLights' | 'pedestrians'>,
+): void {
   for (const building of world.buildings) {
     const px = building.x * ts;
     const py = building.y * ts;
     const activity = Math.min(1, (building.tripsToday + building.population + building.jobs + building.attraction) / 18);
-    const lightAlpha = buildingLightAlpha(building, atmosphere, timeSeconds, 23);
+    const lightAlpha = settings.buildingLights ? buildingLightAlpha(building, atmosphere, timeSeconds, 23) : 0;
     if (lightAlpha > 0.12) {
       const glowColor = building.type === 'shop' ? MAP_COLORS.shopGlow : MAP_COLORS.lightGlow;
       graphics.circle(px + ts / 2, py + ts / 2 + 2, 13 + activity * 5).fill({ color: glowColor, alpha: lightAlpha * 0.08 });
     }
-    if (building.type === 'shop' && building.connected && atmosphere.pedestrianAlpha > 0.2) {
+    if (settings.pedestrians && building.type === 'shop' && building.connected && atmosphere.pedestrianAlpha > 0.2) {
       const count = Math.min(5, 1 + building.level + Math.floor(activity * 2));
       drawPeopleCluster(graphics, px + ts / 2, py + ts - 6, count, timeSeconds, atmosphere, (hash2(building.x, building.y, 61) % 997) / 997);
       if (atmosphere.period === 'evening' || atmosphere.period === 'noon') {
         graphics.roundRect(px + 9, py + ts - 5, ts - 18, 2, 1).fill({ color: MAP_COLORS.shopGlow, alpha: 0.2 + activity * 0.18 });
       }
-    } else if (building.type === 'office' && building.connected && atmosphere.period === 'evening') {
+    } else if (settings.pedestrians && building.type === 'office' && building.connected && atmosphere.period === 'evening') {
       drawPeopleCluster(graphics, px + ts / 2 + 4, py + ts - 5, 2 + building.level, timeSeconds, atmosphere, (hash2(building.x, building.y, 67) % 997) / 997);
     }
   }

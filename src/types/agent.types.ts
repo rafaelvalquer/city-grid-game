@@ -65,4 +65,6 @@ export type Car = {
   dwellSeconds?: number;
   dwellStopId?: string;
   lastTransitStopTileKey?: string;
+  backgroundAccumulatedDt?: number;
+  performanceBucket?: number;
 };

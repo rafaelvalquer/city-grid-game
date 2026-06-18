@@ -11,7 +11,7 @@ import { drawTerrainFeatureAnimation, drawTerrainFeatureBase } from './renderTer
 import { drawBusStop, drawBusStopCoverage, drawRoad, drawRoadSignage, drawRoundaboutIsland, drawTrafficLights, drawOneWayArrow } from './renderRoads';
 import { drawHeatmapMode } from './renderHeatmap';
 import { drawBuildingVariant } from './renderBuildings';
-import { drawCar } from './renderVehicles';
+import { drawCar, drawCarLod } from './renderVehicles';
 import { getStaticRenderSignature } from './renderInvalidation';
 import { drawConstructionPreview, drawSelectedCarMarker, drawSelectedRoute, drawSelection } from './renderUiOverlays';
 import type { ParticleSystem } from './particleSystem';
@@ -25,12 +25,18 @@ type ViewportTileBounds = {
   maxY: number;
 };
 import { drawBikeTrips } from './renderBikes';
+import { PERFORMANCE_CONFIG } from '../config/performanceConfig';
+import { DEFAULT_GRAPHICS_SETTINGS, type GraphicsSettings } from '../config/graphicsSettings';
 
 export type RenderWorldState = {
   staticSignature: string | null;
   buildingConnections: Map<string, boolean> | null;
   smokeLastByTile: Map<string, number>;
   lastMoney: number | null;
+  lastEnvironmentRenderAt: number;
+  environmentSignature: string | null;
+  lastOverlayRenderAt: number;
+  overlaySignature: string | null;
 };
 
 export function createRenderWorldState(): RenderWorldState {
@@ -39,12 +45,18 @@ export function createRenderWorldState(): RenderWorldState {
     buildingConnections: null,
     smokeLastByTile: new Map(),
     lastMoney: null,
+    lastEnvironmentRenderAt: -Infinity,
+    environmentSignature: null,
+    lastOverlayRenderAt: -Infinity,
+    overlaySignature: null,
   };
 }
 
 export function renderWorld(
   staticGraphics: Graphics,
-  dynamicGraphics: Graphics,
+  environmentGraphics: Graphics,
+  vehicleGraphics: Graphics,
+  overlayGraphics: Graphics,
   labels: Container,
   state: RenderWorldState,
   world: GameWorld,
@@ -57,23 +69,55 @@ export function renderWorld(
   mobilityFocusMode: MobilityFocusMode = 'off',
   particles?: ParticleSystem,
   visibleBounds?: ViewportTileBounds,
+  graphics: GraphicsSettings = DEFAULT_GRAPHICS_SETTINGS,
 ): void {
   const ts = GAME_CONFIG.tileSize;
   const timeSeconds = performance.now() / 1000;
   const atmosphere = getAtmosphere(world.time.getPeriod(), timeSeconds);
 
   applyCamera(staticGraphics, camX, camY, scale);
-  applyCamera(dynamicGraphics, camX, camY, scale);
+  applyCamera(environmentGraphics, camX, camY, scale);
+  applyCamera(vehicleGraphics, camX, camY, scale);
+  applyCamera(overlayGraphics, camX, camY, scale);
   applyCamera(labels, camX, camY, scale);
 
-  const staticSignature = getStaticRenderSignature(world, atmosphere.period);
+  const staticSignature = getStaticRenderSignature(world, atmosphere.period, graphics);
   if (state.staticSignature !== staticSignature) {
     state.staticSignature = staticSignature;
-    renderStaticLayer(staticGraphics, world, ts, timeSeconds, atmosphere);
+    renderStaticLayer(staticGraphics, world, ts, timeSeconds, atmosphere, graphics);
   }
 
-  emitRenderParticles(state, world, timeSeconds, particles);
-  renderDynamicLayer(dynamicGraphics, state, world, heatmapMode, hoverPreview, ts, timeSeconds, atmosphere, viewLayer, mobilityFocusMode, visibleBounds);
+  emitRenderParticles(state, world, timeSeconds, particles, graphics);
+  pruneSmokeHistory(state, timeSeconds);
+  const highLoad = world.cars.length >= PERFORMANCE_CONFIG.highLoadCars;
+  const environmentFps = highLoad
+    ? Math.min(graphics.environmentFps, PERFORMANCE_CONFIG.environmentRenderHighLoadFps)
+    : graphics.environmentFps;
+  const environmentSignature = `${viewLayer}|${atmosphere.period}|${world.getStaticRenderSignature()}|${environmentSettingsKey(graphics)}`;
+  if (state.environmentSignature !== environmentSignature
+    || shouldRenderTimedLayer(state.lastEnvironmentRenderAt, timeSeconds, environmentFps)) {
+    state.environmentSignature = environmentSignature;
+    state.lastEnvironmentRenderAt = timeSeconds;
+    world.performanceProfiler.time('environmentRenderMs', () => {
+      renderEnvironmentLayer(environmentGraphics, world, ts, timeSeconds, atmosphere, viewLayer, graphics);
+    });
+  }
+
+  world.performanceProfiler.time('vehicleRenderMs', () => {
+    renderVehicleLayer(vehicleGraphics, world, ts, timeSeconds, atmosphere, scale, visibleBounds, viewLayer, graphics);
+  });
+
+  const overlaySignature = getOverlaySignature(world, heatmapMode, hoverPreview, viewLayer, mobilityFocusMode);
+  const overlayFps = highLoad ? PERFORMANCE_CONFIG.overlayRenderHighLoadFps : PERFORMANCE_CONFIG.overlayRenderFps;
+  const overlayAnimated = heatmapMode !== 'off' || mobilityFocusMode !== 'off' || world.selected.kind === 'car';
+  if (state.overlaySignature !== overlaySignature
+    || (overlayAnimated && shouldRenderTimedLayer(state.lastOverlayRenderAt, timeSeconds, overlayFps))) {
+    state.overlaySignature = overlaySignature;
+    state.lastOverlayRenderAt = timeSeconds;
+    world.performanceProfiler.time('overlayRenderMs', () => {
+      renderOverlayLayer(overlayGraphics, world, heatmapMode, hoverPreview, ts, timeSeconds, atmosphere, viewLayer, mobilityFocusMode);
+    });
+  }
 }
 
 function applyCamera(container: Container, camX: number, camY: number, scale: number): void {
@@ -82,48 +126,113 @@ function applyCamera(container: Container, camX: number, camY: number, scale: nu
 }
 
 function renderStaticLayer(
+  layer: Graphics,
+  world: GameWorld,
+  ts: number,
+  timeSeconds: number,
+  atmosphere: ReturnType<typeof getAtmosphere>,
+  settings: GraphicsSettings,
+): void {
+  layer.clear();
+
+  for (let y = 0; y < world.grid.length; y++) {
+    for (let x = 0; x < (world.grid[y]?.length ?? 0); x++) {
+      const tile = world.grid[y]?.[x];
+      if (!tile) continue;
+      drawBaseTile(layer, tile, x, y, ts);
+      if (tile.type === 'mountain' || tile.type === 'lake') drawTerrainFeatureBase(layer, world.grid, tile, x, y, ts, timeSeconds);
+      if (tile.type === 'empty' && settings.streetFurniture) drawLotDecoration(layer, x, y, ts);
+      if (tile.type === 'road') drawRoad(layer, world.grid, x, y, ts, 'road');
+      if (tile.type === 'avenue') drawRoad(layer, world.grid, x, y, ts, 'avenue');
+      if (tile.type === 'roundabout') drawRoad(layer, world.grid, x, y, ts, 'roundabout');
+      if (tile.type === 'roundaboutCenter') drawRoundaboutIsland(layer, world.grid, x, y, ts);
+    }
+  }
+
+  for (let y = 0; y < world.grid.length; y++) {
+    for (let x = 0; x < (world.grid[y]?.length ?? 0); x++) {
+      const tile = world.grid[y]?.[x];
+      if (!tile) continue;
+      if (isRoadType(tile.type) && tile.type !== 'roundabout') drawRoadSignage(layer, world, x, y, ts);
+      if ((tile.type === 'road' || tile.type === 'avenue') && tile.oneWay) drawOneWayArrow(layer, x, y, ts, tile.oneWay, tile.type === 'avenue');
+    }
+  }
+
+  for (const building of world.buildings) {
+    drawBuildingVariant(layer, building, ts, timeSeconds, atmosphere, settings.buildingLights);
+    if (!building.connected) {
+      layer.circle(building.x * ts + ts - 5, building.y * ts + 5, 4).fill(MAP_COLORS.disconnected);
+    }
+  }
+}
+
+function renderEnvironmentLayer(
   graphics: Graphics,
   world: GameWorld,
   ts: number,
   timeSeconds: number,
   atmosphere: ReturnType<typeof getAtmosphere>,
+  viewLayer: ViewLayer,
+  settings: GraphicsSettings,
 ): void {
   graphics.clear();
 
-  for (let y = 0; y < world.grid.length; y++) {
-    for (let x = 0; x < (world.grid[y]?.length ?? 0); x++) {
-      const tile = world.grid[y]?.[x];
-      if (!tile) continue;
-      drawBaseTile(graphics, tile, x, y, ts);
-      if (tile.type === 'mountain' || tile.type === 'lake') drawTerrainFeatureBase(graphics, world.grid, tile, x, y, ts, timeSeconds);
-      if (tile.type === 'empty') drawLotDecoration(graphics, x, y, ts);
-      if (tile.type === 'road') drawRoad(graphics, world.grid, x, y, ts, 'road');
-      if (tile.type === 'avenue') drawRoad(graphics, world.grid, x, y, ts, 'avenue');
-      if (tile.type === 'roundabout') drawRoad(graphics, world.grid, x, y, ts, 'roundabout');
-      if (tile.type === 'roundaboutCenter') drawRoundaboutIsland(graphics, world.grid, x, y, ts);
-    }
+  if (viewLayer === 'underground') {
+    renderMetroLayer(graphics, world, viewLayer, ts, timeSeconds);
+    return;
   }
 
-  for (let y = 0; y < world.grid.length; y++) {
-    for (let x = 0; x < (world.grid[y]?.length ?? 0); x++) {
-      const tile = world.grid[y]?.[x];
-      if (!tile) continue;
-      if (isRoadType(tile.type) && tile.type !== 'roundabout') drawRoadSignage(graphics, world, x, y, ts);
-      if ((tile.type === 'road' || tile.type === 'avenue') && tile.oneWay) drawOneWayArrow(graphics, x, y, ts, tile.oneWay, tile.type === 'avenue');
-    }
+  if (settings.terrainAnimations) drawTerrainFeatureAnimation(graphics, world.grid, ts, timeSeconds);
+
+  for (const stop of world.transitStops) {
+    drawBusStop(graphics, world, stop.x, stop.y, ts, timeSeconds, atmosphere);
   }
 
-  for (const building of world.buildings) {
-    drawBuildingVariant(graphics, building, ts, timeSeconds, atmosphere);
-    if (!building.connected) {
-      graphics.circle(building.x * ts + ts - 5, building.y * ts + 5, 4).fill(MAP_COLORS.disconnected);
-    }
-  }
+  drawStreetFurniture(graphics, world, ts, timeSeconds, atmosphere, settings);
+  if (settings.atmosphereOverlay) drawAtmosphereOverlay(graphics, world, atmosphere, 'off', ts);
+  renderMetroLayer(graphics, world, viewLayer, ts, timeSeconds);
+  drawBuildingLife(graphics, world, ts, timeSeconds, atmosphere, settings);
+  drawDisconnectedBuildingAlerts(graphics, world, ts, timeSeconds);
+  drawTrafficLights(graphics, world, ts, timeSeconds);
 }
 
-function renderDynamicLayer(
+function renderVehicleLayer(
   graphics: Graphics,
-  state: RenderWorldState,
+  world: GameWorld,
+  ts: number,
+  timeSeconds: number,
+  atmosphere: ReturnType<typeof getAtmosphere>,
+  scale: number,
+  visibleBounds: ViewportTileBounds | undefined,
+  viewLayer: ViewLayer,
+  settings: GraphicsSettings,
+): void {
+  graphics.clear();
+  if (viewLayer === 'underground') return;
+
+  const carCullBounds = visibleBounds ? expandViewportBounds(visibleBounds, 2) : undefined;
+  const useVehicleLod = settings.vehicleDetail === 'simplified'
+    || (settings.vehicleDetail === 'auto' && (
+      scale <= PERFORMANCE_CONFIG.vehicleLodScaleThreshold
+      || (world.cars.length >= PERFORMANCE_CONFIG.vehicleLodHighLoadCars && scale <= PERFORMANCE_CONFIG.vehicleLodHighLoadScaleThreshold)
+    ));
+  let vehicleLodCars = 0;
+  for (const car of world.cars) {
+    const selectedCar = world.selected.kind === 'car' && world.selected.carId === car.id;
+    if (carCullBounds && !selectedCar && !isCarInsideBounds(car, carCullBounds)) continue;
+    if (useVehicleLod && !selectedCar && car.vehicleType !== 'bus') {
+      drawCarLod(graphics, car, world, ts, atmosphere, settings);
+      vehicleLodCars += 1;
+    } else {
+      drawCar(graphics, car, world, ts, timeSeconds, atmosphere, settings);
+    }
+  }
+  world.performanceProfiler.setCounters({ vehicleLodCars });
+  drawBikeTrips(graphics, world, ts, timeSeconds);
+}
+
+function renderOverlayLayer(
+  graphics: Graphics,
   world: GameWorld,
   heatmapMode: HeatmapMode,
   hoverPreview: HoverPreview | null,
@@ -132,43 +241,12 @@ function renderDynamicLayer(
   atmosphere: ReturnType<typeof getAtmosphere>,
   viewLayer: ViewLayer,
   mobilityFocusMode: MobilityFocusMode,
-  visibleBounds?: ViewportTileBounds,
 ): void {
   graphics.clear();
-
-  if (viewLayer === 'underground') {
-    renderMetroLayer(graphics, world, viewLayer, ts, timeSeconds);
-    drawMobilityFocusOverlay(graphics, world, mobilityFocusMode, ts, timeSeconds);
-    if (hoverPreview) drawConstructionPreview(graphics, world, hoverPreview, ts, timeSeconds);
-    if (world.selected.kind === 'tile') drawSelection(graphics, world.selected.x, world.selected.y, ts);
-    if (world.selected.kind === 'metroStation') drawSelection(graphics, world.selected.station.x, world.selected.station.y, ts);
-    pruneSmokeHistory(state, timeSeconds);
-    return;
+  if (viewLayer === 'surface') {
+    drawHeatmapMode(graphics, world, heatmapMode, ts, atmosphere);
+    drawSelectedRoute(graphics, world, ts);
   }
-
-  drawTerrainFeatureAnimation(graphics, world.grid, ts, timeSeconds);
-
-  for (const stop of world.transitStops) {
-    drawBusStop(graphics, world, stop.x, stop.y, ts, timeSeconds, atmosphere);
-  }
-
-  drawHeatmapMode(graphics, world, heatmapMode, ts, atmosphere);
-  drawTerrainFeatureAnimation(graphics, world, ts, timeSeconds);
-  drawStreetFurniture(graphics, world, ts, timeSeconds, atmosphere);
-  drawAtmosphereOverlay(graphics, world, atmosphere, heatmapMode, ts);
-  renderMetroLayer(graphics, world, viewLayer, ts, timeSeconds);
-  drawBuildingLife(graphics, world, ts, timeSeconds, atmosphere);
-  drawDisconnectedBuildingAlerts(graphics, world, ts, timeSeconds);
-  drawTrafficLights(graphics, world, ts, timeSeconds);
-  drawSelectedRoute(graphics, world, ts);
-
-  const carCullBounds = visibleBounds ? expandViewportBounds(visibleBounds, 2) : undefined;
-  for (const car of world.cars) {
-    const selectedCar = world.selected.kind === 'car' && world.selected.carId === car.id;
-    if (carCullBounds && !selectedCar && !isCarInsideBounds(car, carCullBounds)) continue;
-    drawCar(graphics, car, world, ts, timeSeconds, atmosphere);
-  }
-  drawBikeTrips(graphics, world, ts, timeSeconds);
   drawMobilityFocusOverlay(graphics, world, mobilityFocusMode, ts, timeSeconds);
 
   if (hoverPreview) drawConstructionPreview(graphics, world, hoverPreview, ts, timeSeconds);
@@ -180,7 +258,35 @@ function renderDynamicLayer(
     drawSelection(graphics, world.selected.stop.x, world.selected.stop.y, ts);
   }
   drawSelectedCarMarker(graphics, world, ts);
-  pruneSmokeHistory(state, timeSeconds);
+}
+
+function shouldRenderTimedLayer(lastRenderAt: number, timeSeconds: number, fps: number): boolean {
+  return timeSeconds - lastRenderAt >= 1 / Math.max(1, fps);
+}
+
+function getOverlaySignature(
+  world: GameWorld,
+  heatmapMode: HeatmapMode,
+  hoverPreview: HoverPreview | null,
+  viewLayer: ViewLayer,
+  mobilityFocusMode: MobilityFocusMode,
+): string {
+  const selected = world.selected;
+  const selectedKey = selected.kind === 'car'
+    ? `car:${selected.carId}`
+    : selected.kind === 'building'
+      ? `building:${selected.building.id}`
+      : selected.kind === 'road' || selected.kind === 'tile'
+        ? `${selected.kind}:${selected.x},${selected.y}`
+        : selected.kind === 'busStop'
+          ? `busStop:${selected.stop.id}`
+          : selected.kind === 'metroStation'
+            ? `metroStation:${selected.station.id}`
+            : selected.kind;
+  const hoverKey = hoverPreview
+    ? `${hoverPreview.x},${hoverPreview.y}:${hoverPreview.valid}:${hoverPreview.tool ?? ''}:${hoverPreview.lineTiles?.length ?? 0}`
+    : 'none';
+  return `${viewLayer}|${heatmapMode}|${mobilityFocusMode}|${selectedKey}|${hoverKey}|${world.getStaticRenderSignature()}`;
 }
 
 function expandViewportBounds(bounds: ViewportTileBounds, paddingTiles: number): ViewportTileBounds {
@@ -202,7 +308,13 @@ function isCarInsideBounds(car: Car, bounds: ViewportTileBounds): boolean {
   );
 }
 
-function emitRenderParticles(state: RenderWorldState, world: GameWorld, timeSeconds: number, particles?: ParticleSystem): void {
+function emitRenderParticles(
+  state: RenderWorldState,
+  world: GameWorld,
+  timeSeconds: number,
+  particles: ParticleSystem | undefined,
+  graphics: GraphicsSettings,
+): void {
   if (!particles) {
     syncRenderHistory(state, world);
     return;
@@ -213,14 +325,14 @@ function emitRenderParticles(state: RenderWorldState, world: GameWorld, timeSeco
   } else {
     for (const building of world.buildings) {
       const wasConnected = state.buildingConnections.get(building.id);
-      if (wasConnected === false && building.connected) {
+      if (graphics.constructionParticles && wasConnected === false && building.connected) {
         particles.emitConnectionPulse({ x: building.x, y: building.y });
       }
       state.buildingConnections.set(building.id, building.connected);
     }
   }
 
-  for (const traffic of world.traffic.values()) {
+  if (graphics.congestionSmoke) for (const traffic of world.traffic.values()) {
     if (traffic.congestion < 1.35) continue;
     const key = keyOf(traffic.x, traffic.y);
     const lastSmoke = state.smokeLastByTile.get(key) ?? -Infinity;
@@ -235,6 +347,18 @@ function emitRenderParticles(state: RenderWorldState, world: GameWorld, timeSeco
     particles.emitMoneyText(anchor, money - state.lastMoney);
   }
   state.lastMoney = money;
+}
+
+function environmentSettingsKey(settings: GraphicsSettings): string {
+  return [
+    settings.terrainAnimations,
+    settings.streetFurniture,
+    settings.streetLights,
+    settings.atmosphereOverlay,
+    settings.pedestrians,
+    settings.buildingLights,
+    settings.environmentFps,
+  ].map((value) => typeof value === 'boolean' ? Number(value) : value).join(':');
 }
 
 function syncRenderHistory(state: RenderWorldState, world: GameWorld): void {

@@ -18,7 +18,7 @@ import { applyBuildingLevel, createBuilding, updateBuildingConnection } from '..
 import { findFastestPath } from '../pathfinding/pathfinder';
 import { findBikeLanePath } from '../pathfinding/bikePathfinder';
 import { buildIntersectionControls, computeTrafficDecision, getDirection, getLaneOffset, isIntersection } from '../systems/trafficRules';
-import { createCarSpatialIndex } from '../systems/carSpatialIndex';
+import { WorldEntityIndex } from '../systems/worldEntityIndex';
 import { canPlaceRoundabout, findRoundaboutCenterForTile, getDrivableNeighbors, getRoundaboutArea, getRoundaboutRing, isLegalRoadMove, isRoundaboutCenter, isRoundaboutTile } from '../systems/roundabouts';
 import {
   createTrafficLight,
@@ -34,6 +34,11 @@ import { TimeSystem } from './timeSystem';
 import { chooseTrip } from '../agents/tripGenerator';
 import { findMetroStationPath } from '../metro/metroGraph';
 import { buildMetroTrackTiles, pickMetroLineColor } from '../metro/metroLineBuilder';
+import { PERFORMANCE_CONFIG } from '../config/performanceConfig';
+import { createPerformanceProfiler } from '../performance/performanceProfiler';
+import { getTrafficMapClient } from '../workers/trafficMapClient';
+import { getPathfindingClient } from '../workers/pathfindingClient';
+import { createWorkerCarSnapshot, createWorkerGridSnapshot, createWorkerTrafficSnapshot } from '../workers/gridSnapshot';
 
 const BUILDING_DEMOLITION_COST: Record<Building['type'], number> = {
   house: 20,
@@ -88,9 +93,18 @@ const DISTANT_CAR_UPDATE_EVERY_TICKS = 3;
 const DISTANT_CAR_VIEWPORT_PADDING_TILES = 8;
 
 export class GameWorld {
+  readonly performanceProfiler = createPerformanceProfiler();
+  private trafficMapWorkerAccumulator = 0;
+  private trafficMapWorkerInFlight = false;
+  private asyncRerouteCarIds = new Set<string>();
+  private connectionUpdateAccumulator = 0;
+  private lastConnectionStaticRenderVersion = -1;
+  private snapshotCache?: CityStats;
+  private snapshotCacheAtMs = 0;
   private readonly baseGridWidth = GAME_CONFIG.gridWidth;
   private readonly baseGridHeight = GAME_CONFIG.gridHeight;
   grid: Tile[][] = createGrid();
+  readonly entityIndex = new WorldEntityIndex(this.grid);
   districts: District[] = [];
   buildings: Building[] = [];
   cars: Car[] = [];
@@ -138,6 +152,8 @@ export class GameWorld {
   private staticRenderVersion = 0;
   private activeViewportBounds?: PerformanceViewportBounds;
   private performanceUpdateTick = 0;
+  private pathfindingWorkerGridVersion = -1;
+  private pathfindingWorkerTrafficSyncAt = 0;
 
   constructor(options: Partial<GameSetupOptions> = {}) {
     setGridBounds(GAME_CONFIG.gridWidth, GAME_CONFIG.gridHeight);
@@ -150,10 +166,48 @@ export class GameWorld {
     this.allowRoadDemolition = options.allowRoadDemolition ?? false;
     this.generator = new CityGenerator(options);
     this.seedInitialCity();
+    this.entityIndex.setGrid(this.grid);
+    this.entityIndex.rebuild(this.cars, this.buildings);
     this.updateConnections();
     this.updateTrafficMap();
     this.recordHistorySample(true);
   }
+  countVisibleCarsInBounds(bounds?: PerformanceViewportBounds, paddingTiles = 2): number {
+    if (!bounds) return this.cars.filter((car) => car.status !== 'arrived' && car.status !== 'no_route').length;
+    const minX = bounds.minX - paddingTiles;
+    const minY = bounds.minY - paddingTiles;
+    const maxX = bounds.maxX + paddingTiles;
+    const maxY = bounds.maxY + paddingTiles;
+    let count = 0;
+    for (const car of this.cars) {
+      if (car.status === 'arrived' || car.status === 'no_route') continue;
+      if (car.x >= minX && car.x <= maxX && car.y >= minY && car.y <= maxY) {
+        count += 1;
+        continue;
+      }
+      const current = car.route[car.routeIndex];
+      const next = car.route[car.routeIndex + 1];
+      if ((current && current.x >= minX && current.x <= maxX && current.y >= minY && current.y <= maxY)
+        || (next && next.x >= minX && next.x <= maxX && next.y >= minY && next.y <= maxY)) {
+        count += 1;
+      }
+    }
+    return Math.min(count, this.cars.length);
+  }
+
+  getSnapshotForUi(): CityStats {
+    const now = performance.now();
+    const shouldThrottle = this.cars.length >= PERFORMANCE_CONFIG.snapshotThrottleThresholdCars;
+    if (shouldThrottle && this.snapshotCache && now - this.snapshotCacheAtMs < PERFORMANCE_CONFIG.snapshotThrottleMs) {
+      return this.snapshotCache;
+    }
+
+    const snapshot = this.performanceProfiler.time('snapshotMs', () => this.getSnapshot());
+    this.snapshotCache = snapshot;
+    this.snapshotCacheAtMs = now;
+    return snapshot;
+  }
+
 
   subscribe(listener: () => void): () => void {
     this.listeners.add(listener);
@@ -199,6 +253,107 @@ export class GameWorld {
 
   getMaxCars(): number {
     return GAME_CONFIG.maxCars * this.getOwnedDistrictCount();
+  }
+
+  seedPerformanceBenchmarkCars(targetCount: number): number {
+    const target = Math.max(0, Math.min(2000, Math.floor(targetCount)));
+    const currentPrivateCars = this.getPrivateCarCount();
+    if (target <= currentPrivateCars) return currentPrivateCars;
+
+    const roadTiles: Vec2[] = [];
+    for (const row of this.grid) {
+      for (const tile of row) {
+        if (isRoadType(tile.type)) roadTiles.push({ x: tile.x, y: tile.y });
+      }
+    }
+    if (roadTiles.length < 2) return currentPrivateCars;
+
+    const baseRoutes: Vec2[][] = [];
+    const routeAttempts = Math.min(roadTiles.length, 80);
+    for (let index = 0; index < routeAttempts && baseRoutes.length < 24; index += 1) {
+      const start = roadTiles[(index * 17) % roadTiles.length];
+      const goal = roadTiles[(roadTiles.length - 1 - index * 29 + roadTiles.length * 4) % roadTiles.length];
+      if (samePos(start, goal)) continue;
+      const route = findFastestPath(this.grid, this.traffic, start, goal);
+      if (route.length >= 2) baseRoutes.push(route);
+    }
+    if (!baseRoutes.length) {
+      for (let index = 0; index < routeAttempts && baseRoutes.length < 24; index += 1) {
+        const route: Vec2[] = [roadTiles[(index * 13) % roadTiles.length]];
+        for (let step = 0; step < 24; step += 1) {
+          const current = route[route.length - 1];
+          const previous = route[route.length - 2];
+          const legalNeighbors = getDrivableNeighbors(this.grid, current)
+            .filter((next) => isLegalRoadMove(this.grid, current, next))
+          const forwardNeighbors = legalNeighbors.filter((next) => !previous || !samePos(next, previous));
+          const neighbors = forwardNeighbors.length ? forwardNeighbors : legalNeighbors;
+          if (!neighbors.length) break;
+          route.push(neighbors[(index + step) % neighbors.length]);
+        }
+        if (route.length >= 2) baseRoutes.push(route);
+      }
+    }
+    if (!baseRoutes.length) return currentPrivateCars;
+
+    const originId = this.buildings[0]?.id ?? 'benchmark-origin';
+    const destinationId = this.buildings[1]?.id ?? originId;
+    for (let index = currentPrivateCars; index < target; index += 1) {
+      const route = baseRoutes[index % baseRoutes.length];
+      const routeIndex = Math.min(route.length - 2, Math.floor((index / baseRoutes.length) % Math.max(1, route.length - 1)));
+      const progressToNext = ((index * 37) % 100) / 100;
+      const current = route[routeIndex];
+      const next = route[routeIndex + 1];
+      const direction = getDirection(current, next);
+      const roadType = this.getRoadTypeAt(current);
+      const id = `benchmark-${index}`;
+      const lane = getLaneOffset(direction, roadType, id, this.getOneWayAt(current, direction));
+      const desiredSpeed = 1.45 * ROAD_CONFIG[roadType].speed;
+      this.addCar({
+        id,
+        originBuildingId: originId,
+        destinationBuildingId: destinationId,
+        x: current.x + (next.x - current.x) * progressToNext + lane.offset.x,
+        y: current.y + (next.y - current.y) * progressToNext + lane.offset.y,
+        currentTileX: current.x,
+        currentTileY: current.y,
+        route,
+        routeIndex,
+        progressToNext,
+        baseSpeed: 1.45,
+        currentSpeed: desiredSpeed * 0.75,
+        targetSpeed: desiredSpeed,
+        acceleration: 1.65,
+        braking: 3.8,
+        desiredSpeed,
+        laneOffset: lane.offset,
+        laneIndex: lane.laneIndex,
+        laneCount: lane.laneCount,
+        laneSide: lane.laneSide,
+        waitTimer: 0,
+        intersectionWaitSeconds: 0,
+        priorityToken: 0,
+        gridlockEscapeSeconds: 0,
+        insideIntersectionSeconds: 0,
+        turnSlowdown: 0,
+        trafficState: 'moving',
+        lifecyclePhase: 'driving',
+        lifecycleProgress: 1,
+        direction,
+        status: 'moving',
+        travelTime: 0,
+        estimatedTime: route.length / 1.45,
+        delay: 0,
+        stuckSeconds: 0,
+        immobileSeconds: 0,
+        rerouteCooldownSeconds: 0,
+        rerouteCount: 0,
+        repeatedRerouteCount: 0,
+        lastRouteSignature: routeSignature(route),
+        signalTransitionGraceSeconds: 0,
+      });
+    }
+    this.updateTrafficMap();
+    return this.getPrivateCarCount();
   }
 
   getMaxBuses(): number {
@@ -356,7 +511,7 @@ export class GameWorld {
     this.money -= district.cost;
     setGridBounds(newWidth, oldHeight);
     if (this.enableTerrainRelief) {
-      generateTerrainReliefForBounds(this.grid, { xStart: oldWidth, yStart: 0, width: expansionWidth, height: oldHeight }, { densityScale: 0.72 });
+      generateTerrainReliefForBounds(this.grid, { xStart: oldWidth, yStart: 0, width: expansionWidth, height: oldHeight }, 0.72);
     }
     this.updateConnections();
     this.updateTrafficMap();
@@ -403,6 +558,8 @@ export class GameWorld {
       carTripsAvoided: this.carTripsAvoided,
       waitingPassengers: this.getWaitingPassengerCount(),
       activeBuses: this.getTransitBuses().length,
+      busLaneTiles: this.getTransitBusLaneTileCount(),
+      busLaneCoverageRatio: this.getTransitBusLaneCoverageRatio(),
       districtsOwned: this.getOwnedDistrictCount(),
       cityAreaTiles: this.grid.length * (this.grid[0]?.length ?? 0),
       maxCars: this.getMaxCars(),
@@ -425,7 +582,7 @@ export class GameWorld {
       timeLabel: this.time.getLabel(),
       dayPeriod: this.time.getPeriod(),
       terrainReliefEnabled: this.enableTerrainRelief,
-      terrainBlockedTiles: terrainSummary.terrainBlockedTiles,
+      terrainBlockedTiles: terrainSummary.blockedTiles,
       mountainTiles: terrainSummary.mountainTiles,
       lakeTiles: terrainSummary.lakeTiles,
     };
@@ -587,71 +744,104 @@ export class GameWorld {
 
   addBuilding(building: Building): void {
     this.buildings.push(building);
+    this.entityIndex.addBuilding(building);
     this.grid[building.y][building.x] = { x: building.x, y: building.y, type: 'building', buildingId: building.id };
     this.markStaticRenderDirty();
+  }
+
+  private addCar(car: Car): void {
+    this.cars.push(car);
+    this.entityIndex.addCar(car);
+  }
+
+  private replaceCars(cars: Car[]): void {
+    this.cars = cars;
+    this.entityIndex.rebuildCars(cars);
   }
 
   canBuildRoadOverBuildings(): boolean {
     return this.allowRoadDemolition;
   }
-
+  private isPerformanceHighLoadMode(): boolean {
+    const metrics = this.performanceProfiler.getSnapshot();
+    return this.cars.length >= PERFORMANCE_CONFIG.highLoadCars
+      || metrics.frameMs >= PERFORMANCE_CONFIG.highLoadFrameMs
+      || metrics.updateMs >= PERFORMANCE_CONFIG.highLoadUpdateMs;
+  }
   update(deltaSeconds: number, speed: number, paused: boolean): void {
     if (paused || speed === 0) return;
+    this.performanceProfiler.beginUpdate();
 
-    const scaledDeltaSeconds = Math.min(
-      Math.max(0, deltaSeconds) * Math.max(0, speed),
-      MAX_TRAFFIC_CATCH_UP_SECONDS,
-    );
-
+    const rawDeltaSeconds = Math.max(0, deltaSeconds) * Math.max(0, speed);
+    const scaledDeltaSeconds = Math.min(rawDeltaSeconds, MAX_TRAFFIC_CATCH_UP_SECONDS);
     let remainingSeconds = scaledDeltaSeconds;
-    while (remainingSeconds > 0.0001) {
+    const highLoadMode = this.isPerformanceHighLoadMode();
+    const maxFixedSteps = highLoadMode
+      ? PERFORMANCE_CONFIG.maxFixedStepsHighLoad
+      : PERFORMANCE_CONFIG.maxFixedStepsNormal;
+
+    let fixedSteps = 0;
+    while (remainingSeconds > 0.0001 && fixedSteps < maxFixedSteps) {
       const dt = Math.min(FIXED_TRAFFIC_STEP_SECONDS, remainingSeconds);
       this.updateStep(dt);
       remainingSeconds -= dt;
+      fixedSteps += 1;
     }
-  }
 
+    if (remainingSeconds > 0.0001) {
+      const discardedMs = remainingSeconds * 1000;
+      const discardedSteps = Math.ceil(remainingSeconds / FIXED_TRAFFIC_STEP_SECONDS);
+      this.performanceProfiler.recordBacklogDiscarded(discardedMs, discardedSteps);
+      remainingSeconds = 0;
+    }
+
+    this.performanceProfiler.setCounters({ highLoadMode: highLoadMode ? 1 : 0 });
+  }
   private updateStep(dt: number): void {
-    this.time.update(dt);
-    this.updateDailyBuildingActivity();
-    this.updateTrafficLights(dt);
+    const stepStarted = performance.now();
+    this.performanceProfiler.addFixedStep();
+
+    this.performanceProfiler.time('timeSystemMs', () => this.time.update(dt));
+    this.performanceProfiler.time('buildingActivityMs', () => this.updateDailyBuildingActivity());
+    this.performanceProfiler.time('trafficLightsMs', () => this.updateTrafficLights(dt));
     this.buildingTimer += dt;
     this.buildingUpgradeTimer += dt;
     this.tripTimer += dt;
     this.economyTimer += dt;
 
-    this.updateTransitStops(dt);
-    this.updateMetro(dt);
-    this.updateBikeTrips(dt);
-    this.updateConnections();
-    this.refreshSelectedBuilding();
+    this.performanceProfiler.time('transitStopsMs', () => this.updateTransitStops(dt));
+    this.performanceProfiler.time('metroMs', () => this.updateMetro(dt));
+    this.performanceProfiler.time('bikeTripsMs', () => this.updateBikeTrips(dt));
+    this.performanceProfiler.time('updateConnectionsMs', () => this.updateConnectionsOptimized(dt));
+    this.performanceProfiler.time('refreshSelectedMs', () => this.refreshSelectedBuilding());
 
     const singleTrafficMapPass = this.cars.length >= SINGLE_TRAFFIC_MAP_PASS_CAR_THRESHOLD;
-    if (!singleTrafficMapPass) this.updateTrafficMap();
-    this.updateCars(dt);
-    this.updateTrafficMap();
+    if (!singleTrafficMapPass) this.performanceProfiler.time('trafficMapMs', () => this.updateTrafficMap());
+    this.performanceProfiler.time('updateCarsMs', () => this.updateCars(dt));
+    this.updateTrafficMapOptimized(dt);
 
     if (this.tripTimer >= GAME_CONFIG.tripGenerationEverySeconds) {
       this.tripTimer = 0;
-      this.generateTrips();
+      this.performanceProfiler.time('generateTripsMs', () => this.generateTrips());
     }
 
     if (this.buildingTimer >= GAME_CONFIG.spawnBuildingEverySeconds) {
       this.buildingTimer = 0;
-      this.growCity();
+      this.performanceProfiler.time('growCityMs', () => this.growCity());
     }
 
     if (this.buildingUpgradeTimer >= BUILDING_UPGRADE_EVERY_SECONDS) {
       this.buildingUpgradeTimer = 0;
-      this.updateBuildingUpgrades();
+      this.performanceProfiler.time('buildingUpgradeMs', () => this.updateBuildingUpgrades());
     }
 
     if (this.economyTimer >= GAME_CONFIG.economyTickSeconds) {
       this.economyTimer = 0;
-      this.updateEconomyAndSatisfaction();
+      this.performanceProfiler.time('economyMs', () => this.updateEconomyAndSatisfaction());
     }
 
-    this.recordHistorySample();
+    this.performanceProfiler.time('historyMs', () => this.recordHistorySample());
+    this.performanceProfiler.recordUpdateStep(performance.now() - stepStarted);
   }
 
   buildAt(x: number, y: number, tool: Tool): boolean {
@@ -720,7 +910,7 @@ export class GameWorld {
       if (this.trafficLights.has(key)) return false;
       if (this.money < TRAFFIC_LIGHT_BUILD_COST) return false;
 
-      const demand = this.getTrafficLightDemandForKey(x, y);
+      const demand = this.getTrafficLightDemandAt(x, y);
       const preferredAxis: TrafficLightAxis = demand.horizontalQueue >= demand.verticalQueue ? 'horizontal' : 'vertical';
       this.trafficLights.set(key, createTrafficLight(x, y, this.trafficLights.size, preferredAxis));
       this.markStaticRenderDirty();
@@ -1059,11 +1249,11 @@ export class GameWorld {
   }
 
   getCar(carId: string): Car | undefined {
-    return this.cars.find((c) => c.id === carId);
+    return this.entityIndex.getById(carId);
   }
 
   getBuilding(id: string): Building | undefined {
-    return this.buildings.find((b) => b.id === id);
+    return this.entityIndex.getBuildingById(id);
   }
 
   getTransitStop(id: string): TransitStop | undefined {
@@ -1110,12 +1300,14 @@ export class GameWorld {
   private removeBuildingForRoad(buildingId: string): void {
     const building = this.getBuilding(buildingId);
     if (!building) return;
+    this.entityIndex.removeBuilding(buildingId);
     this.buildings = this.buildings.filter((candidate) => candidate.id !== buildingId);
     this.markStaticRenderDirty();
-    this.cars = this.cars.filter((car) => (
+    const nextCars = this.cars.filter((car) => (
       car.vehicleType === 'bus'
       || (car.originBuildingId !== buildingId && car.destinationBuildingId !== buildingId)
     ));
+    this.replaceCars(nextCars);
     if (this.selected.kind === 'building' && this.selected.building.id === buildingId) {
       this.selected = { kind: 'tile', x: building.x, y: building.y, type: 'empty' };
     }
@@ -1126,7 +1318,7 @@ export class GameWorld {
 
   private rebuildTransitLine(): void {
     const desiredBusCount = this.getDesiredTransitBusCount();
-    this.cars = this.cars.filter((car) => car.vehicleType !== 'bus');
+    this.replaceCars(this.cars.filter((car) => car.vehicleType !== 'bus'));
 
     const orderedStops = this.orderTransitStops();
     if (orderedStops.length < 2) {
@@ -1206,7 +1398,7 @@ export class GameWorld {
     for (let index = 0; index < busCount; index += 1) {
       const stopIndex = Math.floor((index / busCount) * this.transitLine.stopIds.length);
       const bus = this.createTransitBus(stopIndex);
-      if (bus) this.cars.push(bus);
+      if (bus) this.addCar(bus);
     }
   }
 
@@ -1465,14 +1657,16 @@ export class GameWorld {
       if (next.connected !== building.connected) changed = true;
       return next;
     });
+    this.entityIndex.rebuildBuildings(this.buildings);
     if (changed) this.markStaticRenderDirty();
   }
 
   private updateTrafficLights(dt: number): void {
     if (!this.trafficLights.size) return;
+    const demands = this.buildTrafficLightDemands();
 
     for (const [key, light] of this.trafficLights) {
-      const demand = this.getTrafficLightDemandForKey(light.x, light.y);
+      const demand = demands.get(key) ?? EMPTY_TRAFFIC_LIGHT_DEMAND;
       const nextLight = updateTrafficLight(light, dt, demand);
       this.trafficLights.set(key, nextLight);
       this.debugTrafficLight(key, nextLight, demand, dt);
@@ -1484,6 +1678,77 @@ export class GameWorld {
         this.selected = { ...this.selected, trafficLight: this.trafficLights.get(selectedKey) };
       }
     }
+  }
+
+  private buildTrafficLightDemands(): Map<string, TrafficLightDemand> {
+    const demands = new Map<string, TrafficLightDemand>();
+    const ensureDemand = (key: string): TrafficLightDemand => {
+      let demand = demands.get(key);
+      if (!demand) {
+        demand = { ...EMPTY_TRAFFIC_LIGHT_DEMAND };
+        demands.set(key, demand);
+      }
+      return demand;
+    };
+
+    for (const car of this.cars) {
+      if (car.status === 'arrived' || car.lifecyclePhase !== 'driving') continue;
+      const current = car.route[car.routeIndex];
+      const next = car.route[car.routeIndex + 1];
+      const currentKey = keyOf(car.currentTileX, car.currentTileY);
+
+      if (this.trafficLights.has(currentKey)) {
+        const demand = ensureDemand(currentKey);
+        demand.occupiedCount += 1;
+        demand.maxInsideWait = Math.max(demand.maxInsideWait, car.insideIntersectionSeconds, car.stuckSeconds);
+      }
+
+      if (!current || !next) continue;
+      const nextKey = keyOf(next.x, next.y);
+      if (!this.trafficLights.has(nextKey)) continue;
+
+      const closeToStopLine = car.progressToNext >= 0.35;
+      const slowOrStopped = car.currentSpeed < 0.35 || car.status === 'stopped';
+      if (!closeToStopLine && !slowOrStopped) continue;
+
+      const demand = ensureDemand(nextKey);
+      const axis = getTrafficLightAxis(getDirection(current, next));
+      const wait = Math.max(car.intersectionWaitSeconds, car.stuckSeconds, car.waitTimer);
+      if (axis === 'horizontal') {
+        demand.horizontalQueue += 1;
+        demand.horizontalMaxWait = Math.max(demand.horizontalMaxWait, wait);
+      } else {
+        demand.verticalQueue += 1;
+        demand.verticalMaxWait = Math.max(demand.verticalMaxWait, wait);
+      }
+    }
+    return demands;
+  }
+
+  private getTrafficLightDemandAt(x: number, y: number): TrafficLightDemand {
+    const key = keyOf(x, y);
+    const demand: TrafficLightDemand = { ...EMPTY_TRAFFIC_LIGHT_DEMAND };
+    for (const car of this.entityIndex.getCarsForIntersection(x, y)) {
+      if (car.status === 'arrived' || car.lifecyclePhase !== 'driving') continue;
+      const current = car.route[car.routeIndex];
+      const next = car.route[car.routeIndex + 1];
+      if (car.currentTileX === x && car.currentTileY === y) {
+        demand.occupiedCount += 1;
+        demand.maxInsideWait = Math.max(demand.maxInsideWait, car.insideIntersectionSeconds, car.stuckSeconds);
+      }
+      if (!current || !next || keyOf(next.x, next.y) !== key) continue;
+      if (car.progressToNext < 0.35 && car.currentSpeed >= 0.35 && car.status !== 'stopped') continue;
+      const axis = getTrafficLightAxis(getDirection(current, next));
+      const wait = Math.max(car.intersectionWaitSeconds, car.stuckSeconds, car.waitTimer);
+      if (axis === 'horizontal') {
+        demand.horizontalQueue += 1;
+        demand.horizontalMaxWait = Math.max(demand.horizontalMaxWait, wait);
+      } else {
+        demand.verticalQueue += 1;
+        demand.verticalMaxWait = Math.max(demand.verticalMaxWait, wait);
+      }
+    }
+    return demand;
   }
 
   private debugTrafficLight(key: string, light: TrafficLightState, demand: TrafficLightDemand, dt: number): void {
@@ -1517,43 +1782,6 @@ export class GameWorld {
         maxInsideWait: Number(demand.maxInsideWait.toFixed(1)),
       },
     });
-  }
-
-  private getTrafficLightDemandForKey(x: number, y: number): TrafficLightDemand {
-    const key = getTrafficLightKey(x, y);
-    const demand: TrafficLightDemand = { ...EMPTY_TRAFFIC_LIGHT_DEMAND };
-
-    for (const car of this.cars) {
-      if (car.status === 'arrived') continue;
-      if (car.lifecyclePhase !== 'driving') continue;
-      const current = car.route[car.routeIndex];
-      const next = car.route[car.routeIndex + 1];
-
-      if (car.currentTileX === x && car.currentTileY === y) {
-        demand.occupiedCount += 1;
-        demand.maxInsideWait = Math.max(demand.maxInsideWait, car.insideIntersectionSeconds, car.stuckSeconds);
-      }
-
-      if (!current || !next) continue;
-      if (keyOf(next.x, next.y) !== key) continue;
-
-      const axis = getTrafficLightAxis(getDirection(current, next));
-      const closeToStopLine = car.progressToNext >= 0.35;
-      const slowOrStopped = car.currentSpeed < 0.35 || car.status === 'stopped';
-      const wait = Math.max(car.intersectionWaitSeconds, car.stuckSeconds, car.waitTimer);
-
-      if (!closeToStopLine && !slowOrStopped) continue;
-
-      if (axis === 'horizontal') {
-        demand.horizontalQueue += 1;
-        demand.horizontalMaxWait = Math.max(demand.horizontalMaxWait, wait);
-      } else {
-        demand.verticalQueue += 1;
-        demand.verticalMaxWait = Math.max(demand.verticalMaxWait, wait);
-      }
-    }
-
-    return demand;
   }
 
   private prepareTrafficForNewSignal(key: string, x: number, y: number): void {
@@ -1615,13 +1843,26 @@ export class GameWorld {
     }
     this.traffic = map;
   }
-
   private generateTrips(): void {
     const multiplier = this.time.getTripMultiplier();
-    const population = this.getSnapshot().population;
-    const attempts = Math.max(1, Math.floor((population / 32) * multiplier));
+    const population = this.buildings.reduce((sum, b) => sum + b.population, 0);
+    const desiredAttempts = Math.max(1, Math.floor((population / 32) * multiplier));
+    const highLoad = this.isPerformanceHighLoadMode();
+    const extremeLoad = this.cars.length >= PERFORMANCE_CONFIG.tripBudgetExtremeCars;
+    const attemptBudget = highLoad
+      ? (extremeLoad ? PERFORMANCE_CONFIG.tripAttemptBudgetExtremeLoad : PERFORMANCE_CONFIG.tripAttemptBudgetHighLoad)
+      : desiredAttempts;
+    const spawnBudget = highLoad
+      ? (extremeLoad ? PERFORMANCE_CONFIG.tripSpawnBudgetExtremeLoad : PERFORMANCE_CONFIG.tripSpawnBudgetHighLoad)
+      : Number.POSITIVE_INFINITY;
+
+    let attempts = Math.min(desiredAttempts, attemptBudget);
+    let spawnedCars = 0;
+    let skippedAttempts = Math.max(0, desiredAttempts - attempts);
+    let skippedSpawns = 0;
+
     for (let i = 0; i < attempts; i++) {
-      if (this.getPrivateCarCount() >= this.getMaxCars()) return;
+      if (this.getPrivateCarCount() >= this.getMaxCars()) break;
       if (Math.random() > 0.62) continue;
       const trip = chooseTrip(this.buildings, this.time.getPeriod());
       if (!trip || !trip.origin.nearestRoad || !trip.destination.nearestRoad) {
@@ -1649,7 +1890,11 @@ export class GameWorld {
         trip.destination.tripsToday += 1;
         continue;
       }
-      const route = findFastestPath(this.grid, this.traffic, trip.origin.nearestRoad, trip.destination.nearestRoad);
+      if (spawnedCars >= spawnBudget) {
+        skippedSpawns += 1;
+        continue;
+      }
+      const route = this.performanceProfiler.time('pathfindingSyncMs', () => findFastestPath(this.grid, this.traffic, trip.origin.nearestRoad!, trip.destination.nearestRoad!));
       if (route.length < 2) {
         this.recordFailedTrip();
         continue;
@@ -1662,7 +1907,7 @@ export class GameWorld {
         this.debugSpawnBlocked(route[0], initialDirection);
         continue;
       }
-      this.cars.push({
+      this.addCar({
         id: carId,
         originBuildingId: trip.origin.id,
         destinationBuildingId: trip.destination.id,
@@ -1706,30 +1951,42 @@ export class GameWorld {
         signalTransitionGraceSeconds: 0,
         intersectionReason: undefined,
       });
+      spawnedCars += 1;
       trip.origin.tripsToday += 1;
       trip.destination.tripsToday += 1;
     }
+
+    this.performanceProfiler.recordTripBudget(skippedAttempts, skippedSpawns);
   }
 
   private updateCars(dt: number): void {
     this.performanceUpdateTick = (this.performanceUpdateTick + 1) % 300000;
+    if (PERFORMANCE_CONFIG.enableEntityIndexValidation
+      && this.performanceUpdateTick % PERFORMANCE_CONFIG.entityIndexValidationEveryTicks === 0
+      && !this.entityIndex.validate(this.cars, this.buildings)) {
+      console.warn('[performance] Índice persistente divergente; reconstruindo.');
+      this.entityIndex.rebuild(this.cars, this.buildings);
+    }
     const arrived: Car[] = [];
     const failed: Car[] = [];
-    const drivingCars = this.cars.filter((car) => car.lifecyclePhase === 'driving');
-    const carSpatialIndex = createCarSpatialIndex(drivingCars);
-    const intersectionControls = buildIntersectionControls(this.grid, drivingCars, carSpatialIndex);
-    const sortedCars = [...this.cars].sort((a, b) => this.carUpdatePriority(b) - this.carUpdatePriority(a));
+    for (const car of this.cars) car.travelTime += dt;
+
+    const detailedCars = this.performanceProfiler.time('carGroupingMs', () => this.prepareCarUpdateGroups(dt));
+    const detailedDrivingCars = detailedCars.filter((car) => car.lifecyclePhase === 'driving');
+    const intersectionControls = buildIntersectionControls(this.grid, detailedDrivingCars, this.entityIndex);
+    const sortedCars = this.getCarUpdateOrder(detailedCars);
+    const detailedStarted = performance.now();
 
     for (let carIndex = 0; carIndex < sortedCars.length; carIndex += 1) {
       const car = sortedCars[carIndex];
-      car.travelTime += dt;
-      if (this.shouldUseReducedCarUpdate(car)) {
-        this.advanceDistantCarLightweight(car, dt);
-        continue;
-      }
+      const updateDt = Math.max(dt, Math.min(
+        PERFORMANCE_CONFIG.groupedCarMaxAccumulatedDt,
+        car.backgroundAccumulatedDt ?? dt,
+      ));
+      car.backgroundAccumulatedDt = 0;
       if (car.lifecyclePhase === 'spawnExit') {
-        car.lifecycleProgress += dt / CAR_SPAWN_EXIT_SECONDS;
-        car.currentSpeed = Math.min(car.desiredSpeed, car.currentSpeed + car.acceleration * dt);
+        car.lifecycleProgress += updateDt / CAR_SPAWN_EXIT_SECONDS;
+        car.currentSpeed = Math.min(car.desiredSpeed, car.currentSpeed + car.acceleration * updateDt);
         car.targetSpeed = car.desiredSpeed;
         car.trafficState = 'moving';
         car.status = 'moving';
@@ -1742,12 +1999,13 @@ export class GameWorld {
           car.currentTileX = car.route[0].x;
           car.currentTileY = car.route[0].y;
         }
+        this.entityIndex.syncCar(car);
         continue;
       }
 
       if (car.lifecyclePhase === 'destinationEntry') {
-        car.lifecycleProgress += dt / CAR_DESTINATION_ENTRY_SECONDS;
-        car.currentSpeed = Math.max(0, car.currentSpeed - car.braking * dt);
+        car.lifecycleProgress += updateDt / CAR_DESTINATION_ENTRY_SECONDS;
+        car.currentSpeed = Math.max(0, car.currentSpeed - car.braking * updateDt);
         car.targetSpeed = 0;
         car.trafficState = 'moving';
         car.status = 'moving';
@@ -1755,16 +2013,17 @@ export class GameWorld {
           car.status = 'arrived';
           arrived.push(car);
         }
+        this.entityIndex.syncCar(car);
         continue;
       }
 
-      if (this.updateTransitBusDwell(car, dt)) {
+      if (this.updateTransitBusDwell(car, updateDt)) {
         continue;
       }
 
-      if (car.rerouteCooldownSeconds > 0) car.rerouteCooldownSeconds = Math.max(0, car.rerouteCooldownSeconds - dt);
+      if (car.rerouteCooldownSeconds > 0) car.rerouteCooldownSeconds = Math.max(0, car.rerouteCooldownSeconds - updateDt);
       if (car.signalTransitionGraceSeconds > 0) {
-        car.signalTransitionGraceSeconds = Math.max(0, car.signalTransitionGraceSeconds - dt);
+        car.signalTransitionGraceSeconds = Math.max(0, car.signalTransitionGraceSeconds - updateDt);
         if (car.signalTransitionGraceSeconds === 0) car.signalTransitionKey = undefined;
       }
 
@@ -1784,8 +2043,8 @@ export class GameWorld {
             stopBeforeMoving: false,
           });
         if (!rerouted) {
-          car.stuckSeconds += dt;
-          car.immobileSeconds += dt;
+          car.stuckSeconds += updateDt;
+          car.immobileSeconds += updateDt;
           if (car.stuckSeconds >= ROAD_RULE_NO_ROUTE_SECONDS) {
             car.status = 'no_route';
             car.lastRerouteReason = 'Sem rota após mudança de mão única';
@@ -1800,7 +2059,7 @@ export class GameWorld {
       const traffic = this.traffic.get(keyOf(car.currentTileX, car.currentTileY));
       const rawCongestion = traffic?.congestion ?? 0;
       const congestion = this.getCongestionForCar(car, rawCongestion, nextRouteTile);
-      const decision = computeTrafficDecision(this.grid, car, drivingCars, intersectionControls, this.trafficLights, congestion, carSpatialIndex);
+      const decision = computeTrafficDecision(this.grid, car, detailedDrivingCars, intersectionControls, this.trafficLights, congestion, this.entityIndex);
       const busLaneSpeedMultiplier = this.getBusLaneSpeedMultiplierForCar(car, nextRouteTile);
       car.desiredSpeed = decision.desiredSpeed * busLaneSpeedMultiplier;
       car.targetSpeed = decision.targetSpeed * busLaneSpeedMultiplier;
@@ -1814,9 +2073,9 @@ export class GameWorld {
       car.intersectionQueuePosition = decision.intersectionQueuePosition;
       car.intersectionQueueLength = decision.intersectionQueueLength;
       car.intersectionReason = decision.intersectionReason;
-      applySmoothSpeed(car, car.targetSpeed, dt, decision.hardStop);
+      applySmoothSpeed(car, car.targetSpeed, updateDt, decision.hardStop);
       car.status = car.currentSpeed < 0.08 ? 'stopped' : 'moving';
-      car.turnSlowdown = decision.turning ? Math.max(car.turnSlowdown, 0.32) : Math.max(0, car.turnSlowdown - dt);
+      car.turnSlowdown = decision.turning ? Math.max(car.turnSlowdown, 0.32) : Math.max(0, car.turnSlowdown - updateDt);
 
       if (decision.intersectionStopKey) {
         if (car.intersectionStopKey !== decision.intersectionStopKey) {
@@ -1830,8 +2089,8 @@ export class GameWorld {
           if (this.nextPriorityToken > Number.MAX_SAFE_INTEGER - 1000) this.nextPriorityToken = 1;
         }
         if (decision.state === 'intersection') {
-          car.waitTimer += dt;
-          car.intersectionWaitSeconds += dt;
+          car.waitTimer += updateDt;
+          car.intersectionWaitSeconds += updateDt;
           car.gridlockEscapeSeconds = Math.max(0, car.intersectionWaitSeconds - 5);
         }
       } else {
@@ -1846,22 +2105,22 @@ export class GameWorld {
 
       const insideIntersection = isIntersection(this.grid, { x: car.currentTileX, y: car.currentTileY });
       if (insideIntersection && car.currentSpeed < 0.18) {
-        car.insideIntersectionSeconds += dt;
+        car.insideIntersectionSeconds += updateDt;
       } else if (!insideIntersection) {
         car.insideIntersectionSeconds = 0;
       } else {
-        car.insideIntersectionSeconds = Math.max(0, car.insideIntersectionSeconds - dt * 2);
+        car.insideIntersectionSeconds = Math.max(0, car.insideIntersectionSeconds - updateDt * 2);
       }
 
       if (car.currentSpeed < 0.08 && car.targetSpeed < 0.2) {
-        car.stuckSeconds += dt;
+        car.stuckSeconds += updateDt;
       } else if (car.currentSpeed > 0.25) {
-        car.stuckSeconds = Math.max(0, car.stuckSeconds - dt * 2.5);
+        car.stuckSeconds = Math.max(0, car.stuckSeconds - updateDt * 2.5);
       }
 
-      this.updateImmobileTimer(car, dt);
+      this.updateImmobileTimer(car, updateDt);
 
-      if (car.currentSpeed < 0.25) car.delay += dt;
+      if (car.currentSpeed < 0.25) car.delay += updateDt;
 
       if (this.shouldRemoveStuckCar(car)) {
         car.status = 'no_route';
@@ -1881,7 +2140,7 @@ export class GameWorld {
         }
       }
 
-      car.progressToNext += car.currentSpeed * dt;
+      car.progressToNext += car.currentSpeed * updateDt;
       while (car.progressToNext >= 1 && car.routeIndex < car.route.length - 1) {
         car.progressToNext -= 1;
         car.routeIndex += 1;
@@ -1921,7 +2180,9 @@ export class GameWorld {
         car.x = current.x + (next.x - current.x) * car.progressToNext + car.laneOffset.x;
         car.y = current.y + (next.y - current.y) * car.progressToNext + car.laneOffset.y;
       }
+      this.entityIndex.syncCar(car);
     }
+    this.performanceProfiler.recordTiming('detailedCarsMs', performance.now() - detailedStarted);
     if (arrived.length) {
       for (const car of arrived) {
         this.completedTrips += 1;
@@ -1935,30 +2196,339 @@ export class GameWorld {
       }
     }
     if (arrived.length || failed.length) {
-      this.cars = this.cars.filter((c) => c.status !== 'arrived' && c.status !== 'no_route');
+      this.replaceCars(this.cars.filter((c) => c.status !== 'arrived' && c.status !== 'no_route'));
       this.averageTravelTime = this.tripHistory.length ? this.tripHistory.reduce((a, b) => a + b, 0) / this.tripHistory.length : 0;
     }
   }
+  private updateConnectionsOptimized(dt: number): void {
+    const highLoad = this.cars.length >= PERFORMANCE_CONFIG.connectionUpdateHighLoadThresholdCars;
+    if (!highLoad) {
+      this.updateConnections();
+      this.connectionUpdateAccumulator = 0;
+      this.lastConnectionStaticRenderVersion = this.staticRenderVersion;
+      return;
+    }
 
+    this.connectionUpdateAccumulator += dt;
+    const staticChanged = this.staticRenderVersion !== this.lastConnectionStaticRenderVersion;
+    const interval = this.cars.length >= PERFORMANCE_CONFIG.trafficWorkerHighLoadThresholdCars
+      ? PERFORMANCE_CONFIG.connectionUpdateHighLoadIntervalSeconds
+      : PERFORMANCE_CONFIG.connectionUpdateIntervalSeconds;
+
+    if (!staticChanged && this.connectionUpdateAccumulator < interval) {
+      this.performanceProfiler.recordConnectionSkip();
+      return;
+    }
+
+    this.connectionUpdateAccumulator = 0;
+    this.lastConnectionStaticRenderVersion = this.staticRenderVersion;
+    this.updateConnections();
+  }
+
+  private prepareCarUpdateGroups(dt: number): Car[] {
+    const totalCars = this.cars.length;
+    if (totalCars < PERFORMANCE_CONFIG.groupedCarUpdateThreshold) {
+      this.performanceProfiler.setCounters({
+        criticalCars: totalCars,
+        visibleDetailedCars: 0,
+        backgroundCars: 0,
+        backgroundCarsUpdated: 0,
+      });
+      return this.cars;
+    }
+
+    const batches = totalCars >= PERFORMANCE_CONFIG.groupedCarUpdateExtremeThreshold
+      ? PERFORMANCE_CONFIG.groupedCarUpdateExtremeBatches
+      : PERFORMANCE_CONFIG.groupedCarUpdateBatches;
+    const detailed: Car[] = [];
+    let criticalCars = 0;
+    let visibleCars = 0;
+    let backgroundCars = 0;
+    let backgroundCarsUpdated = 0;
+    const lightweightStarted = performance.now();
+
+    for (const car of this.cars) {
+      if (this.isCriticalCarForDetailedUpdate(car)) {
+        car.backgroundAccumulatedDt = Math.min(
+          PERFORMANCE_CONFIG.groupedCarMaxAccumulatedDt,
+          (car.backgroundAccumulatedDt ?? 0) + dt,
+        );
+        detailed.push(car);
+        criticalCars += 1;
+        continue;
+      }
+
+      if (this.isCarInsideActiveViewport(car, PERFORMANCE_CONFIG.groupedCarViewportPaddingTiles)) {
+        car.backgroundAccumulatedDt = Math.min(
+          PERFORMANCE_CONFIG.groupedCarMaxAccumulatedDt,
+          (car.backgroundAccumulatedDt ?? 0) + dt,
+        );
+        detailed.push(car);
+        visibleCars += 1;
+        continue;
+      }
+
+      backgroundCars += 1;
+      car.backgroundAccumulatedDt = Math.min(
+        PERFORMANCE_CONFIG.groupedCarMaxAccumulatedDt,
+        (car.backgroundAccumulatedDt ?? 0) + dt,
+      );
+      if (this.performanceUpdateTick % batches !== this.getCarPerformanceBucket(car) % batches) continue;
+
+      const accumulatedDt = car.backgroundAccumulatedDt;
+      if (this.shouldPromoteBackgroundCar(car, accumulatedDt)) {
+        detailed.push(car);
+        criticalCars += 1;
+        continue;
+      }
+
+      this.advanceDistantCarLightweight(car, accumulatedDt);
+      car.backgroundAccumulatedDt = 0;
+      this.entityIndex.syncCar(car);
+      backgroundCarsUpdated += 1;
+    }
+
+    this.performanceProfiler.setCounters({
+      criticalCars,
+      visibleDetailedCars: visibleCars,
+      backgroundCars,
+      backgroundCarsUpdated,
+      reducedCars: backgroundCars,
+    });
+    this.performanceProfiler.recordTiming('lightweightCarsMs', performance.now() - lightweightStarted);
+    return detailed;
+  }
+
+  private isCriticalCarForDetailedUpdate(car: Car): boolean {
+    if (car.vehicleType === 'bus') return true;
+    if (this.selected.kind === 'car' && this.selected.carId === car.id) return true;
+    if (car.lifecyclePhase !== 'driving') return true;
+    if (car.status !== 'moving' || car.trafficState !== 'moving') return true;
+    if (car.intersectionStopKey || car.signalTransitionGraceSeconds > 0) return true;
+    if (car.stuckSeconds > 0.2 || car.immobileSeconds > 0.2 || car.rerouteCooldownSeconds > 0) return true;
+    const current = { x: car.currentTileX, y: car.currentTileY };
+    if (isIntersection(this.grid, current)) return true;
+    const next = car.route[car.routeIndex + 1];
+    return Boolean(next && isIntersection(this.grid, next)
+      && car.progressToNext >= PERFORMANCE_CONFIG.groupedCarIntersectionPromotionProgress);
+  }
+
+  private shouldPromoteBackgroundCar(car: Car, dt: number): boolean {
+    const current = car.route[car.routeIndex];
+    const next = car.route[car.routeIndex + 1];
+    if (!current || !next) return true;
+    if (isIntersection(this.grid, current)) return true;
+    if (!isIntersection(this.grid, next)) return false;
+    const projectedProgress = car.progressToNext + Math.max(0.25, car.currentSpeed || car.baseSpeed) * dt;
+    return projectedProgress >= PERFORMANCE_CONFIG.groupedCarIntersectionPromotionProgress;
+  }
+
+  private isCarInsideActiveViewport(car: Car, paddingTiles: number): boolean {
+    if (this.isTileInsideActiveViewport(car.currentTileX, car.currentTileY, paddingTiles)) return true;
+    const next = car.route[car.routeIndex + 1];
+    return Boolean(next && this.isTileInsideActiveViewport(next.x, next.y, paddingTiles));
+  }
+
+  private getCarPerformanceBucket(car: Car): number {
+    if (car.performanceBucket !== undefined) return car.performanceBucket;
+    car.performanceBucket = this.carUpdateBucket(car);
+    return car.performanceBucket;
+  }
+
+  private updateTrafficMapOptimized(dt: number): void {
+    const shouldUseWorker = this.cars.length >= PERFORMANCE_CONFIG.trafficWorkerThresholdCars;
+    if (!shouldUseWorker) {
+      this.performanceProfiler.time('trafficMapMs', () => this.updateTrafficMap());
+      return;
+    }
+
+    this.trafficMapWorkerAccumulator += dt;
+    const interval = this.cars.length >= PERFORMANCE_CONFIG.trafficWorkerHighLoadThresholdCars
+      ? PERFORMANCE_CONFIG.trafficWorkerHighLoadIntervalSeconds
+      : PERFORMANCE_CONFIG.trafficWorkerIntervalSeconds;
+
+    if (this.trafficMapWorkerAccumulator < interval || this.trafficMapWorkerInFlight) return;
+    this.trafficMapWorkerAccumulator = 0;
+    this.trafficMapWorkerInFlight = true;
+
+    const client = getTrafficMapClient();
+    client.request({
+      grid: createWorkerGridSnapshot(this.grid),
+      cars: createWorkerCarSnapshot(this.cars),
+    }).then((result) => {
+      this.trafficMapWorkerInFlight = false;
+      if (!result) {
+        this.performanceProfiler.time('trafficMapMs', () => this.updateTrafficMap());
+        return;
+      }
+      this.traffic = result.traffic;
+      this.performanceProfiler.recordTrafficWorker(result.durationMs);
+    }).catch(() => {
+      this.trafficMapWorkerInFlight = false;
+      this.performanceProfiler.time('trafficMapMs', () => this.updateTrafficMap());
+    });
+  }
+
+  private getCarUpdateOrder(cars: Car[]): Car[] {
+    if (cars.length < PERFORMANCE_CONFIG.reducedSortThresholdCars) {
+      const sorted = [...cars].sort((a, b) => this.carUpdatePriority(b) - this.carUpdatePriority(a));
+      this.performanceProfiler.setCounters({ sortedPriorityCars: sorted.length, sortedNormalCars: 0, activeCars: this.cars.length });
+      return sorted;
+    }
+
+    const priorityCars: Car[] = [];
+    const normalCars: Car[] = [];
+    for (const car of cars) {
+      if (this.needsPriorityCarUpdate(car)) priorityCars.push(car);
+      else normalCars.push(car);
+    }
+
+    priorityCars.sort((a, b) => this.carUpdatePriority(b) - this.carUpdatePriority(a));
+    this.performanceProfiler.setCounters({
+      sortedPriorityCars: priorityCars.length,
+      sortedNormalCars: normalCars.length,
+      activeCars: this.cars.length,
+    });
+    return [...priorityCars, ...normalCars];
+  }
+  private needsPriorityCarUpdate(car: Car): boolean {
+    if (car.vehicleType === 'bus') return true;
+    if (this.selected.kind === 'car' && this.selected.carId === car.id) return true;
+    if (car.lifecyclePhase !== 'driving') return true;
+    if (car.intersectionStopKey) return true;
+    if (car.signalTransitionGraceSeconds > 0) return true;
+    if (car.immobileSeconds > PERFORMANCE_CONFIG.priorityImmobileSeconds) return true;
+    if (car.stuckSeconds > PERFORMANCE_CONFIG.priorityStuckSeconds) return true;
+    const current = { x: car.currentTileX, y: car.currentTileY };
+    if (isIntersection(this.grid, current)) return true;
+    const next = car.route[car.routeIndex + 1];
+    return Boolean(next && car.progressToNext >= PERFORMANCE_CONFIG.priorityIntersectionProgressThreshold && isIntersection(this.grid, next));
+  }
+  private syncPathfindingWorkerSnapshots(trafficForReroute?: Map<string, TrafficCell>): void {
+    const now = performance.now();
+    const client = getPathfindingClient();
+    const gridChanged = this.pathfindingWorkerGridVersion !== this.staticRenderVersion;
+    const trafficStale = now - this.pathfindingWorkerTrafficSyncAt >= PERFORMANCE_CONFIG.pathfindingWorkerSnapshotSyncMs;
+    if (!gridChanged && !trafficStale) return;
+
+    client.updateSnapshots(
+      gridChanged ? createWorkerGridSnapshot(this.grid) : undefined,
+      trafficStale ? createWorkerTrafficSnapshot(trafficForReroute ?? this.traffic) : undefined,
+    );
+    if (gridChanged) this.pathfindingWorkerGridVersion = this.staticRenderVersion;
+    if (trafficStale) this.pathfindingWorkerTrafficSyncAt = now;
+  }
+  private shouldUseAsyncPathfinding(car: Car, options: RerouteOptions): boolean {
+    if (this.cars.length < PERFORMANCE_CONFIG.pathfindingWorkerThresholdCars) return false;
+    if (options.force) return false;
+    if (car.vehicleType === 'bus') return false;
+    if (this.asyncRerouteCarIds.has(car.id)) return false;
+    if (car.lifecyclePhase !== 'driving') return false;
+    if (this.selected.kind === 'car' && this.selected.carId === car.id) return false;
+    if (car.intersectionStopKey || car.signalTransitionGraceSeconds > 0) return false;
+    if (car.immobileSeconds > IMMOBILE_ESCAPE_SECONDS * 0.65) return false;
+    if (car.stuckSeconds > REROUTE_FORCE_SECONDS * 0.8) return false;
+    return true;
+  }
+  private requestAsyncCarReroute(car: Car, start: Vec2, destination: Vec2, trafficForReroute: Map<string, TrafficCell>, options: RerouteOptions): void {
+    const client = getPathfindingClient();
+    const highLoad = this.isPerformanceHighLoadMode();
+    const extremeLoad = this.cars.length >= PERFORMANCE_CONFIG.visibleReducedExtremeCars;
+
+    this.syncPathfindingWorkerSnapshots(trafficForReroute);
+    const requestedAt = performance.now();
+    const request = client.request({
+      carId: car.id,
+      start,
+      goal: destination,
+      options: { vehicleType: 'car' },
+    }, { highLoad, extremeLoad });
+
+    if (request.status !== 'accepted') {
+      if (request.status === 'deduped') this.performanceProfiler.recordPathfindingDropped('deduped');
+      else if (request.status === 'throttled') this.performanceProfiler.recordPathfindingDropped('throttled');
+      else this.performanceProfiler.recordPathfindingDropped('dropped');
+      car.rerouteCooldownSeconds = Math.max(car.rerouteCooldownSeconds, 0.8);
+      car.lastRerouteReason = request.status === 'deduped' ? 'Rota já pendente no worker' : 'Worker de rotas em orçamento';
+      this.holdCarForRoadRuleReroute(car, 'Aguardando orçamento de rota');
+      this.performanceProfiler.setCounters({ pathfindingPending: client.getPendingCount() });
+      return;
+    }
+
+    this.asyncRerouteCarIds.add(car.id);
+    car.rerouteCooldownSeconds = Math.max(car.rerouteCooldownSeconds, options.cooldownSeconds ?? REROUTE_COOLDOWN_SECONDS * 0.55);
+    car.lastRerouteReason = options.reason ?? 'Rota enviada para worker';
+    this.holdCarForRoadRuleReroute(car, 'Aguardando rota do worker');
+
+    request.promise.then((response) => {
+      this.asyncRerouteCarIds.delete(car.id);
+      const duration = response?.durationMs ?? performance.now() - requestedAt;
+      this.performanceProfiler.recordPathfindingWorker(duration, Boolean(response && response.route.length >= 2));
+      if (!response || response.route.length < 2) return;
+      this.applyWorkerRouteToCar(response.carId ?? car.id, response.route);
+    }).catch(() => {
+      this.asyncRerouteCarIds.delete(car.id);
+      this.performanceProfiler.recordPathfindingWorker(performance.now() - requestedAt, false);
+    });
+
+    this.performanceProfiler.setCounters({ pathfindingPending: client.getPendingCount() });
+  }
+
+  private applyWorkerRouteToCar(carId: string, route: Vec2[]): void {
+    const car = this.getCar(carId);
+    if (!car) return;
+    if (!isRouteLegal(this.grid, route)) return;
+    car.route = route;
+    car.routeIndex = 0;
+    car.progressToNext = 0;
+    const first = route[0];
+    if (first) {
+      car.currentTileX = first.x;
+      car.currentTileY = first.y;
+      car.x = first.x + car.laneOffset.x;
+      car.y = first.y + car.laneOffset.y;
+    }
+    car.status = 'moving';
+    car.trafficState = 'moving';
+    car.rerouteCount += 1;
+    car.repeatedRerouteCount = 0;
+    car.lastRerouteReason = 'Rota aplicada pelo worker';
+    this.entityIndex.syncCar(car);
+    this.performanceProfiler.setCounters({ pathfindingPending: getPathfindingClient().getPendingCount() });
+  }
   private shouldUseReducedCarUpdate(car: Car): boolean {
     if (!this.activeViewportBounds) return false;
     if (this.cars.length < REDUCED_CAR_UPDATE_THRESHOLD) return false;
     if (car.vehicleType === 'bus') return false;
     if (this.selected.kind === 'car' && this.selected.carId === car.id) return false;
     if (car.lifecyclePhase !== 'driving') return false;
-    if (car.status !== 'moving' || car.trafficState !== 'moving') return false;
-    if (car.currentSpeed < 0.35 || car.targetSpeed < 0.2) return false;
-    if (car.stuckSeconds > 0.2 || car.immobileSeconds > 0.2 || car.rerouteCooldownSeconds > 0) return false;
+    if (car.status !== 'moving' && car.status !== 'stopped') return false;
     if (car.intersectionStopKey || car.signalTransitionGraceSeconds > 0) return false;
+    if (car.immobileSeconds > PERFORMANCE_CONFIG.reducedCarMaxStuckSeconds) return false;
+    if (car.stuckSeconds > PERFORMANCE_CONFIG.reducedCarMaxStuckSeconds) return false;
 
     const current = { x: car.currentTileX, y: car.currentTileY };
     const next = car.route[car.routeIndex + 1];
     if (!next) return false;
-    if (this.isTileInsideActiveViewport(current.x, current.y, DISTANT_CAR_VIEWPORT_PADDING_TILES)) return false;
-    if (this.isTileInsideActiveViewport(next.x, next.y, DISTANT_CAR_VIEWPORT_PADDING_TILES)) return false;
-    if (isIntersection(this.grid, current) || isIntersection(this.grid, next)) return false;
+    if (isIntersection(this.grid, current)) return false;
+    if (isIntersection(this.grid, next) && car.progressToNext >= PERFORMANCE_CONFIG.visibleReducedIntersectionProgressThreshold) return false;
+    if (this.needsPriorityCarUpdate(car)) return false;
 
-    return this.performanceUpdateTick % DISTANT_CAR_UPDATE_EVERY_TICKS !== this.carUpdateBucket(car);
+    const outsideViewport = !this.isTileInsideActiveViewport(current.x, current.y, PERFORMANCE_CONFIG.reducedCarViewportPaddingTiles)
+      && !this.isTileInsideActiveViewport(next.x, next.y, PERFORMANCE_CONFIG.reducedCarViewportPaddingTiles);
+
+    if (outsideViewport) {
+      return this.performanceUpdateTick % PERFORMANCE_CONFIG.reducedCarUpdateEveryTicks !== this.carUpdateBucket(car);
+    }
+
+    const highLoad = this.isPerformanceHighLoadMode();
+    if (!highLoad) return false;
+    if (this.cars.length < PERFORMANCE_CONFIG.visibleReducedUpdateThresholdCars) return false;
+
+    const divisor = this.cars.length >= PERFORMANCE_CONFIG.visibleReducedExtremeCars
+      ? PERFORMANCE_CONFIG.visibleReducedUpdateEveryTicksExtreme
+      : PERFORMANCE_CONFIG.visibleReducedUpdateEveryTicks;
+    return this.performanceUpdateTick % divisor !== this.carUpdateBucket(car) % divisor;
   }
 
   private advanceDistantCarLightweight(car: Car, dt: number): void {
@@ -1973,6 +2543,15 @@ export class GameWorld {
 
     car.progressToNext += speed * dt;
     while (car.progressToNext >= 1 && car.routeIndex < car.route.length - 1) {
+      const nextPos = car.route[car.routeIndex + 1];
+      if (nextPos && isIntersection(this.grid, nextPos)) {
+        car.progressToNext = Math.min(0.99, car.progressToNext);
+        car.currentSpeed = 0;
+        car.targetSpeed = 0;
+        car.status = 'stopped';
+        car.trafficState = 'intersection';
+        break;
+      }
       car.progressToNext -= 1;
       car.routeIndex += 1;
       const pos = car.route[car.routeIndex];
@@ -2098,7 +2677,7 @@ export class GameWorld {
     const spawnY = origin.y + laneOffset.y;
     const laneAxis = direction === 'east' || direction === 'west' ? 'y' : 'x';
 
-    return this.cars.some((car) => {
+    return this.entityIndex.getCarsNearTile(origin.x, origin.y, 1).some((car) => {
       if (car.status === 'arrived') return false;
       if (car.lifecyclePhase !== 'driving') return false;
       if (Math.abs(car[laneAxis] - (laneAxis === 'x' ? spawnX : spawnY)) > 0.18) return false;
@@ -2124,7 +2703,11 @@ export class GameWorld {
     if (keyOf(start.x, start.y) === keyOf(destination.x, destination.y)) return false;
 
     const trafficForReroute = this.buildRerouteTraffic(car);
-    let newRoute = findFastestPath(this.grid, trafficForReroute, start, destination);
+    if (this.shouldUseAsyncPathfinding(car, options)) {
+      this.requestAsyncCarReroute(car, start, destination, trafficForReroute, options);
+      return true;
+    }
+    let newRoute = this.performanceProfiler.time('pathfindingSyncMs', () => findFastestPath(this.grid, trafficForReroute, start, destination));
     if (!isRouteLegal(this.grid, newRoute)) newRoute = [];
     if (newRoute.length < 2 && options.allowNeighborFallback) {
       newRoute = this.findBestFallbackRouteFromLegalNeighbor(start, destination, trafficForReroute);
@@ -2212,6 +2795,7 @@ export class GameWorld {
     car.blockedByCarId = undefined;
     car.trafficState = options.stopBeforeMoving ? 'queued' : 'moving';
     car.status = options.stopBeforeMoving ? 'stopped' : 'moving';
+    this.entityIndex.syncCar(car);
   }
 
   private rerouteCarsAfterRoadRuleChange(changedTiles: Vec2[]): void {
@@ -2394,6 +2978,7 @@ export class GameWorld {
       ...building,
       tripsToday: Math.floor(building.tripsToday * 0.25),
     }));
+    this.entityIndex.rebuildBuildings(this.buildings);
     this.refreshSelectedBuilding();
   }
 
@@ -2421,6 +3006,7 @@ export class GameWorld {
         ? applyBuildingLevel(building, nextLevel, this.time.getDay())
         : building
     ));
+    this.entityIndex.rebuildBuildings(this.buildings);
     this.markStaticRenderDirty();
     this.refreshSelectedBuilding();
   }

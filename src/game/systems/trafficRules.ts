@@ -282,7 +282,7 @@ export function computeTrafficDecision(
     state = turning ? 'turning' : 'moving';
     hardStop = false;
   } else if (isEnteringRoundabout(grid, current, next)) {
-    const roundaboutDecision = computeRoundaboutEntryDecision(grid, car, cars, next);
+    const roundaboutDecision = computeRoundaboutEntryDecision(grid, car, cars, next, spatialIndex);
     if (roundaboutDecision.blockedByCarId) {
       targetSpeed = car.progressToNext >= TRAFFIC_LIGHT_STOP_AT ? 0 : Math.min(targetSpeed, ROUNDABOUT_ENTRY_APPROACH_SPEED);
       state = 'intersection';
@@ -670,6 +670,7 @@ function computeRoundaboutEntryDecision(
   car: Car,
   cars: Car[],
   entryTile: Vec2,
+  spatialIndex?: CarSpatialIndex,
 ): { blockedByCarId?: string; targetSpeed: number; reason?: IntersectionReason } {
   const center = getRoundaboutCenter(grid, entryTile);
   if (!center) return { targetSpeed: ROUNDABOUT_ENTRY_FREE_SPEED };
@@ -679,7 +680,8 @@ function computeRoundaboutEntryDecision(
   let nearestConflictCarId: string | undefined;
   const enteringLaneIndex = getRoundaboutLaneIndexForCar(grid, car, car.route[car.routeIndex], entryTile);
 
-  for (const other of cars) {
+  const candidates = spatialIndex?.getCarsNearTile(center.x, center.y, 2) ?? cars;
+  for (const other of candidates) {
     if (other.id === car.id || other.status === 'arrived' || other.lifecyclePhase !== 'driving') continue;
     if (!isInsideRoundabout(grid, { x: other.currentTileX, y: other.currentTileY })) continue;
     const otherCenter = getRoundaboutCenter(grid, { x: other.currentTileX, y: other.currentTileY });

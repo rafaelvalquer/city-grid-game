@@ -7,7 +7,43 @@ import { MAP_COLORS } from './visualTheme';
 import type { Atmosphere, CarRenderPose } from './renderTypes';
 import { TURN_IN_START, TURN_OUT_END } from './renderTypes';
 import { carColor, directionAngle, drawCapsule, drawRotatedRect, idPhase, normalizeVec, pulse } from './renderUtils';
-export function drawCar(graphics: Graphics, car: Car, world: GameWorld, ts: number, timeSeconds: number, atmosphere: Atmosphere): void {
+import type { GraphicsSettings } from '../config/graphicsSettings';
+
+type VehicleGraphicsSettings = Pick<GraphicsSettings, 'vehicleShadows' | 'vehicleLights'>;
+
+export function drawCarLod(
+  graphics: Graphics,
+  car: Car,
+  world: GameWorld,
+  ts: number,
+  atmosphere: Atmosphere,
+  settings: VehicleGraphicsSettings,
+): void {
+  const pose = getCarRenderPose(car, world);
+  const cx = pose.x * ts + ts / 2;
+  const cy = pose.y * ts + ts / 2;
+  const isBus = car.vehicleType === 'bus';
+  const color = isBus ? 0x24a0b7 : carDestinationColor(world, car);
+  const radius = isBus ? 3.4 : 2.4;
+  const alpha = Math.max(0.55, Math.min(0.9, pose.alpha));
+  if (settings.vehicleShadows) {
+    graphics.circle(cx, cy, radius + 1.4).fill({ color: MAP_COLORS.shadow, alpha: 0.18 * alpha });
+  }
+  graphics.circle(cx, cy, radius).fill({ color, alpha });
+  if (settings.vehicleLights && atmosphere.headlightAlpha > 0.35 && !isBus) {
+    graphics.circle(cx, cy, radius + 1.2).stroke({ color: MAP_COLORS.carLight, width: 0.8, alpha: 0.32 * atmosphere.headlightAlpha });
+  }
+}
+
+export function drawCar(
+  graphics: Graphics,
+  car: Car,
+  world: GameWorld,
+  ts: number,
+  timeSeconds: number,
+  atmosphere: Atmosphere,
+  settings: VehicleGraphicsSettings,
+): void {
   const pose = getCarRenderPose(car, world);
   const cx = pose.x * ts + ts / 2;
   const cy = pose.y * ts + ts / 2;
@@ -24,7 +60,9 @@ export function drawCar(graphics: Graphics, car: Car, world: GameWorld, ts: numb
     const halo = car.trafficState === 'queued' ? MAP_COLORS.carTail : MAP_COLORS.lane;
     graphics.circle(cx, cy, 7.5).fill({ color: halo, alpha: car.trafficState === 'queued' ? 0.16 : 0.2 });
   }
-  drawCapsule(graphics, cx + 3, cy + 4, length, width, pose.angle, MAP_COLORS.shadow, 0.28 * pose.alpha);
+  if (settings.vehicleShadows) {
+    drawCapsule(graphics, cx + 3, cy + 4, length, width, pose.angle, MAP_COLORS.shadow, 0.28 * pose.alpha);
+  }
   drawCapsule(graphics, cx, cy, length, width, pose.angle, color, pose.alpha, MAP_COLORS.roadEdge);
   if (isBus) {
     for (let index = -2; index <= 2; index += 1) {
@@ -43,7 +81,9 @@ export function drawCar(graphics: Graphics, car: Car, world: GameWorld, ts: numb
   } else {
     drawRotatedRect(graphics, cx + Math.cos(pose.angle) * 1.8, cy + Math.sin(pose.angle) * 1.8, 4.2, 3.2, pose.angle, MAP_COLORS.carWindow, 0.88 * pose.alpha);
   }
-  drawCarLights(graphics, car, cx, cy, length, width, pose.angle, timeSeconds, atmosphere, pose.alpha);
+  if (settings.vehicleLights) {
+    drawCarLights(graphics, car, cx, cy, length, width, pose.angle, timeSeconds, atmosphere, pose.alpha);
+  }
 }
 
 

@@ -186,6 +186,11 @@ export type CityHistorySample = {
   failedTrips: number;
   publicTripsCompleted: number;
   carTripsAvoided: number;
+  bikeLaneTiles: number;
+  bikeLaneCoverageRatio: number;
+  bikeTripsCompleted: number;
+  bikeCarsAvoided: number;
+  activeBikeTrips: number;
   metroTripsCompleted: number;
   metroCarsAvoided: number;
   metroPassengers: number;

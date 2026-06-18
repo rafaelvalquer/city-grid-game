@@ -1,6 +1,7 @@
 import { Container, Graphics, Text } from 'pixi.js';
 import type { TrafficCell, Vec2 } from '../../types/city.types';
 import { MAP_COLORS, congestionColor } from './visualTheme';
+import type { GraphicsSettings } from '../config/graphicsSettings';
 
 type ParticleKind = 'dust' | 'spark' | 'pulse' | 'smoke';
 
@@ -33,7 +34,10 @@ export class ParticleSystem {
   private particles: Particle[] = [];
   private texts: FloatingText[] = [];
 
-  constructor(private readonly textLayer: Container) {}
+  constructor(
+    private readonly textLayer: Container,
+    private readonly settings: Pick<GraphicsSettings, 'constructionParticles' | 'congestionSmoke'>,
+  ) {}
 
   update(dt: number): void {
     for (const particle of this.particles) {
@@ -95,6 +99,7 @@ export class ParticleSystem {
   }
 
   emitRoadDust(pos: Vec2, count = 8): void {
+    if (!this.settings.constructionParticles) return;
     for (let i = 0; i < count; i += 1) {
       const angle = Math.random() * Math.PI * 2;
       const speed = 0.35 + Math.random() * 0.75;
@@ -114,6 +119,7 @@ export class ParticleSystem {
   }
 
   emitTrafficLightSpark(pos: Vec2): void {
+    if (!this.settings.constructionParticles) return;
     for (let i = 0; i < 14; i += 1) {
       const angle = Math.random() * Math.PI * 2;
       const speed = 0.55 + Math.random() * 1.05;
@@ -133,6 +139,7 @@ export class ParticleSystem {
   }
 
   emitConnectionPulse(pos: Vec2): void {
+    if (!this.settings.constructionParticles) return;
     this.addParticle({
       kind: 'pulse',
       x: pos.x,
@@ -148,6 +155,7 @@ export class ParticleSystem {
   }
 
   emitCongestionSmoke(cell: TrafficCell): void {
+    if (!this.settings.congestionSmoke) return;
     const intensity = Math.min(1, Math.max(0.25, (cell.congestion - 1.1) / 1.2));
     for (let i = 0; i < 3; i += 1) {
       this.addParticle({

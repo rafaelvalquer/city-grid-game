@@ -513,7 +513,7 @@ function busLaneSuccessMessage(changed: number, cost: number, removed: boolean):
 
 
 function roadLineSuccessMessage(tool: 'road' | 'avenue' | 'bikeLane', built: number, cost: number, demolished: number): string {
-  const label = ROAD_CONFIG[tool].label;
+  const label = tool === 'bikeLane' ? 'Ciclovia' : ROAD_CONFIG[tool].label;
   const demolitionText = demolished > 0
     ? ` ${demolished} prédio${demolished > 1 ? 's' : ''} demolido${demolished > 1 ? 's' : ''}.`
     : '';

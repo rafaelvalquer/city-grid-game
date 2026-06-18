@@ -12,10 +12,12 @@ import { connectInputController, type OneWayLineDrag, type RoadLineDrag } from '
 import { heatmapLabel } from './renderHeatmap';
 import { createRenderWorldState, renderWorld } from './renderWorld';
 import { ParticleSystem } from './particleSystem';
+import { PerformanceDebugPanel } from '../../components/PerformanceDebugPanel';
+import type { GraphicsSettings } from '../config/graphicsSettings';
 
 const UI_SYNC_INTERVAL_SECONDS = 0.2;
 
-export function PixiGame({ world }: { world: GameWorld }) {
+export function PixiGame({ world, graphics }: { world: GameWorld; graphics: GraphicsSettings }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const appRef = useRef<Application | null>(null);
   const stageRef = useRef<Container | null>(null);
@@ -44,7 +46,7 @@ export function PixiGame({ world }: { world: GameWorld }) {
     renderStateRef.current = createRenderWorldState();
 
     async function start() {
-      const view = await createPixiApp(hostElement);
+      const view = await createPixiApp(hostElement, graphics);
       app = view.app;
       appRef.current = view.app;
       initialized = true;
@@ -54,7 +56,7 @@ export function PixiGame({ world }: { world: GameWorld }) {
       }
 
       stageRef.current = view.root;
-      const particles = new ParticleSystem(view.particleLabels);
+      const particles = new ParticleSystem(view.particleLabels, graphics);
       particleSystemRef.current = particles;
       const camera = createCameraController(view.app.canvas, cameraRef.current);
       connectInputController({
@@ -72,20 +74,34 @@ export function PixiGame({ world }: { world: GameWorld }) {
       });
 
       const initialState = useGameStore.getState();
-      initialState.setStats(world.getSnapshot());
+      const benchmarkCars = Number(new URLSearchParams(globalThis.location?.search ?? '').get('benchmarkCars') ?? 0);
+      if (Number.isFinite(benchmarkCars) && benchmarkCars > 0) {
+        world.seedPerformanceBenchmarkCars(benchmarkCars);
+      }
+      initialState.setStats(world.getSnapshotForUi());
       initialState.setSelected(world.selected);
       let uiTimer = UI_SYNC_INTERVAL_SECONDS;
 
       view.app.ticker.add((ticker) => {
-        const { paused, speed, heatmapMode, viewLayer, mobilityFocusMode, setStats, setSelected } = useGameStore.getState();
+        const { paused, speed, heatmapMode, viewLayer, mobilityFocusMode, setStats, setSelected, setPerformanceMetrics } = useGameStore.getState();
         const dt = ticker.deltaMS / 1000;
         const visibleBounds = camera.getVisibleTileBounds(3);
+        world.performanceProfiler.recordFrame(dt);
+        world.performanceProfiler.setCounters({
+          activeCars: world.cars.length,
+          visibleCars: Math.min(world.countVisibleCarsInBounds(visibleBounds, 2), world.cars.length),
+        });
         world.setActiveViewportBounds(visibleBounds);
+        const updateStart = performance.now();
         world.update(dt, speed, paused);
+        world.performanceProfiler.setCounters({ updateMs: performance.now() - updateStart });
         const hover = useGameStore.getState().hoverPreview;
+        const renderStart = performance.now();
         renderWorld(
           view.staticGraphics,
-          view.dynamicGraphics,
+          view.environmentGraphics,
+          view.vehicleGraphics,
+          view.overlayGraphics,
           view.labels,
           renderStateRef.current,
           world,
@@ -98,7 +114,9 @@ export function PixiGame({ world }: { world: GameWorld }) {
           mobilityFocusMode,
           particles,
           visibleBounds,
+          graphics,
         );
+        world.performanceProfiler.recordRender(performance.now() - renderStart);
         applyParticleCamera(view.particleGraphics, view.particleLabels, cameraRef.current);
         particles.update(dt);
         particles.draw(view.particleGraphics, GAME_CONFIG.tileSize);
@@ -106,8 +124,9 @@ export function PixiGame({ world }: { world: GameWorld }) {
         uiTimer += dt;
         if (uiTimer >= UI_SYNC_INTERVAL_SECONDS) {
           uiTimer = 0;
-          setStats(world.getSnapshot());
+          setStats(world.getSnapshotForUi());
           setSelected(world.selected);
+          setPerformanceMetrics(world.performanceProfiler.getSnapshot());
         }
       });
     }
@@ -123,7 +142,7 @@ export function PixiGame({ world }: { world: GameWorld }) {
       }
       appRef.current = null;
     };
-  }, [world]);
+  }, [world, graphics]);
 
   return (
     <main ref={hostRef} className="game-host">
@@ -133,6 +152,7 @@ export function PixiGame({ world }: { world: GameWorld }) {
         <span>Clique e arraste: traçar rua/avenida</span>
       </div>
       <LayerToggle />
+      <PerformanceDebugPanel enabled={graphics.showPerformanceDebug} />
       <CanvasToolDock />
       <button className={`metro-manager-toggle ${viewLayerUi}`} type="button" onClick={() => setMetroManagerOpen((open) => !open)}>
         {viewLayerUi === 'underground' ? '🚇' : '🚌'} Gerenciar linhas
