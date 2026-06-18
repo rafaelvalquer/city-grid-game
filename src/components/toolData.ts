@@ -1,9 +1,10 @@
 import type { LucideIcon } from 'lucide-react';
-import { ArrowRight, BusFront, Bike, Circle, CircleDot, Eye, Gauge, Route, TrafficCone, Trash2, Wrench } from 'lucide-react';
+import { ArrowRight, BusFront, Bike, Circle, CircleDot, Eye, Gauge, Plane, Route, TrafficCone, Trash2, Wrench } from 'lucide-react';
 import { ROAD_CONFIG } from '../game/config/roadConfig';
 import { TRANSIT_CONFIG, BUS_LANE_CONFIG } from '../game/config/transitConfig';
 import { METRO_CONFIG } from '../game/config/metroConfig';
 import { BIKE_LANE_CONFIG } from '../game/config/bikeConfig';
+import { HELICOPTER_CONFIG } from '../game/config/helicopterConfig';
 import { TRAFFIC_LIGHT_BUILD_COST } from '../game/systems/trafficLights';
 import type { Tool } from '../types/game.types';
 
@@ -15,7 +16,7 @@ export type ToolItem = {
 };
 
 export type ToolGroup = {
-  id: 'roads' | 'traffic' | 'underground' | 'edit';
+  id: 'roads' | 'traffic' | 'underground' | 'air' | 'edit';
   label: string;
   Icon: LucideIcon;
   tools: ToolItem[];
@@ -52,6 +53,15 @@ export const toolGroups: ToolGroup[] = [
       { id: 'metroStation', label: 'Estação', cost: METRO_CONFIG.stationBuildCost, Icon: CircleDot },
       { id: 'metroTrack', label: 'Trilho', cost: METRO_CONFIG.trackCostPerTile, Icon: Route },
       { id: 'metroLine', label: 'Criar linha', cost: METRO_CONFIG.lineActivationCost, Icon: BusFront },
+    ],
+  },
+  {
+    id: 'air',
+    label: 'Aéreo',
+    Icon: Plane,
+    tools: [
+      { id: 'helipad', label: 'Heliponto', cost: HELICOPTER_CONFIG.helipadBuildCost, Icon: CircleDot },
+      { id: 'helicopterLine', label: 'Linha aérea', cost: HELICOPTER_CONFIG.lineActivationCost, Icon: Plane },
     ],
   },
   {

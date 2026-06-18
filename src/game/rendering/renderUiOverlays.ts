@@ -9,6 +9,8 @@ import { getCarRenderPose } from './renderVehicles';
 import { busStopPreviewAccess, isRoadLineTool } from './inputController';
 import { pulse } from './renderUtils';
 import { SIGNAL_GREEN, SIGNAL_OFF, SIGNAL_RED } from './renderTypes';
+import { HELICOPTER_CONFIG } from '../config/helicopterConfig';
+import { drawHelipadCoverage } from './renderHelicopters';
 export function drawSelection(graphics: Graphics, x: number, y: number, ts: number): void {
   graphics.roundRect(x * ts + 1, y * ts + 1, ts - 2, ts - 2, 5).stroke({ color: MAP_COLORS.selection, width: 2 });
 }
@@ -28,6 +30,10 @@ export function drawConstructionPreview(graphics: Graphics, world: GameWorld, pr
     drawMetroDraftPreview(graphics, preview, ts, timeSeconds);
     return;
   }
+  if (preview.lineTiles?.length && tool === 'helicopterLine') {
+    drawHelicopterLinePreview(graphics, preview, ts, timeSeconds);
+    return;
+  }
   if (!inBounds(x, y)) return;
   const color = valid ? MAP_COLORS.previewValid : MAP_COLORS.previewInvalid;
   const px = x * ts;
@@ -36,6 +42,17 @@ export function drawConstructionPreview(graphics: Graphics, world: GameWorld, pr
 
   if (tool === 'busStop' && valid) {
     drawBusStopCoverage(graphics, x, y, ts, 0.075 + previewPulse * 0.018, 0.42 + previewPulse * 0.18);
+  }
+  if (tool === 'helipad' && valid) {
+    drawHelipadCoverage(graphics, {
+      id: 'preview', name: 'Preview', x, y,
+      accessRoad: { x, y },
+      coverageRadius: HELICOPTER_CONFIG.coverageRadius,
+      capacity: HELICOPTER_CONFIG.waitingCapacity,
+      waiting: [], totalBoarded: 0, totalAlighted: 0,
+      peakWaitingPassengers: 0, carsAvoidedFromHelipad: 0,
+      activeLineIds: [], createdAtDay: 0,
+    }, ts, 0.04);
   }
 
   if (tool === 'roundabout') {
@@ -76,6 +93,12 @@ export function drawConstructionPreview(graphics: Graphics, world: GameWorld, pr
     if (access) {
       graphics.roundRect(access.x * ts + 7, access.y * ts + 7, ts - 14, ts - 14, 6).stroke({ color: 0x24a0b7, width: 3, alpha: 0.55 });
     }
+  } else if (tool === 'helipad') {
+    graphics.circle(px + ts / 2, py + ts / 2, ts * 0.32).stroke({ color, width: 3, alpha: 0.9 });
+    graphics.moveTo(px + 13, py + 10).lineTo(px + 13, py + ts - 10)
+      .moveTo(px + ts - 13, py + 10).lineTo(px + ts - 13, py + ts - 10)
+      .moveTo(px + 13, py + ts / 2).lineTo(px + ts - 13, py + ts / 2)
+      .stroke({ color, width: 3, alpha: 0.9 });
   } else if (tool === 'remove') {
     graphics.moveTo(px + 10, py + 10).lineTo(px + ts - 10, py + ts - 10).stroke({ color, width: 3, alpha: 0.85 });
     graphics.moveTo(px + ts - 10, py + 10).lineTo(px + 10, py + ts - 10).stroke({ color, width: 3, alpha: 0.85 });
@@ -181,6 +204,18 @@ export function drawMetroDraftPreview(graphics: Graphics, preview: HoverPreview,
     graphics.circle(px, py, 7).fill({ color, alpha: 0.16 + previewPulse * 0.08 });
     graphics.circle(px, py, 3).fill({ color, alpha: 0.72 });
   }
+}
+
+function drawHelicopterLinePreview(graphics: Graphics, preview: HoverPreview, ts: number, timeSeconds: number): void {
+  const tiles = preview.lineTiles ?? [];
+  if (tiles.length < 2) return;
+  const pulseValue = pulse(timeSeconds, preview.valid ? 1.1 : 1.7, preview.x * 0.13 + preview.y * 0.17);
+  const color = preview.valid ? 0xf97316 : MAP_COLORS.previewInvalid;
+  const from = { x: tiles[0].x * ts + ts / 2, y: tiles[0].y * ts + ts / 2 };
+  const to = { x: tiles[tiles.length - 1].x * ts + ts / 2, y: tiles[tiles.length - 1].y * ts + ts / 2 };
+  drawDashedSegment(graphics, from, to, color, 3 + pulseValue, 0.72, 14, 8);
+  graphics.circle(from.x, from.y, 8).stroke({ color, width: 2, alpha: 0.9 });
+  graphics.circle(to.x, to.y, 8).stroke({ color, width: 2, alpha: 0.9 });
 }
 
 function drawDashedSegment(

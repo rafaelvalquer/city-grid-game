@@ -141,10 +141,6 @@ export function getTrafficLightOpenAxis(light: TrafficLightState): TrafficLightA
   return light.phase === 'horizontalGreen' || light.phase === 'horizontalYellow' ? 'horizontal' : 'vertical';
 }
 
-export function isTrafficLightGreenForDirection(light: TrafficLightState, direction: TravelDirection): boolean {
-  return getTrafficLightSignal(light, direction) === 'green';
-}
-
 function shouldSwitchGreen(light: TrafficLightState, demand: TrafficLightDemand, timer: number): boolean {
   if (timer < TRAFFIC_LIGHT_MIN_GREEN_SECONDS) return false;
   if (timer >= TRAFFIC_LIGHT_MAX_GREEN_SECONDS) return true;

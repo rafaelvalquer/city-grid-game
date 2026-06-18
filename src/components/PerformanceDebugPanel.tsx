@@ -30,10 +30,12 @@ export function PerformanceDebugPanel({ enabled }: { enabled: boolean }) {
       <div><span>Ambiente</span><strong>{metrics.environmentRenderMs.toFixed(1)}ms</strong></div>
       <div><span>Veículos</span><strong>{metrics.vehicleRenderMs.toFixed(1)}ms</strong></div>
       <div><span>Overlays</span><strong>{metrics.overlayRenderMs.toFixed(1)}ms</strong></div>
+      <div><span>Camada aérea</span><strong>{metrics.airRenderMs.toFixed(1)}ms</strong></div>
       <div><span>LOD veículos</span><strong>{metrics.vehicleLodCars}</strong></div>
       <div><span>Snapshot</span><strong>{metrics.snapshotMs.toFixed(1)}ms</strong></div>
       <div><span>Transit</span><strong>{metrics.transitStopsMs.toFixed(1)}ms</strong></div>
       <div><span>Metro</span><strong>{metrics.metroMs.toFixed(1)}ms</strong></div>
+      <div><span>Helicópteros</span><strong>{metrics.helicopterMs.toFixed(1)}ms</strong></div>
       <div><span>Bikes</span><strong>{metrics.bikeTripsMs.toFixed(1)}ms</strong></div>
       <div><span>Economia</span><strong>{metrics.economyMs.toFixed(1)}ms</strong></div>
       <div><span>Trips</span><strong>{metrics.generateTripsMs.toFixed(1)}ms</strong></div>

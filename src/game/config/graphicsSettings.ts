@@ -124,23 +124,6 @@ export function detectGraphicsProfile(settings: GraphicsSettings): GraphicsProfi
   return 'custom';
 }
 
-export function loadGraphicsSettings(storage: Pick<Storage, 'getItem'> = localStorage): GraphicsSettings {
-  try {
-    const raw = storage.getItem(LEGACY_GRAPHICS_SETTINGS_STORAGE_KEY);
-    if (!raw) return DEFAULT_GRAPHICS_SETTINGS;
-    return normalizeGraphicsSettings(JSON.parse(raw));
-  } catch {
-    return DEFAULT_GRAPHICS_SETTINGS;
-  }
-}
-
-export function saveGraphicsSettings(
-  settings: GraphicsSettings,
-  storage: Pick<Storage, 'setItem'> = localStorage,
-): void {
-  storage.setItem(LEGACY_GRAPHICS_SETTINGS_STORAGE_KEY, JSON.stringify(settings));
-}
-
 export function normalizeGraphicsSettings(value: unknown): GraphicsSettings {
   if (!value || typeof value !== 'object') return DEFAULT_GRAPHICS_SETTINGS;
   const source = value as Partial<GraphicsSettings>;

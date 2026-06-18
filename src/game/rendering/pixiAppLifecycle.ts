@@ -9,6 +9,7 @@ export type PixiWorldView = {
   staticGraphics: Graphics;
   environmentGraphics: Graphics;
   vehicleGraphics: Graphics;
+  airGraphics: Graphics;
   overlayGraphics: Graphics;
   particleGraphics: Graphics;
   particleLabels: Container;
@@ -37,6 +38,7 @@ export async function createPixiApp(
   const staticGraphics = new Graphics();
   const environmentGraphics = new Graphics();
   const vehicleGraphics = new Graphics();
+  const airGraphics = new Graphics();
   const overlayGraphics = new Graphics();
   const particleGraphics = new Graphics();
   const particleLabels = new Container();
@@ -44,6 +46,7 @@ export async function createPixiApp(
   root.addChild(staticGraphics);
   root.addChild(environmentGraphics);
   root.addChild(vehicleGraphics);
+  root.addChild(airGraphics);
   root.addChild(overlayGraphics);
   root.addChild(particleGraphics);
   root.addChild(particleLabels);
@@ -55,6 +58,7 @@ export async function createPixiApp(
     staticGraphics,
     environmentGraphics,
     vehicleGraphics,
+    airGraphics,
     overlayGraphics,
     particleGraphics,
     particleLabels,

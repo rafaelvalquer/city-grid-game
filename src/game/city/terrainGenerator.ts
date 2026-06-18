@@ -13,11 +13,6 @@ export function isTerrainBlocked(tile: Tile | undefined): boolean {
   return tile?.type === 'mountain' || tile?.type === 'lake';
 }
 
-export function generateTerrainRelief(grid: Tile[][], config: TerrainConfigShape = TERRAIN_CONFIG): void {
-  const bounds = { xStart: 0, yStart: 0, width: grid[0]?.length ?? GAME_CONFIG.gridWidth, height: grid.length || GAME_CONFIG.gridHeight };
-  generateTerrainReliefForBounds(grid, bounds, 1, config);
-}
-
 export function generateTerrainReliefForBounds(
   grid: Tile[][],
   bounds: TerrainBounds,

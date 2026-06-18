@@ -6,7 +6,7 @@ import { getDirection, getLaneOffsetForRouteSegment } from '../systems/trafficRu
 import { MAP_COLORS } from './visualTheme';
 import type { Atmosphere, CarRenderPose } from './renderTypes';
 import { TURN_IN_START, TURN_OUT_END } from './renderTypes';
-import { carColor, directionAngle, drawCapsule, drawRotatedRect, idPhase, normalizeVec, pulse } from './renderUtils';
+import { carColor, directionAngle, drawCapsule, drawRotatedRect, idPhase, pulse } from './renderUtils';
 import type { GraphicsSettings } from '../config/graphicsSettings';
 
 type VehicleGraphicsSettings = Pick<GraphicsSettings, 'vehicleShadows' | 'vehicleLights'>;

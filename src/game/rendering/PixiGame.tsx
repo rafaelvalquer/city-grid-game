@@ -33,7 +33,6 @@ export function PixiGame({ world, graphics }: { world: GameWorld; graphics: Grap
   const heatmapModeUi = useGameStore((s) => s.heatmapMode);
   const viewLayerUi = useGameStore((s) => s.viewLayer);
   const [metroManagerOpen, setMetroManagerOpen] = useState(false);
-  const viewLayer = useGameStore((s) => s.viewLayer);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -101,6 +100,7 @@ export function PixiGame({ world, graphics }: { world: GameWorld; graphics: Grap
           view.staticGraphics,
           view.environmentGraphics,
           view.vehicleGraphics,
+          view.airGraphics,
           view.overlayGraphics,
           view.labels,
           renderStateRef.current,

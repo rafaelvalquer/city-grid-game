@@ -93,15 +93,6 @@ export function getDirection(from: Vec2, to: Vec2): TravelDirection {
   return dy >= 0 ? 'south' : 'north';
 }
 
-export function getCurrentDirection(car: Car): TravelDirection {
-  const current = car.route[car.routeIndex];
-  const next = car.route[car.routeIndex + 1];
-  if (current && next) return getDirection(current, next);
-  const previous = car.route[Math.max(0, car.routeIndex - 1)];
-  if (previous && current) return getDirection(previous, current);
-  return car.direction ?? 'east';
-}
-
 export function getLaneOffset(
   direction: TravelDirection,
   roadType: RoadType,

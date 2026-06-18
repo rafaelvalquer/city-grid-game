@@ -27,6 +27,7 @@ type ViewportTileBounds = {
 import { drawBikeTrips } from './renderBikes';
 import { PERFORMANCE_CONFIG } from '../config/performanceConfig';
 import { DEFAULT_GRAPHICS_SETTINGS, type GraphicsSettings } from '../config/graphicsSettings';
+import { drawAirLayer, drawHelipadCoverage, drawHelipads, getHelicopterPose } from './renderHelicopters';
 
 export type RenderWorldState = {
   staticSignature: string | null;
@@ -56,6 +57,7 @@ export function renderWorld(
   staticGraphics: Graphics,
   environmentGraphics: Graphics,
   vehicleGraphics: Graphics,
+  airGraphics: Graphics,
   overlayGraphics: Graphics,
   labels: Container,
   state: RenderWorldState,
@@ -78,6 +80,7 @@ export function renderWorld(
   applyCamera(staticGraphics, camX, camY, scale);
   applyCamera(environmentGraphics, camX, camY, scale);
   applyCamera(vehicleGraphics, camX, camY, scale);
+  applyCamera(airGraphics, camX, camY, scale);
   applyCamera(overlayGraphics, camX, camY, scale);
   applyCamera(labels, camX, camY, scale);
 
@@ -106,6 +109,8 @@ export function renderWorld(
   world.performanceProfiler.time('vehicleRenderMs', () => {
     renderVehicleLayer(vehicleGraphics, world, ts, timeSeconds, atmosphere, scale, visibleBounds, viewLayer, graphics);
   });
+  if (viewLayer === 'surface') world.performanceProfiler.time('airRenderMs', () => drawAirLayer(airGraphics, world, ts, timeSeconds, graphics));
+  else airGraphics.clear();
 
   const overlaySignature = getOverlaySignature(world, heatmapMode, hoverPreview, viewLayer, mobilityFocusMode);
   const overlayFps = highLoad ? PERFORMANCE_CONFIG.overlayRenderHighLoadFps : PERFORMANCE_CONFIG.overlayRenderFps;
@@ -191,6 +196,7 @@ function renderEnvironmentLayer(
   drawStreetFurniture(graphics, world, ts, timeSeconds, atmosphere, settings);
   if (settings.atmosphereOverlay) drawAtmosphereOverlay(graphics, world, atmosphere, 'off', ts);
   renderMetroLayer(graphics, world, viewLayer, ts, timeSeconds);
+  drawHelipads(graphics, world, ts, timeSeconds);
   drawBuildingLife(graphics, world, ts, timeSeconds, atmosphere, settings);
   drawDisconnectedBuildingAlerts(graphics, world, ts, timeSeconds);
   drawTrafficLights(graphics, world, ts, timeSeconds);
@@ -257,7 +263,16 @@ function renderOverlayLayer(
     drawBusStopCoverage(graphics, world.selected.stop.x, world.selected.stop.y, ts, 0.09, 0.4);
     drawSelection(graphics, world.selected.stop.x, world.selected.stop.y, ts);
   }
+  if (world.selected.kind === 'helipad') {
+    drawHelipadCoverage(graphics, world.selected.helipad, ts, 0.06);
+    drawSelection(graphics, world.selected.helipad.x, world.selected.helipad.y, ts);
+  }
   drawSelectedCarMarker(graphics, world, ts);
+  if (world.selected.kind === 'helicopter') {
+    const helicopter = world.getHelicopter(world.selected.helicopterId);
+    const pose = helicopter ? getHelicopterPose(world, helicopter) : undefined;
+    if (pose) graphics.circle(pose.x * ts + ts / 2, pose.y * ts + ts / 2, 14).stroke({ color: MAP_COLORS.selection, width: 2 });
+  }
 }
 
 function shouldRenderTimedLayer(lastRenderAt: number, timeSeconds: number, fps: number): boolean {
@@ -282,6 +297,8 @@ function getOverlaySignature(
           ? `busStop:${selected.stop.id}`
           : selected.kind === 'metroStation'
             ? `metroStation:${selected.station.id}`
+            : selected.kind === 'helipad'
+              ? `helipad:${selected.helipad.id}`
             : selected.kind;
   const hoverKey = hoverPreview
     ? `${hoverPreview.x},${hoverPreview.y}:${hoverPreview.valid}:${hoverPreview.tool ?? ''}:${hoverPreview.lineTiles?.length ?? 0}`

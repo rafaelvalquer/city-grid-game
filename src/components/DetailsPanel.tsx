@@ -1,4 +1,4 @@
-import { BarChart3, Building2, BusFront, Car, CircleDot, MapPin, Route, X } from 'lucide-react';
+import { BarChart3, Building2, BusFront, Car, CircleDot, MapPin, Plane, Route, X } from 'lucide-react';
 import { GameWorld } from '../game/engine/simulation';
 import { useGameStore } from '../store/gameStore';
 import { BUILDING_CONFIG, getBuildingLevelConfig } from '../game/config/buildingConfig';
@@ -51,6 +51,13 @@ const oneWayLabel = {
   south: 'Sentido único: sul',
   east: 'Sentido único: leste',
   west: 'Sentido único: oeste',
+} as const;
+
+const helicopterStateLabel = {
+  takingOff: 'Decolando',
+  flying: 'Em voo',
+  landing: 'Pousando',
+  dwelling: 'No heliponto',
 } as const;
 
 export function DetailsPanel({ world, className = '', onClose }: { world: GameWorld; className?: string; onClose?: () => void }) {
@@ -171,6 +178,43 @@ export function DetailsPanel({ world, className = '', onClose }: { world: GameWo
           <p><span>Linha</span><strong>{world.metroLines.find((line) => line.id === selected.train?.lineId)?.name ?? '-'}</strong></p>
           <p><span>Lotação</span><strong>{selected.train.passengers}/{selected.train.capacity}</strong></p>
           <p><span>Progresso</span><strong>{Math.round(selected.train.progress * 100)}%</strong></p>
+        </div>
+      )}
+
+      {selected.kind === 'helipad' && (
+        <div className="detail-card">
+          <h3><Plane size={15} /> {selected.helipad.name}</h3>
+          <p><span>Posição</span><strong>{selected.helipad.x}, {selected.helipad.y}</strong></p>
+          <p><span>Cobertura</span><strong>{selected.helipad.coverageRadius} tiles</strong></p>
+          <p><span>Esperando</span><strong>{countPassengers(selected.helipad.waiting)}/{selected.helipad.capacity}</strong></p>
+          <p><span>Embarques</span><strong>{selected.helipad.totalBoarded}</strong></p>
+          <p><span>Desembarques</span><strong>{selected.helipad.totalAlighted}</strong></p>
+          <p><span>Pico de fila</span><strong>{selected.helipad.peakWaitingPassengers}</strong></p>
+          <p><span>Carros evitados</span><strong>{selected.helipad.carsAvoidedFromHelipad}</strong></p>
+          <p><span>Linhas</span><strong>{selected.helipad.activeLineIds.length}/3</strong></p>
+        </div>
+      )}
+
+      {selected.kind === 'helicopterLine' && (
+        <div className="detail-card">
+          <h3><Route size={15} /> {selected.line.name}</h3>
+          <p><span>Helicópteros</span><strong>{world.helicopters.filter((helicopter) => helicopter.lineId === selected.line.id).length}/3</strong></p>
+          <p><span>Em voo</span><strong>{selected.line.currentPassengers}</strong></p>
+          <p><span>Esperando</span><strong>{selected.line.waitingPassengers}</strong></p>
+          <p><span>Passageiros gerados</span><strong>{selected.line.totalPassengers}</strong></p>
+          <p><span>Carros evitados</span><strong>{selected.line.carsAvoided}</strong></p>
+          <p><span>Ciclos completos</span><strong>{selected.line.completedCycles}</strong></p>
+        </div>
+      )}
+
+      {selected.kind === 'helicopter' && selected.helicopter && (
+        <div className="detail-card">
+          <h3><Plane size={15} /> Helicóptero #{selected.helicopter.id}</h3>
+          <p><span>Linha</span><strong>{world.helicopterLines.find((line) => line.id === selected.helicopter?.lineId)?.name ?? '-'}</strong></p>
+          <p><span>Estado</span><strong>{helicopterStateLabel[selected.helicopter.state]}</strong></p>
+          <p><span>Lotação</span><strong>{countPassengers(selected.helicopter.passengers)}/{selected.helicopter.capacity}</strong></p>
+          <p><span>Progresso</span><strong>{Math.round(selected.helicopter.progress * 100)}%</strong></p>
+          <p><span>Destino</span><strong>{world.getHelipad(selected.helicopter.toHelipadId)?.name ?? '-'}</strong></p>
         </div>
       )}
 

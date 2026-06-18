@@ -3,6 +3,7 @@ import { ROAD_CONFIG } from '../config/roadConfig';
 import { TRANSIT_CONFIG, BUS_LANE_CONFIG } from '../config/transitConfig';
 import { METRO_CONFIG } from '../config/metroConfig';
 import { BIKE_LANE_CONFIG } from '../config/bikeConfig';
+import { HELICOPTER_CONFIG } from '../config/helicopterConfig';
 import { buildMetroTrackTiles } from '../metro/metroLineBuilder';
 import { getBuildingDemolitionCost, type GameWorld } from '../engine/simulation';
 import { inBounds, isRoadType, isTerrainBlocked, keyOf } from '../city/grid';
@@ -15,6 +16,7 @@ import type { Tool } from '../../types/game.types';
 import type { ActionPreview } from './renderTypes';
 import type { CameraController } from './cameraController';
 import type { ParticleSystem } from './particleSystem';
+import { getHelicopterPose } from './renderHelicopters';
 
 export type RoadLineDrag = {
   startTile: Vec2;
@@ -47,10 +49,15 @@ export function connectInputController(params: {
   const detectCar = (tileX: number, tileY: number) => {
     return world.cars.find((c) => Math.abs(c.x - tileX) < 0.45 && Math.abs(c.y - tileY) < 0.45);
   };
+  const detectHelicopter = (tileX: number, tileY: number) => world.helicopters.find((helicopter) => {
+    const pose = getHelicopterPose(world, helicopter);
+    return Boolean(pose && Math.abs(pose.x - tileX) < 0.65 && Math.abs(pose.y - tileY) < 0.65);
+  });
 
   let metroDragMode: 'track' | 'line' | null = null;
   let pendingMetroTrackStationIds: string[] = [];
   let pendingMetroLineStationIds: string[] = [];
+  let pendingHelipadId: string | null = null;
 
   const applyTool = (tileX: number, tileY: number) => {
     const state = useGameStore.getState();
@@ -59,9 +66,11 @@ export function connectInputController(params: {
     refs.lastTileRef.current = tileKey;
 
     if (state.selectedTool === 'inspect') {
+      const helicopter = detectHelicopter(tileX, tileY);
       const car = detectCar(tileX, tileY);
       const station = world.getMetroStationAt(tileX, tileY);
-      if (state.viewLayer === 'underground' && station) world.inspectMetroStation(station.id);
+      if (state.viewLayer === 'surface' && helicopter) world.inspectHelicopter(helicopter.id);
+      else if (state.viewLayer === 'underground' && station) world.inspectMetroStation(station.id);
       else if (car) world.inspectCar(car.id);
       else world.inspectAt(tileX, tileY);
       state.setActionFeedback(null);
@@ -110,6 +119,24 @@ export function connectInputController(params: {
       state.setActionFeedback(result.message ?? 'Arraste sobre as próximas estações e solte para ativar a linha.');
       return;
     }
+    if (state.selectedTool === 'helicopterLine') {
+      const helipad = world.getHelipadAt(tileX, tileY);
+      if (!helipad) {
+        state.setActionFeedback('Selecione um heliponto para criar a linha aérea.');
+        return;
+      }
+      if (!pendingHelipadId) {
+        pendingHelipadId = helipad.id;
+        state.setActionFeedback(`${helipad.name} selecionado. Clique no heliponto de destino.`);
+        state.setHoverPreview(getHelicopterLinePreview(world, pendingHelipadId, { x: tileX, y: tileY }, state.stats.money));
+        return;
+      }
+      const result = world.createHelicopterLine(pendingHelipadId, helipad.id);
+      state.setActionFeedback(result.success ? `${result.name} ativada por $ ${result.cost}.` : result.reason ?? 'Não foi possível criar a linha aérea.');
+      pendingHelipadId = null;
+      state.setHoverPreview(null);
+      return;
+    }
     const preview = { ...getActionPreview(world, tileX, tileY, state.selectedTool, state.stats.money), tool: state.selectedTool };
     const didBuild = world.buildAt(tileX, tileY, state.selectedTool);
     if (didBuild) emitActionParticles(particles, { x: tileX, y: tileY }, state.selectedTool, preview.cost);
@@ -139,6 +166,10 @@ export function connectInputController(params: {
     }
     if (metroDragMode === 'line') {
       state.setHoverPreview(getMetroDraftPreview(world, pendingMetroLineStationIds, tile, 'metroLine', state.stats.money));
+      return;
+    }
+    if (state.selectedTool === 'helicopterLine' && pendingHelipadId) {
+      state.setHoverPreview(getHelicopterLinePreview(world, pendingHelipadId, tile, state.stats.money));
       return;
     }
     state.setHoverPreview({ ...getActionPreview(world, tile.x, tile.y, state.selectedTool, state.stats.money), tool: state.selectedTool });
@@ -397,6 +428,41 @@ function getMetroDraftPreview(world: GameWorld, stationIds: string[], currentTil
     lineTiles,
     buildableTiles: unique.length,
     successMessage: tool === 'metroTrack' ? 'Trilho selecionado.' : 'Linha selecionada.',
+  };
+}
+
+function getHelicopterLinePreview(world: GameWorld, fromId: string, currentTile: Vec2, money: number): ActionPreview {
+  const from = world.getHelipad(fromId);
+  const to = world.getHelipadAt(currentTile.x, currentTile.y);
+  const distance = from && to ? Math.abs(from.x - to.x) + Math.abs(from.y - to.y) : 0;
+  const valid = Boolean(
+    from
+    && to
+    && from.id !== to.id
+    && distance >= HELICOPTER_CONFIG.minLineDistance
+    && money >= HELICOPTER_CONFIG.lineActivationCost,
+  );
+  const reason = !from
+    ? 'Heliponto inicial indisponível.'
+    : !to
+      ? 'Clique no heliponto de destino.'
+      : from.id === to.id
+        ? 'Escolha outro heliponto.'
+        : distance < HELICOPTER_CONFIG.minLineDistance
+          ? `Distância mínima: ${HELICOPTER_CONFIG.minLineDistance} tiles.`
+          : money < HELICOPTER_CONFIG.lineActivationCost
+            ? `Faltam $ ${HELICOPTER_CONFIG.lineActivationCost - money}.`
+            : undefined;
+  return {
+    x: currentTile.x,
+    y: currentTile.y,
+    label: valid ? `Linha aérea: ${distance} tiles` : 'Linha aérea',
+    cost: HELICOPTER_CONFIG.lineActivationCost,
+    valid,
+    reason,
+    tool: 'helicopterLine',
+    lineTiles: from ? [{ x: from.x, y: from.y }, { x: currentTile.x, y: currentTile.y }] : [],
+    successMessage: 'Linha aérea selecionada.',
   };
 }
 
@@ -814,6 +880,7 @@ export function getActionPreview(world: GameWorld, x: number, y: number, tool: T
       }
     }
     if (tile.type === 'busStop') return { x, y, label: 'Ponto ocupa o tile', cost, valid: false, reason: 'Remova o ponto de ônibus antes de construir uma via.', successMessage: '' };
+    if (tile.type === 'metroStation' || tile.type === 'helipad') return { x, y, label: 'Infraestrutura ocupa o tile', cost, valid: false, reason: 'Remova a infraestrutura de transporte antes de construir uma via.', successMessage: '' };
     if (tile.type === 'building') return { x, y, label: 'Prédio ocupa o tile', cost, valid: false, reason: 'Não é possível construir sobre prédio.', successMessage: '' };
     if (isRoundaboutTile(tile) || isRoundaboutCenter(tile)) return { x, y, label: 'Rotatória ocupa o tile', cost, valid: false, reason: 'Remova a rotatória antes de construir outra via.', successMessage: '' };
     if (tile.type === tool) return { x, y, label: 'Via já construída', cost, valid: false, reason: 'Essa via já existe aqui.', successMessage: '' };
@@ -876,6 +943,15 @@ export function getActionPreview(world: GameWorld, x: number, y: number, tool: T
     return { x, y, label: 'Construir estação de metrô', cost, valid: true, successMessage: `Estação de metrô construída por $ ${cost}.` };
   }
 
+  if (tool === 'helipad') {
+    const cost = HELICOPTER_CONFIG.helipadBuildCost;
+    const access = busStopPreviewAccess(world.grid, x, y);
+    if (tile.type !== 'empty') return { x, y, label: 'Heliponto indisponível', cost, valid: false, reason: 'Use um lote vazio.', successMessage: '' };
+    if (!access) return { x, y, label: 'Sem via de acesso', cost, valid: false, reason: 'O heliponto precisa ficar ao lado de uma rua ou avenida.', successMessage: '' };
+    if (money < cost) return { x, y, label: 'Dinheiro insuficiente', cost, valid: false, reason: `Faltam $ ${cost - money}.`, successMessage: '' };
+    return { x, y, label: 'Construir heliponto', cost, valid: true, successMessage: `Heliponto construído por $ ${cost}.` };
+  }
+
   if (tool === 'metroTrack') {
     const station = world.getMetroStationAt(x, y);
     return { x, y, label: station ? `Selecionar ${station.name}` : 'Selecione uma estação', valid: Boolean(station), reason: station ? undefined : 'Trilhos ligam uma estação a outra.', successMessage: 'Estação selecionada.' };
@@ -884,6 +960,18 @@ export function getActionPreview(world: GameWorld, x: number, y: number, tool: T
   if (tool === 'metroLine') {
     const station = world.getMetroStationAt(x, y);
     return { x, y, label: station ? `Linha a partir de ${station.name}` : 'Selecione uma estação', cost: METRO_CONFIG.lineActivationCost, valid: Boolean(station), reason: station ? undefined : 'Clique em uma estação para criar uma linha.', successMessage: 'Estação selecionada.' };
+  }
+
+  if (tool === 'helicopterLine') {
+    const helipad = world.getHelipadAt(x, y);
+    return {
+      x, y,
+      label: helipad ? `Selecionar ${helipad.name}` : 'Selecione um heliponto',
+      cost: HELICOPTER_CONFIG.lineActivationCost,
+      valid: Boolean(helipad),
+      reason: helipad ? undefined : 'Linhas aéreas ligam dois helipontos.',
+      successMessage: 'Heliponto selecionado.',
+    };
   }
 
   if (tool === 'oneWay') {
@@ -902,6 +990,12 @@ export function getActionPreview(world: GameWorld, x: number, y: number, tool: T
   if (tool === 'remove') {
     const roundaboutCenter = findRoundaboutCenterForTile(world.grid, { x, y });
     const metroStation = world.getMetroStationAt(x, y);
+    const helipad = world.getHelipadAt(x, y);
+    if (helipad) {
+      const cost = HELICOPTER_CONFIG.helipadRemoveCost;
+      if (money < cost) return { x, y, label: 'Dinheiro insuficiente', cost, valid: false, reason: `Faltam $ ${cost - money}.`, successMessage: '' };
+      return { x, y, label: 'Remover heliponto', cost, valid: true, successMessage: `Heliponto removido por $ ${cost}. Linhas associadas também foram removidas.` };
+    }
     if (metroStation) {
       return {
         x,

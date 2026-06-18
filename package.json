@@ -7,14 +7,13 @@
     "dev": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build",
     "test:graphics": "node --experimental-strip-types tests/graphicsSettings.test.mjs",
+    "test:helicopters": "node tests/runHelicopterTests.mjs",
+    "benchmark:helicopters": "node tests/runHelicopterBenchmark.mjs",
     "preview": "vite preview --host 0.0.0.0"
   },
   "dependencies": {
-    "@pixi/react": "^8.0.0",
     "@types/seedrandom": "^3.0.8",
-    "@types/stats.js": "^0.17.3",
     "@vitejs/plugin-react": "^5.0.0",
-    "easystarjs": "^0.4.4",
     "lucide-react": "^0.468.0",
     "motion": "^12.40.0",
     "nanoid": "^5.0.9",
@@ -22,7 +21,6 @@
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "seedrandom": "^3.0.5",
-    "stats.js": "^0.17.0",
     "zustand": "^5.0.2"
   },
   "devDependencies": {

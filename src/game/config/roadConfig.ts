@@ -24,5 +24,3 @@ export const ROAD_CONFIG = {
     pathCost: 5,
   },
 } as const;
-
-export const ROUNDABOUT_CONFIG = ROAD_CONFIG.roundabout;

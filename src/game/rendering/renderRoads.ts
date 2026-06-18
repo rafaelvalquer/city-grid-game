@@ -2,7 +2,6 @@ import type { Graphics } from 'pixi.js';
 import type { RoadDirection, RoadType, Tile, TrafficLightState, Vec2 } from '../../types/city.types';
 import { TRANSIT_CONFIG } from '../config/transitConfig';
 import { BIKE_LANE_CONFIG } from '../config/bikeConfig';
-import { GAME_CONFIG } from '../config/gameConfig';
 import type { GameWorld } from '../engine/simulation';
 import { isRoadType, keyOf } from '../city/grid';
 import { isIntersection } from '../systems/trafficRules';
@@ -119,9 +118,7 @@ export function drawRoad(graphics: Graphics, grid: Tile[][], x: number, y: numbe
   const walkW = Math.min(ts - 4, roadW + 8);
   const halfRoad = roadW / 2;
   const halfWalk = walkW / 2;
-  const center = ts / 2;
   const autoTile = getRoadAutoTileShape(grid, x, y, type);
-  const { connections } = autoTile;
 
   drawRoadShapeLayer(graphics, px + 2, py + 3, ts, halfWalk, MAP_COLORS.curbShadow, autoTile);
 
@@ -136,7 +133,7 @@ export function drawRoad(graphics: Graphics, grid: Tile[][], x: number, y: numbe
     drawRoundaboutMarkings(graphics, grid, x, y, ts);
   } else {
     drawLaneMarkings(graphics, px, py, ts, isAvenue, autoTile, grid[y]?.[x]?.oneWay);
-    if (grid[y]?.[x]?.busLane) drawBusLaneMarking(graphics, grid, x, y, ts, type, autoTile);
+    if (grid[y]?.[x]?.busLane) drawBusLaneMarking(graphics, x, y, ts, type, autoTile);
     if (grid[y]?.[x]?.bikeLane) drawBikeLaneMarking(graphics, grid, x, y, ts, autoTile);
   }
 }
@@ -174,7 +171,7 @@ function drawBikeSidewalkStrip(graphics: Graphics, x: number, y: number, width: 
 
 
 
-export function drawBusLaneMarking(graphics: Graphics, grid: Tile[][], x: number, y: number, ts: number, type: RoadType, autoTile: RoadAutoTile): void {
+export function drawBusLaneMarking(graphics: Graphics, x: number, y: number, ts: number, type: RoadType, autoTile: RoadAutoTile): void {
   if (type === 'roundabout') return;
   const px = x * ts;
   const py = y * ts;
@@ -389,23 +386,6 @@ export function getRoadAutoTileShape(grid: Tile[][], x: number, y: number, type:
 
 export function connectedDirections(connections: RoadConnections): RoadDirection[] {
   return (['north', 'south', 'east', 'west'] as RoadDirection[]).filter((direction) => connections[direction]);
-}
-
-
-export function drawRoadConnectors(
-  graphics: Graphics,
-  px: number,
-  py: number,
-  ts: number,
-  halfWidth: number,
-  color: number,
-  neighbors: Record<'north' | 'south' | 'east' | 'west', boolean>,
-): void {
-  const center = ts / 2;
-  if (neighbors.west) graphics.rect(px, py + center - halfWidth, center, halfWidth * 2).fill(color);
-  if (neighbors.east) graphics.rect(px + center, py + center - halfWidth, center, halfWidth * 2).fill(color);
-  if (neighbors.north) graphics.rect(px + center - halfWidth, py, halfWidth * 2, center).fill(color);
-  if (neighbors.south) graphics.rect(px + center - halfWidth, py + center, halfWidth * 2, center).fill(color);
 }
 
 

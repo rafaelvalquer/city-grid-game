@@ -6,7 +6,7 @@ import type { PerformanceMetrics } from '../game/performance/performanceTypes';
 
 export type HeatmapMode = 'traffic' | 'satisfaction' | 'flow' | 'off';
 export type ViewLayer = 'surface' | 'underground';
-export type MobilityFocusMode = 'off' | 'bike' | 'bus' | 'metro';
+export type MobilityFocusMode = 'off' | 'bike' | 'bus' | 'metro' | 'helicopter';
 
 export type HoverPreview = {
   x: number;
@@ -82,6 +82,13 @@ const initialStats: CityStats = {
   metroTripsCompleted: 0,
   metroPassengersWaiting: 0,
   metroTrains: 0,
+  helipads: 0,
+  helicopterLines: 0,
+  helicopters: 0,
+  helicopterPassengers: 0,
+  helicopterPassengersWaiting: 0,
+  helicopterTripsCompleted: 0,
+  helicopterCarsAvoided: 0,
   cityLevel: 1,
   day: 1,
   timeLabel: '06:00',
@@ -107,13 +114,17 @@ export const useGameStore = create<GameStore>((set) => ({
   setTool: (tool) => set((state) => ({
     selectedTool: tool,
     actionFeedback: null,
-    viewLayer: tool === 'metroTrack' || tool === 'metroLine' ? 'underground' : state.viewLayer,
+    viewLayer: tool === 'metroTrack' || tool === 'metroLine'
+      ? 'underground'
+      : tool === 'helipad' || tool === 'helicopterLine'
+        ? 'surface'
+        : state.viewLayer,
   })),
   setHeatmapMode: (mode) => set({ heatmapMode: mode }),
   setViewLayer: (viewLayer) => set({ viewLayer }),
   setMobilityFocusMode: (mode) => set((state) => ({
     mobilityFocusMode: mode,
-    viewLayer: mode === 'metro' ? 'underground' : mode === 'bike' || mode === 'bus' ? 'surface' : state.viewLayer,
+    viewLayer: mode === 'metro' ? 'underground' : mode === 'bike' || mode === 'bus' || mode === 'helicopter' ? 'surface' : state.viewLayer,
   })),
   toggleViewLayer: () => set((s) => ({ viewLayer: s.viewLayer === 'surface' ? 'underground' : 'surface' })),
   togglePaused: () => set((s) => ({ paused: !s.paused })),

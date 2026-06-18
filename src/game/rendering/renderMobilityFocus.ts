@@ -4,6 +4,7 @@ import type { Car } from '../../types/agent.types';
 import type { Vec2 } from '../../types/city.types';
 import type { MetroLine } from '../../types/metro.types';
 import type { GameWorld } from '../engine/simulation';
+import { drawHelipadCoverage, getHelicopterPose } from './renderHelicopters';
 
 const DIM_COLOR = 0x020617;
 const BIKE = 0x5cff9d;
@@ -30,6 +31,31 @@ export function drawMobilityFocusOverlay(
   if (mode === 'bike') drawBikeFocusOverlay(graphics, world, ts, timeSeconds);
   if (mode === 'bus') drawBusFocusOverlay(graphics, world, ts, timeSeconds);
   if (mode === 'metro') drawMetroFocusOverlay(graphics, world, ts, timeSeconds);
+  if (mode === 'helicopter') drawHelicopterFocusOverlay(graphics, world, ts, timeSeconds);
+}
+
+function drawHelicopterFocusOverlay(graphics: Graphics, world: GameWorld, ts: number, timeSeconds: number): void {
+  const pulse = 0.5 + Math.sin(timeSeconds * 3.4) * 0.2;
+  for (const helipad of world.helipads) {
+    drawHelipadCoverage(graphics, helipad, ts, 0.025);
+    const cx = helipad.x * ts + ts / 2;
+    const cy = helipad.y * ts + ts / 2;
+    graphics.circle(cx, cy, 12 + pulse * 3).fill({ color: 0xf97316, alpha: 0.72 });
+    graphics.circle(cx, cy, 5).fill({ color: 0xffffff, alpha: 0.92 });
+  }
+  for (const line of world.helicopterLines) {
+    const from = world.getHelipad(line.helipadIds[0]);
+    const to = world.getHelipad(line.helipadIds[1]);
+    if (from && to) drawPolyline(graphics, [from, to], ts, Number(line.color.replace('#', '0x')), 4, 0.82);
+  }
+  for (const helicopter of world.helicopters) {
+    const pose = getHelicopterPose(world, helicopter);
+    if (!pose) continue;
+    const px = pose.x * ts + ts / 2;
+    const py = pose.y * ts + ts / 2;
+    graphics.circle(px, py, 15).fill({ color: 0xf8fafc, alpha: 0.18 });
+    graphics.roundRect(px - 8, py - 5, 16, 10, 5).fill({ color: 0xf97316, alpha: 0.98 });
+  }
 }
 
 function drawMobilityFocusDim(graphics: Graphics, world: GameWorld, ts: number): void {

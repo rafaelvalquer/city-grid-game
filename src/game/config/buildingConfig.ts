@@ -38,9 +38,3 @@ export const BUILDING_CONFIG: Record<BuildingType, { label: string; levels: Reco
 export function getBuildingLevelConfig(type: BuildingType, level: BuildingLevel): BuildingLevelConfig {
   return BUILDING_CONFIG[type].levels[level];
 }
-
-export function nextBuildingLevel(level: BuildingLevel): BuildingLevel | null {
-  if (level === 1) return 2;
-  if (level === 2) return 3;
-  return null;
-}

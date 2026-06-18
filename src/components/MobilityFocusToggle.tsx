@@ -1,4 +1,4 @@
-import { Bike, BusFront, Eye, TrainFront } from 'lucide-react';
+import { Bike, BusFront, Eye, Plane, TrainFront } from 'lucide-react';
 import { useGameStore, type MobilityFocusMode } from '../store/gameStore';
 
 const focusModes: Array<{ id: MobilityFocusMode; label: string; icon: typeof Eye }> = [
@@ -6,6 +6,7 @@ const focusModes: Array<{ id: MobilityFocusMode; label: string; icon: typeof Eye
   { id: 'bike', label: 'Bicicletas', icon: Bike },
   { id: 'bus', label: 'Ônibus', icon: BusFront },
   { id: 'metro', label: 'Metrô', icon: TrainFront },
+  { id: 'helicopter', label: 'Aéreo', icon: Plane },
 ];
 
 export function MobilityFocusToggle({ variant = 'panel' }: { variant?: 'panel' | 'floating' }) {
@@ -56,6 +57,14 @@ export function MobilityFocusToggle({ variant = 'panel' }: { variant?: 'panel' |
               <span>Estações: <strong>{stats.metroStations ?? 0}</strong></span>
               <span>Linhas: <strong>{stats.metroLines ?? 0}</strong></span>
               <span>Trens: <strong>{stats.metroTrains ?? 0}</strong></span>
+            </>
+          )}
+          {mode === 'helicopter' && (
+            <>
+              <span>Helipontos: <strong>{stats.helipads}</strong></span>
+              <span>Linhas: <strong>{stats.helicopterLines}</strong></span>
+              <span>Aeronaves: <strong>{stats.helicopters}</strong></span>
+              <span>Carros evitados: <strong>{stats.helicopterCarsAvoided}</strong></span>
             </>
           )}
         </div>

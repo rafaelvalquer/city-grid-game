@@ -1,0 +1,16 @@
+export const HELICOPTER_CONFIG = {
+  helipadBuildCost: 1600,
+  helipadRemoveCost: 640,
+  coverageRadius: 12,
+  waitingCapacity: 48,
+  maxLinesPerHelipad: 3,
+  lineActivationCost: 800,
+  minLineDistance: 10,
+  passengerCapacity: 6,
+  minHelicoptersPerLine: 1,
+  maxHelicoptersPerLine: 3,
+  helicopterPurchaseCost: 1200,
+  speedTilesPerSecond: 6,
+  dwellSeconds: 2.5,
+  tripPreference: 0.58,
+} as const;

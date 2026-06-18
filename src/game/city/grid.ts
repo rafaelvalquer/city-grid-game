@@ -9,14 +9,6 @@ export function setGridBounds(width: number, height: number): void {
   activeGridHeight = Math.max(1, Math.floor(height));
 }
 
-export function getGridWidth(): number {
-  return activeGridWidth;
-}
-
-export function getGridHeight(): number {
-  return activeGridHeight;
-}
-
 export function createGrid(width = GAME_CONFIG.gridWidth, height = GAME_CONFIG.gridHeight): Tile[][] {
   setGridBounds(width, height);
   return Array.from({ length: height }, (_, y) =>
@@ -61,9 +53,4 @@ export function isRoadType(type: TileType | undefined): boolean {
 
 export function isTerrainBlocked(tile: Tile | undefined): boolean {
   return tile?.type === 'mountain' || tile?.type === 'lake';
-}
-
-
-export function isTerrainType(type: TileType | undefined): boolean {
-  return type === 'mountain' || type === 'lake';
 }

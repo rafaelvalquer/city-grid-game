@@ -2,6 +2,7 @@ import { nanoid } from 'nanoid';
 import type { Building, BuildingLevel, CityHistorySample, CityStats, District, RoadDirection, RoadType, SelectedEntity, Tile, TrafficCell, TrafficHeatmapCell, TrafficHeatmapSample, TrafficHeatmapSummary, BikeTripVisual, TrafficLightAxis, TrafficLightState, TransitLine, TransitPassengerGroup, TransitStop, Vec2 } from '../../types/city.types';
 import type { Car } from '../../types/agent.types';
 import type { MetroLine, MetroLineStats, MetroStation, MetroTrack, MetroTrain } from '../../types/metro.types';
+import type { Helicopter, HelicopterLine, HelicopterLineStats, HelicopterPassengerGroup, Helipad } from '../../types/helicopter.types';
 import type { Tool } from '../../types/game.types';
 import { GAME_CONFIG } from '../config/gameConfig';
 import type { GameSetupOptions } from '../config/gameSetup';
@@ -9,6 +10,7 @@ import { ROAD_CONFIG } from '../config/roadConfig';
 import { TRANSIT_CONFIG, BUS_LANE_CONFIG } from '../config/transitConfig';
 import { METRO_CONFIG } from '../config/metroConfig';
 import { BIKE_LANE_CONFIG } from '../config/bikeConfig';
+import { HELICOPTER_CONFIG } from '../config/helicopterConfig';
 import { DISTRICT_EXPANSION_CONFIG } from '../config/districtConfig';
 import { TERRAIN_CONFIG } from '../config/terrainConfig';
 import { createGrid, inBounds, isRoadType, isTerrainBlocked, keyOf, setGridBounds } from '../city/grid';
@@ -53,7 +55,6 @@ const INTERSECTION_REROUTE_STUCK_SECONDS = 22;
 const SPAWN_LANE_CLEAR_DISTANCE = 0.85;
 const TRAVEL_TIME_HISTORY_LIMIT = 35;
 const FAILED_TRIP_PRESSURE_DECAY = 0.82;
-const FAILED_TRIP_PENALTY_FACTOR = 0.9;
 const BUILDING_UPGRADE_EVERY_SECONDS = 10;
 const BUILDING_UPGRADE_MIN_SATISFACTION = 45;
 const BUILDING_UPGRADE_MAX_CONGESTION = 140;
@@ -88,9 +89,7 @@ type PerformanceViewportBounds = {
   maxY: number;
 };
 
-const REDUCED_CAR_UPDATE_THRESHOLD = 450;
 const DISTANT_CAR_UPDATE_EVERY_TICKS = 3;
-const DISTANT_CAR_VIEWPORT_PADDING_TILES = 8;
 
 export class GameWorld {
   readonly performanceProfiler = createPerformanceProfiler();
@@ -115,8 +114,13 @@ export class GameWorld {
   metroTracks: MetroTrack[] = [];
   metroLines: MetroLine[] = [];
   metroTrains: MetroTrain[] = [];
+  helipads: Helipad[] = [];
+  helicopterLines: HelicopterLine[] = [];
+  helicopters: Helicopter[] = [];
   metroTripsCompleted = 0;
   metroCarsAvoided = 0;
+  helicopterTripsCompleted = 0;
+  helicopterCarsAvoided = 0;
   traffic = new Map<string, TrafficCell>();
   trafficLights = new Map<string, TrafficLightState>();
   selected: SelectedEntity = { kind: 'none' };
@@ -577,6 +581,13 @@ export class GameWorld {
       metroTripsCompleted: this.metroTripsCompleted,
       metroPassengersWaiting: this.getMetroWaitingPassengerCount(),
       metroTrains: this.metroTrains.length,
+      helipads: this.helipads.length,
+      helicopterLines: this.helicopterLines.filter((line) => line.active).length,
+      helicopters: this.helicopters.length,
+      helicopterPassengers: this.getHelicopterPassengerCount() + this.getHelicopterWaitingPassengerCount(),
+      helicopterPassengersWaiting: this.getHelicopterWaitingPassengerCount(),
+      helicopterTripsCompleted: this.helicopterTripsCompleted,
+      helicopterCarsAvoided: this.helicopterCarsAvoided,
       cityLevel: this.cityLevel,
       day: this.time.getDay(),
       timeLabel: this.time.getLabel(),
@@ -678,6 +689,13 @@ export class GameWorld {
       metroStations: snapshot.metroStations,
       metroLines: snapshot.metroLines,
       metroTrains: snapshot.metroTrains,
+      helipads: snapshot.helipads,
+      helicopterLines: snapshot.helicopterLines,
+      helicopters: snapshot.helicopters,
+      helicopterPassengers: snapshot.helicopterPassengers,
+      helicopterPassengersWaiting: snapshot.helicopterPassengersWaiting,
+      helicopterTripsCompleted: snapshot.helicopterTripsCompleted,
+      helicopterCarsAvoided: snapshot.helicopterCarsAvoided,
       averageCongestion: snapshot.averageCongestion,
       satisfaction: snapshot.satisfaction,
       averageTravelTime: snapshot.averageTravelTime,
@@ -811,6 +829,7 @@ export class GameWorld {
 
     this.performanceProfiler.time('transitStopsMs', () => this.updateTransitStops(dt));
     this.performanceProfiler.time('metroMs', () => this.updateMetro(dt));
+    this.performanceProfiler.time('helicopterMs', () => this.updateHelicopters(dt));
     this.performanceProfiler.time('bikeTripsMs', () => this.updateBikeTrips(dt));
     this.performanceProfiler.time('updateConnectionsMs', () => this.updateConnectionsOptimized(dt));
     this.performanceProfiler.time('refreshSelectedMs', () => this.refreshSelectedBuilding());
@@ -853,7 +872,11 @@ export class GameWorld {
       return this.buildMetroStationAt(x, y);
     }
 
-    if (tool === 'metroTrack' || tool === 'metroLine') {
+    if (tool === 'helipad') {
+      return this.buildHelipadAt(x, y);
+    }
+
+    if (tool === 'metroTrack' || tool === 'metroLine' || tool === 'helicopterLine') {
       return false;
     }
 
@@ -952,6 +975,7 @@ export class GameWorld {
     if (tool === 'road' || tool === 'avenue') {
       if (tile.type === 'busStop') return false;
       if (tile.type === 'metroStation') return false;
+      if (tile.type === 'helipad') return false;
       if (isRoundaboutTile(tile) || isRoundaboutCenter(tile)) return false;
       if (tile.type === tool) return false;
       const building = tile.type === 'building' && tile.buildingId ? this.getBuilding(tile.buildingId) : undefined;
@@ -973,6 +997,10 @@ export class GameWorld {
     }
 
     if (tool === 'remove') {
+      const helipad = this.getHelipadAt(x, y);
+      if (helipad) {
+        return this.removeHelipad(helipad.id);
+      }
       const metroStation = this.getMetroStationAt(x, y);
       if (metroStation) {
         if (!this.removeMetroStationAt(metroStation.id)) return false;
@@ -1086,6 +1114,7 @@ export class GameWorld {
       }
       if (tile.type === 'busStop') return { success: false, built: 0, cost: 0, reason: 'A linha passa por um ponto de ônibus.' };
       if (tile.type === 'metroStation') return { success: false, built: 0, cost: 0, reason: 'A linha passa por uma estação de metrô.' };
+      if (tile.type === 'helipad') return { success: false, built: 0, cost: 0, reason: 'A linha passa por um heliponto.' };
       if (tile.type === 'building') return { success: false, built: 0, cost: 0, reason: 'A linha passa por um prédio.' };
       if (isRoundaboutTile(tile) || isRoundaboutCenter(tile)) return { success: false, built: 0, cost: 0, reason: 'A linha passa por uma rotatória.' };
       if (tile.type !== roadType) built += 1;
@@ -1233,6 +1262,9 @@ export class GameWorld {
     } else if (tile.type === 'metroStation' && tile.metroStationId) {
       const station = this.getMetroStation(tile.metroStationId);
       this.selected = station ? { kind: 'metroStation', station } : { kind: 'tile', x, y, type: tile.type };
+    } else if (tile.type === 'helipad' && tile.helipadId) {
+      const helipad = this.getHelipad(tile.helipadId);
+      this.selected = helipad ? { kind: 'helipad', helipad } : { kind: 'tile', x, y, type: tile.type };
     } else if (isRoadType(tile.type)) {
       const t = this.traffic.get(keyOf(x, y)) ?? { x, y, cars: 0, capacity: ROAD_CONFIG[tile.type as RoadType].capacity, congestion: 0 };
       this.selected = { kind: 'road', x, y, roadType: tile.type as RoadType, traffic: t, trafficLight: this.trafficLights.get(getTrafficLightKey(x, y)), oneWay: tile.oneWay, busLane: tile.busLane };
@@ -1870,6 +1902,11 @@ export class GameWorld {
         continue;
       }
       const tripDistance = manhattan(trip.origin, trip.destination);
+      if (tripDistance >= HELICOPTER_CONFIG.minLineDistance && this.tryCreateHelicopterTrip(trip.origin, trip.destination)) {
+        trip.origin.tripsToday += 1;
+        trip.destination.tripsToday += 1;
+        continue;
+      }
       if (tripDistance >= METRO_CONFIG.longTripDistance && this.tryCreateMetroTrip(trip.origin, trip.destination)) {
         trip.origin.tripsToday += 1;
         trip.destination.tripsToday += 1;
@@ -2191,7 +2228,7 @@ export class GameWorld {
       }
     }
     if (failed.length) {
-      for (const car of failed) {
+      for (let index = 0; index < failed.length; index += 1) {
         this.recordFailedTrip();
       }
     }
@@ -2496,41 +2533,6 @@ export class GameWorld {
     this.entityIndex.syncCar(car);
     this.performanceProfiler.setCounters({ pathfindingPending: getPathfindingClient().getPendingCount() });
   }
-  private shouldUseReducedCarUpdate(car: Car): boolean {
-    if (!this.activeViewportBounds) return false;
-    if (this.cars.length < REDUCED_CAR_UPDATE_THRESHOLD) return false;
-    if (car.vehicleType === 'bus') return false;
-    if (this.selected.kind === 'car' && this.selected.carId === car.id) return false;
-    if (car.lifecyclePhase !== 'driving') return false;
-    if (car.status !== 'moving' && car.status !== 'stopped') return false;
-    if (car.intersectionStopKey || car.signalTransitionGraceSeconds > 0) return false;
-    if (car.immobileSeconds > PERFORMANCE_CONFIG.reducedCarMaxStuckSeconds) return false;
-    if (car.stuckSeconds > PERFORMANCE_CONFIG.reducedCarMaxStuckSeconds) return false;
-
-    const current = { x: car.currentTileX, y: car.currentTileY };
-    const next = car.route[car.routeIndex + 1];
-    if (!next) return false;
-    if (isIntersection(this.grid, current)) return false;
-    if (isIntersection(this.grid, next) && car.progressToNext >= PERFORMANCE_CONFIG.visibleReducedIntersectionProgressThreshold) return false;
-    if (this.needsPriorityCarUpdate(car)) return false;
-
-    const outsideViewport = !this.isTileInsideActiveViewport(current.x, current.y, PERFORMANCE_CONFIG.reducedCarViewportPaddingTiles)
-      && !this.isTileInsideActiveViewport(next.x, next.y, PERFORMANCE_CONFIG.reducedCarViewportPaddingTiles);
-
-    if (outsideViewport) {
-      return this.performanceUpdateTick % PERFORMANCE_CONFIG.reducedCarUpdateEveryTicks !== this.carUpdateBucket(car);
-    }
-
-    const highLoad = this.isPerformanceHighLoadMode();
-    if (!highLoad) return false;
-    if (this.cars.length < PERFORMANCE_CONFIG.visibleReducedUpdateThresholdCars) return false;
-
-    const divisor = this.cars.length >= PERFORMANCE_CONFIG.visibleReducedExtremeCars
-      ? PERFORMANCE_CONFIG.visibleReducedUpdateEveryTicksExtreme
-      : PERFORMANCE_CONFIG.visibleReducedUpdateEveryTicks;
-    return this.performanceUpdateTick % divisor !== this.carUpdateBucket(car) % divisor;
-  }
-
   private advanceDistantCarLightweight(car: Car, dt: number): void {
     const desired = Math.max(0.25, car.desiredSpeed || car.baseSpeed);
     const speed = Math.max(0.25, Math.min(desired, car.currentSpeed || car.targetSpeed || car.baseSpeed));
@@ -3073,6 +3075,319 @@ export class GameWorld {
     return tile.oneWay;
   }
 
+  getHelipad(id: string | undefined): Helipad | undefined {
+    return id ? this.helipads.find((helipad) => helipad.id === id) : undefined;
+  }
+
+  getHelipadAt(x: number, y: number): Helipad | undefined {
+    return this.helipads.find((helipad) => helipad.x === x && helipad.y === y);
+  }
+
+  getHelicopter(id: string | undefined): Helicopter | undefined {
+    return id ? this.helicopters.find((helicopter) => helicopter.id === id) : undefined;
+  }
+
+  inspectHelipad(id: string): void {
+    const helipad = this.getHelipad(id);
+    if (helipad) this.selected = { kind: 'helipad', helipad };
+    this.emit();
+  }
+
+  inspectHelicopterLine(id: string): void {
+    const line = this.helicopterLines.find((candidate) => candidate.id === id);
+    if (line) this.selected = { kind: 'helicopterLine', line };
+    this.emit();
+  }
+
+  inspectHelicopter(id: string): void {
+    const helicopter = this.getHelicopter(id);
+    this.selected = helicopter ? { kind: 'helicopter', helicopterId: id, helicopter } : { kind: 'none' };
+    this.emit();
+  }
+
+  buildHelipadAt(x: number, y: number): boolean {
+    if (!inBounds(x, y)) return false;
+    const accessRoad = this.findHelipadAccessRoad({ x, y });
+    if (this.grid[y]?.[x]?.type !== 'empty' || !accessRoad || this.money < HELICOPTER_CONFIG.helipadBuildCost) return false;
+    const helipad: Helipad = {
+      id: nanoid(8),
+      name: `Heliponto ${this.helipads.length + 1}`,
+      x, y, accessRoad,
+      coverageRadius: HELICOPTER_CONFIG.coverageRadius,
+      capacity: HELICOPTER_CONFIG.waitingCapacity,
+      waiting: [],
+      totalBoarded: 0,
+      totalAlighted: 0,
+      peakWaitingPassengers: 0,
+      carsAvoidedFromHelipad: 0,
+      activeLineIds: [],
+      createdAtDay: this.time.getDay(),
+    };
+    this.helipads.push(helipad);
+    this.grid[y][x] = { x, y, type: 'helipad', helipadId: helipad.id };
+    this.money -= HELICOPTER_CONFIG.helipadBuildCost;
+    this.selected = { kind: 'helipad', helipad };
+    this.markStaticRenderDirty();
+    this.emit();
+    return true;
+  }
+
+  createHelicopterLine(fromId: string, toId: string): { success: boolean; name?: string; cost?: number; reason?: string } {
+    const from = this.getHelipad(fromId);
+    const to = this.getHelipad(toId);
+    if (!from || !to) return { success: false, reason: 'Selecione dois helipontos válidos.' };
+    if (from.id === to.id) return { success: false, reason: 'A linha precisa ligar dois helipontos diferentes.' };
+    if (manhattan(from, to) < HELICOPTER_CONFIG.minLineDistance) return { success: false, reason: `Distância mínima: ${HELICOPTER_CONFIG.minLineDistance} tiles.` };
+    if (from.activeLineIds.length >= HELICOPTER_CONFIG.maxLinesPerHelipad || to.activeLineIds.length >= HELICOPTER_CONFIG.maxLinesPerHelipad) {
+      return { success: false, reason: `Cada heliponto aceita no máximo ${HELICOPTER_CONFIG.maxLinesPerHelipad} linhas.` };
+    }
+    if (this.helicopterLines.some((line) => line.active && line.helipadIds.includes(from.id) && line.helipadIds.includes(to.id))) {
+      return { success: false, reason: 'Já existe uma linha entre esses helipontos.' };
+    }
+    if (this.money < HELICOPTER_CONFIG.lineActivationCost) return { success: false, cost: HELICOPTER_CONFIG.lineActivationCost, reason: `Faltam $ ${HELICOPTER_CONFIG.lineActivationCost - this.money}.` };
+    const line: HelicopterLine = {
+      id: nanoid(8),
+      name: `Linha Aérea ${this.helicopterLines.length + 1}`,
+      color: pickHelicopterLineColor(this.helicopterLines.length),
+      helipadIds: [from.id, to.id],
+      active: true,
+      helicopterCount: 1,
+      totalPassengers: 0,
+      currentPassengers: 0,
+      waitingPassengers: 0,
+      carsAvoided: 0,
+      completedCycles: 0,
+    };
+    this.helicopterLines.push(line);
+    from.activeLineIds.push(line.id);
+    to.activeLineIds.push(line.id);
+    this.spawnHelicopter(line, 0, 1);
+    this.money -= HELICOPTER_CONFIG.lineActivationCost;
+    this.selected = { kind: 'helicopterLine', line };
+    this.refreshHelicopterLineMetrics(line.id);
+    this.markStaticRenderDirty();
+    this.emit();
+    return { success: true, name: line.name, cost: HELICOPTER_CONFIG.lineActivationCost };
+  }
+
+  setHelicopterCount(lineId: string, requested: number): { success: boolean; count: number; cost?: number; reason?: string } {
+    const line = this.helicopterLines.find((candidate) => candidate.id === lineId);
+    if (!line) return { success: false, count: 0, reason: 'Linha aérea não encontrada.' };
+    const count = Math.max(1, Math.min(HELICOPTER_CONFIG.maxHelicoptersPerLine, Math.round(requested)));
+    const currentFleet = this.helicopters.filter((helicopter) => helicopter.lineId === lineId);
+    if (count === currentFleet.length) return { success: true, count };
+    if (count > currentFleet.length) {
+      const cost = (count - currentFleet.length) * HELICOPTER_CONFIG.helicopterPurchaseCost;
+      if (this.money < cost) return { success: false, count: currentFleet.length, cost, reason: `Faltam $ ${cost - this.money}.` };
+      this.money -= cost;
+      for (let index = currentFleet.length; index < count; index += 1) this.spawnHelicopter(line, index, count);
+      this.redistributeHelicopters(lineId);
+      this.refreshHelicopterLineMetrics(lineId);
+      this.emit();
+      return { success: true, count, cost };
+    }
+    const removable = [...currentFleet]
+      .sort((a, b) => helicopterPassengerCount(a.passengers) - helicopterPassengerCount(b.passengers))
+      .slice(0, currentFleet.length - count);
+    for (const helicopter of removable) this.returnHelicopterPassengersToQueue(helicopter);
+    const removeIds = new Set(removable.map((helicopter) => helicopter.id));
+    this.helicopters = this.helicopters.filter((helicopter) => !removeIds.has(helicopter.id));
+    this.redistributeHelicopters(lineId);
+    this.refreshHelicopterLineMetrics(lineId);
+    this.emit();
+    return { success: true, count };
+  }
+
+  deleteHelicopterLine(lineId: string): boolean {
+    const line = this.helicopterLines.find((candidate) => candidate.id === lineId);
+    if (!line) return false;
+    for (const helicopter of this.helicopters.filter((candidate) => candidate.lineId === lineId)) this.returnHelicopterPassengersToQueue(helicopter);
+    let stranded = 0;
+    for (const helipad of this.helipads) {
+      const before = helicopterWaitingCount(helipad.waiting);
+      helipad.waiting = helipad.waiting.filter((group) => !line.helipadIds.includes(group.destinationHelipadId));
+      stranded += before - helicopterWaitingCount(helipad.waiting);
+    }
+    if (stranded > 0) {
+      this.failedTrips += stranded;
+      this.failedTripPressure += stranded;
+    }
+    this.helicopters = this.helicopters.filter((helicopter) => helicopter.lineId !== lineId);
+    this.helicopterLines = this.helicopterLines.filter((candidate) => candidate.id !== lineId);
+    for (const helipad of this.helipads) helipad.activeLineIds = helipad.activeLineIds.filter((id) => id !== lineId);
+    if (this.selected.kind === 'helicopterLine' && this.selected.line.id === lineId) this.selected = { kind: 'none' };
+    this.markStaticRenderDirty();
+    this.emit();
+    return true;
+  }
+
+  removeHelipad(id: string): boolean {
+    const helipad = this.getHelipad(id);
+    if (!helipad || this.money < HELICOPTER_CONFIG.helipadRemoveCost) return false;
+    for (const lineId of [...helipad.activeLineIds]) this.deleteHelicopterLine(lineId);
+    this.helipads = this.helipads.filter((candidate) => candidate.id !== id);
+    this.grid[helipad.y][helipad.x] = { x: helipad.x, y: helipad.y, type: 'empty' };
+    this.money -= HELICOPTER_CONFIG.helipadRemoveCost;
+    if (this.selected.kind === 'helipad' && this.selected.helipad.id === id) this.selected = { kind: 'tile', x: helipad.x, y: helipad.y, type: 'empty' };
+    this.markStaticRenderDirty();
+    this.emit();
+    return true;
+  }
+
+  getHelicopterLineStats(lineId: string): HelicopterLineStats | undefined {
+    const line = this.helicopterLines.find((candidate) => candidate.id === lineId);
+    if (!line) return undefined;
+    return {
+      id: line.id, name: line.name, active: line.active,
+      helicopters: this.helicopters.filter((helicopter) => helicopter.lineId === lineId).length,
+      waitingPassengers: line.waitingPassengers,
+      currentPassengers: line.currentPassengers,
+      totalPassengers: line.totalPassengers,
+      carsAvoided: line.carsAvoided,
+      completedCycles: line.completedCycles,
+      helipadIds: line.helipadIds,
+    };
+  }
+
+  private findHelipadAccessRoad(pos: Vec2): Vec2 | undefined {
+    return [{ x: pos.x + 1, y: pos.y }, { x: pos.x - 1, y: pos.y }, { x: pos.x, y: pos.y + 1 }, { x: pos.x, y: pos.y - 1 }]
+      .filter((candidate) => inBounds(candidate.x, candidate.y))
+      .filter((candidate) => this.grid[candidate.y]?.[candidate.x]?.type === 'road' || this.grid[candidate.y]?.[candidate.x]?.type === 'avenue')
+      .sort((a, b) => Number(this.grid[a.y][a.x].type !== 'avenue') - Number(this.grid[b.y][b.x].type !== 'avenue'))[0];
+  }
+
+  private tryCreateHelicopterTrip(origin: Building, destination: Building): boolean {
+    const eligibleResident = (origin.type === 'house' && origin.level === 3) || (destination.type === 'house' && destination.level === 3);
+    if (!eligibleResident || !origin.connected || !destination.connected || Math.random() > HELICOPTER_CONFIG.tripPreference) return false;
+    const candidates = this.helicopterLines.flatMap((line) => {
+      if (!line.active) return [];
+      const a = this.getHelipad(line.helipadIds[0]);
+      const b = this.getHelipad(line.helipadIds[1]);
+      if (!a || !b) return [];
+      if (manhattan(origin, a) <= a.coverageRadius && manhattan(destination, b) <= b.coverageRadius) return [{ line, from: a, to: b }];
+      if (manhattan(origin, b) <= b.coverageRadius && manhattan(destination, a) <= a.coverageRadius) return [{ line, from: b, to: a }];
+      return [];
+    }).sort((a, b) => helicopterWaitingCount(a.from.waiting) - helicopterWaitingCount(b.from.waiting));
+    const candidate = candidates[0];
+    if (!candidate || helicopterWaitingCount(candidate.from.waiting) >= candidate.from.capacity) return false;
+    addHelicopterPassenger(candidate.from.waiting, candidate.to.id, 1);
+    candidate.from.peakWaitingPassengers = Math.max(candidate.from.peakWaitingPassengers, helicopterWaitingCount(candidate.from.waiting));
+    candidate.line.totalPassengers += 1;
+    this.refreshHelicopterLineMetrics(candidate.line.id);
+    return true;
+  }
+
+  private spawnHelicopter(line: HelicopterLine, index: number, count: number): void {
+    const reverse = index % 2 === 1;
+    const progress = count <= 1 ? 0 : index / count;
+    this.helicopters.push({
+      id: nanoid(8), lineId: line.id,
+      fromHelipadId: reverse ? line.helipadIds[1] : line.helipadIds[0],
+      toHelipadId: reverse ? line.helipadIds[0] : line.helipadIds[1],
+      progress, speed: HELICOPTER_CONFIG.speedTilesPerSecond,
+      capacity: HELICOPTER_CONFIG.passengerCapacity,
+      passengers: [], state: progress > 0 ? 'flying' : 'dwelling',
+      stateProgress: progress > 0 ? 1 : 0,
+      dwellSeconds: progress > 0 ? 0 : HELICOPTER_CONFIG.dwellSeconds,
+    });
+  }
+
+  private redistributeHelicopters(lineId: string): void {
+    const fleet = this.helicopters.filter((helicopter) => helicopter.lineId === lineId);
+    fleet.forEach((helicopter, index) => {
+      if (helicopterPassengerCount(helicopter.passengers)) return;
+      helicopter.progress = index / Math.max(1, fleet.length);
+      helicopter.state = helicopter.progress ? 'flying' : 'dwelling';
+      helicopter.stateProgress = helicopter.progress ? 1 : 0;
+    });
+  }
+
+  private updateHelicopters(dt: number): void {
+    for (const helicopter of this.helicopters) {
+      const from = this.getHelipad(helicopter.fromHelipadId);
+      const to = this.getHelipad(helicopter.toHelipadId);
+      if (!from || !to) continue;
+      if (helicopter.state === 'dwelling') {
+        helicopter.dwellSeconds = Math.max(0, helicopter.dwellSeconds - dt);
+        if (!helicopter.dwellSeconds) {
+          this.boardHelicopterAtCurrentPad(helicopter);
+          helicopter.state = 'takingOff';
+          helicopter.stateProgress = 0;
+        }
+      } else if (helicopter.state === 'takingOff') {
+        helicopter.stateProgress = Math.min(1, helicopter.stateProgress + dt / 0.8);
+        if (helicopter.stateProgress >= 1) { helicopter.state = 'flying'; helicopter.progress = 0; }
+      } else if (helicopter.state === 'flying') {
+        helicopter.progress = Math.min(1, helicopter.progress + (helicopter.speed / Math.max(1, Math.hypot(to.x - from.x, to.y - from.y))) * dt);
+        if (helicopter.progress >= 1) { helicopter.state = 'landing'; helicopter.stateProgress = 0; }
+      } else {
+        helicopter.stateProgress = Math.min(1, helicopter.stateProgress + dt / 0.8);
+        if (helicopter.stateProgress >= 1) this.processHelicopterStop(helicopter);
+      }
+    }
+  }
+
+  private processHelicopterStop(helicopter: Helicopter): void {
+    const arrived = this.getHelipad(helicopter.toHelipadId);
+    const departed = this.getHelipad(helicopter.fromHelipadId);
+    const line = this.helicopterLines.find((candidate) => candidate.id === helicopter.lineId);
+    if (!arrived || !departed || !line) return;
+    const alighting = removeHelicopterPassengers(helicopter.passengers, arrived.id);
+    arrived.totalAlighted += alighting;
+    arrived.carsAvoidedFromHelipad += alighting;
+    line.carsAvoided += alighting;
+    this.helicopterTripsCompleted += alighting;
+    this.helicopterCarsAvoided += alighting;
+    this.carTripsAvoided += alighting;
+    this.completedTrips += alighting;
+    for (let index = 0; index < alighting; index += 1) this.tripHistory.push(Math.max(2, manhattan(departed, arrived) / HELICOPTER_CONFIG.speedTilesPerSecond));
+    if (this.tripHistory.length > TRAVEL_TIME_HISTORY_LIMIT) this.tripHistory.splice(0, this.tripHistory.length - TRAVEL_TIME_HISTORY_LIMIT);
+    const freeSeats = Math.max(0, helicopter.capacity - helicopterPassengerCount(helicopter.passengers));
+    const boarding = takeHelicopterPassengers(arrived.waiting, departed.id, freeSeats);
+    if (boarding) addHelicopterPassenger(helicopter.passengers, departed.id, boarding);
+    arrived.totalBoarded += boarding;
+    [helicopter.fromHelipadId, helicopter.toHelipadId] = [helicopter.toHelipadId, helicopter.fromHelipadId];
+    helicopter.progress = 0;
+    helicopter.state = 'dwelling';
+    helicopter.stateProgress = 0;
+    helicopter.dwellSeconds = HELICOPTER_CONFIG.dwellSeconds;
+    if (helicopter.fromHelipadId === line.helipadIds[0]) line.completedCycles += 1;
+    this.refreshHelicopterLineMetrics(line.id);
+  }
+
+  private boardHelicopterAtCurrentPad(helicopter: Helicopter): void {
+    const current = this.getHelipad(helicopter.fromHelipadId);
+    if (!current) return;
+    const freeSeats = Math.max(0, helicopter.capacity - helicopterPassengerCount(helicopter.passengers));
+    const boarding = takeHelicopterPassengers(current.waiting, helicopter.toHelipadId, freeSeats);
+    if (boarding) addHelicopterPassenger(helicopter.passengers, helicopter.toHelipadId, boarding);
+    current.totalBoarded += boarding;
+    this.refreshHelicopterLineMetrics(helicopter.lineId);
+  }
+
+  private refreshHelicopterLineMetrics(lineId: string): void {
+    const line = this.helicopterLines.find((candidate) => candidate.id === lineId);
+    if (!line) return;
+    const fleet = this.helicopters.filter((helicopter) => helicopter.lineId === lineId);
+    line.helicopterCount = fleet.length;
+    line.currentPassengers = fleet.reduce((sum, helicopter) => sum + helicopterPassengerCount(helicopter.passengers), 0);
+    line.waitingPassengers = line.helipadIds.reduce((sum, id) => sum + helicopterWaitingCount(this.getHelipad(id)?.waiting ?? []), 0);
+  }
+
+  private returnHelicopterPassengersToQueue(helicopter: Helicopter): void {
+    const from = this.getHelipad(helicopter.fromHelipadId);
+    if (from) for (const group of helicopter.passengers) addHelicopterPassenger(from.waiting, group.destinationHelipadId, group.count);
+    helicopter.passengers = [];
+  }
+
+  private getHelicopterWaitingPassengerCount(): number {
+    return this.helipads.reduce((sum, helipad) => sum + helicopterWaitingCount(helipad.waiting), 0);
+  }
+
+  private getHelicopterPassengerCount(): number {
+    return this.helicopters.reduce((sum, helicopter) => sum + helicopterPassengerCount(helicopter.passengers), 0);
+  }
+
 
   getMetroStation(id: string | undefined): MetroStation | undefined {
     if (!id) return undefined;
@@ -3476,7 +3791,7 @@ export class GameWorld {
     const travelOverComfort = Math.max(0, this.averageTravelTime - travelComfortSeconds);
     const travelPenalty = Math.min(18, Math.pow(travelOverComfort, 0.9) * 0.75);
 
-    const publicTransportRelief = Math.min(8, (snapshot.publicTripsCompleted + snapshot.metroTripsCompleted) * 0.015);
+    const publicTransportRelief = Math.min(8, (snapshot.publicTripsCompleted + snapshot.metroTripsCompleted + snapshot.helicopterTripsCompleted) * 0.015);
     const connectivityBonus = snapshot.disconnectedBuildings === 0 ? 3 : 0;
 
     const targetSatisfaction = 100
@@ -3504,6 +3819,37 @@ export class GameWorld {
 
 export function getBuildingDemolitionCost(building: Building): number {
   return BUILDING_DEMOLITION_COST[building.type] * building.level;
+}
+
+function helicopterWaitingCount(groups: HelicopterPassengerGroup[]): number {
+  return groups.reduce((sum, group) => sum + group.count, 0);
+}
+
+function helicopterPassengerCount(groups: HelicopterPassengerGroup[]): number {
+  return helicopterWaitingCount(groups);
+}
+
+function addHelicopterPassenger(groups: HelicopterPassengerGroup[], destinationHelipadId: string, count: number): void {
+  const existing = groups.find((group) => group.destinationHelipadId === destinationHelipadId);
+  if (existing) existing.count += count;
+  else groups.push({ destinationHelipadId, count });
+}
+
+function takeHelicopterPassengers(groups: HelicopterPassengerGroup[], destinationHelipadId: string, capacity: number): number {
+  const group = groups.find((candidate) => candidate.destinationHelipadId === destinationHelipadId);
+  if (!group || capacity <= 0) return 0;
+  const count = Math.min(capacity, group.count);
+  group.count -= count;
+  if (group.count <= 0) groups.splice(groups.indexOf(group), 1);
+  return count;
+}
+
+function removeHelicopterPassengers(groups: HelicopterPassengerGroup[], destinationHelipadId: string): number {
+  return takeHelicopterPassengers(groups, destinationHelipadId, Number.POSITIVE_INFINITY);
+}
+
+function pickHelicopterLineColor(index: number): string {
+  return ['#f97316', '#a855f7', '#22c55e', '#ef4444', '#06b6d4'][index % 5];
 }
 
 function applySmoothSpeed(car: Car, targetSpeed: number, dt: number, hardStop: boolean): void {

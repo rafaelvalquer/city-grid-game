@@ -115,6 +115,13 @@ function emptyHistoryReference(): CityHistorySample {
     metroStations: 0,
     metroLines: 0,
     metroTrains: 0,
+    helipads: 0,
+    helicopterLines: 0,
+    helicopters: 0,
+    helicopterPassengers: 0,
+    helicopterPassengersWaiting: 0,
+    helicopterTripsCompleted: 0,
+    helicopterCarsAvoided: 0,
     averageCongestion: 0,
     satisfaction: 0,
     averageTravelTime: 0,
@@ -236,9 +243,12 @@ function renderTab(tab: AnalyticsTab, samples: CityHistorySample[], world: GameW
           { label: 'Carros evitados pelo metrô', value: latest.metroCarsAvoided ?? 0, initial: samples[0].metroCarsAvoided ?? 0 },
           { label: 'Viagens de bicicleta', value: latest.bikeTripsCompleted ?? 0, initial: samples[0].bikeTripsCompleted ?? 0 },
           { label: 'Carros evitados por bicicleta', value: latest.bikeCarsAvoided ?? 0, initial: samples[0].bikeCarsAvoided ?? 0 },
+          { label: 'Viagens de helicóptero', value: latest.helicopterTripsCompleted, initial: samples[0].helicopterTripsCompleted },
+          { label: 'Carros evitados por helicóptero', value: latest.helicopterCarsAvoided, initial: samples[0].helicopterCarsAvoided },
         ]} />
         <BikeAnalyticsCard world={world} latest={latest} />
         <MetroAnalyticsCard world={world} latest={latest} />
+        <HelicopterAnalyticsCard world={world} latest={latest} />
         <ChartCard title="Fila e frota" samples={samples} series={[
           { label: 'Passageiros esperando', color: 'warn', values: samples.map((s) => s.waitingPassengers) },
           { label: 'Ônibus ativos x 12', color: 'accent', values: samples.map((s) => s.activeBuses * 12) },
@@ -247,6 +257,7 @@ function renderTab(tab: AnalyticsTab, samples: CityHistorySample[], world: GameW
           { label: 'Viagens por ônibus', color: 'good', values: samples.map((s) => s.publicTripsCompleted) },
           { label: 'Viagens por metrô', color: 'accent', values: samples.map((s) => s.metroTripsCompleted ?? 0) },
           { label: 'Viagens por bicicleta', color: 'good', values: samples.map((s) => s.bikeTripsCompleted ?? 0) },
+          { label: 'Viagens de helicóptero', color: 'bad', values: samples.map((s) => s.helicopterTripsCompleted) },
           { label: 'Carros evitados', color: 'warn', values: samples.map((s) => s.carTripsAvoided) },
         ]} />
         <ChartCard title="Metrô: demanda e operação" samples={samples} series={[
@@ -307,6 +318,24 @@ function renderTab(tab: AnalyticsTab, samples: CityHistorySample[], world: GameW
   );
 }
 
+
+function HelicopterAnalyticsCard({ world, latest }: { world: GameWorld; latest: CityHistorySample }) {
+  const busiest = [...world.helicopterLines].sort((a, b) => b.totalPassengers - a.totalPassengers)[0];
+  return (
+    <article className="analytics-card metro-analytics-card">
+      <header><h3>Helicópteros</h3><span>{latest.helicopterLines} linhas ativas</span></header>
+      <div className="metro-analytics-grid">
+        <p><span>Helipontos</span><strong>{latest.helipads}</strong></p>
+        <p><span>Aeronaves</span><strong>{latest.helicopters}</strong></p>
+        <p><span>Esperando</span><strong>{latest.helicopterPassengersWaiting}</strong></p>
+        <p><span>Em voo</span><strong>{latest.helicopterPassengers - latest.helicopterPassengersWaiting}</strong></p>
+        <p><span>Viagens concluídas</span><strong>{latest.helicopterTripsCompleted}</strong></p>
+        <p><span>Carros evitados</span><strong>{latest.helicopterCarsAvoided}</strong></p>
+        <p><span>Linha mais usada</span><strong>{busiest ? `${busiest.name} (${busiest.totalPassengers})` : 'Nenhuma'}</strong></p>
+      </div>
+    </article>
+  );
+}
 
 function BikeAnalyticsCard({ world, latest }: { world: GameWorld; latest: CityHistorySample }) {
   const coverage = Math.round((latest.bikeLaneCoverageRatio ?? 0) * 100);
@@ -531,7 +560,7 @@ function HourlyBars({ samples, title, valueFor }: { samples: CityHistorySample[]
         onPointerMove={(event) => setHoveredBucket(indexFromHourlyPointer(event))}
         onPointerLeave={() => setHoveredBucket(null)}
       >
-        {buckets.map((bucket, index) => (
+        {buckets.map((bucket) => (
           <div className="analytics-hour" key={bucket.hour} title={`${String(bucket.hour).padStart(2, '0')}:00 · ${bucket.period}`}>
             <i style={{ height: `${Math.max(3, (bucket.average / max) * 100)}%` }} />
             <span>{bucket.hour % 3 === 0 ? bucket.hour : ''}</span>

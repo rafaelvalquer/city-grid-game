@@ -16,6 +16,7 @@ export type PerformanceMetrics = {
   trafficLightsMs: number;
   transitStopsMs: number;
   metroMs: number;
+  helicopterMs: number;
   bikeTripsMs: number;
   updateConnectionsMs: number;
   connectionSkips: number;
@@ -57,6 +58,7 @@ export type PerformanceMetrics = {
   environmentRenderMs: number;
   vehicleRenderMs: number;
   overlayRenderMs: number;
+  airRenderMs: number;
 };
 
 export const EMPTY_PERFORMANCE_METRICS: PerformanceMetrics = {
@@ -77,6 +79,7 @@ export const EMPTY_PERFORMANCE_METRICS: PerformanceMetrics = {
   trafficLightsMs: 0,
   transitStopsMs: 0,
   metroMs: 0,
+  helicopterMs: 0,
   bikeTripsMs: 0,
   updateConnectionsMs: 0,
   connectionSkips: 0,
@@ -118,4 +121,5 @@ export const EMPTY_PERFORMANCE_METRICS: PerformanceMetrics = {
   environmentRenderMs: 0,
   vehicleRenderMs: 0,
   overlayRenderMs: 0,
+  airRenderMs: 0,
 };

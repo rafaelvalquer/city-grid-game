@@ -19,12 +19,3 @@ export const TERRAIN_CONFIG = {
   lakeAnimationSpeed: 0.8,
   mountainShadowAlpha: 0.22,
 } as const;
-
-export type TerrainReliefBounds = {
-  xStart: number;
-  yStart: number;
-  width: number;
-  height: number;
-};
-
-export type TerrainReliefConfig = typeof TERRAIN_CONFIG;

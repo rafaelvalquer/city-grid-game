@@ -1,6 +1,7 @@
 import type { MetroLine, MetroStation, MetroTrain } from './metro.types';
+import type { Helicopter, HelicopterLine, Helipad } from './helicopter.types';
 
-export type TileType = 'empty' | 'road' | 'avenue' | 'roundabout' | 'roundaboutCenter' | 'building' | 'busStop' | 'metroStation' | 'mountain' | 'lake';
+export type TileType = 'empty' | 'road' | 'avenue' | 'roundabout' | 'roundaboutCenter' | 'building' | 'busStop' | 'metroStation' | 'helipad' | 'mountain' | 'lake';
 export type BuildingType = 'house' | 'shop' | 'office';
 export type BuildingLevel = 1 | 2 | 3;
 export type RoadType = 'road' | 'avenue' | 'roundabout';
@@ -31,6 +32,7 @@ export type Tile = {
   type: TileType;
   buildingId?: string;
   metroStationId?: string;
+  helipadId?: string;
   oneWay?: RoadDirection;
   busLane?: boolean;
   bikeLane?: boolean;
@@ -155,6 +157,13 @@ export type CityStats = {
   metroTripsCompleted: number;
   metroPassengersWaiting: number;
   metroTrains: number;
+  helipads: number;
+  helicopterLines: number;
+  helicopters: number;
+  helicopterPassengers: number;
+  helicopterPassengersWaiting: number;
+  helicopterTripsCompleted: number;
+  helicopterCarsAvoided: number;
   cityLevel: number;
   day: number;
   timeLabel: string;
@@ -198,6 +207,13 @@ export type CityHistorySample = {
   metroStations: number;
   metroLines: number;
   metroTrains: number;
+  helipads: number;
+  helicopterLines: number;
+  helicopters: number;
+  helicopterPassengers: number;
+  helicopterPassengersWaiting: number;
+  helicopterTripsCompleted: number;
+  helicopterCarsAvoided: number;
   averageCongestion: number;
   satisfaction: number;
   averageTravelTime: number;
@@ -246,4 +262,7 @@ export type SelectedEntity =
   | { kind: 'car'; carId: string }
   | { kind: 'metroStation'; station: MetroStation }
   | { kind: 'metroLine'; line: MetroLine }
-  | { kind: 'metroTrain'; trainId: string; train?: MetroTrain };
+  | { kind: 'metroTrain'; trainId: string; train?: MetroTrain }
+  | { kind: 'helipad'; helipad: Helipad }
+  | { kind: 'helicopterLine'; line: HelicopterLine }
+  | { kind: 'helicopter'; helicopterId: string; helicopter?: Helicopter };

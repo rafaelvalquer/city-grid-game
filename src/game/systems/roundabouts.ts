@@ -73,10 +73,6 @@ export function isEnteringRoundabout(grid: Tile[][], from: Vec2, to: Vec2): bool
   return !isInsideRoundabout(grid, from) && isInsideRoundabout(grid, to);
 }
 
-export function isRoundaboutExit(grid: Tile[][], from: Vec2, to: Vec2): boolean {
-  return isInsideRoundabout(grid, from) && !isInsideRoundabout(grid, to) && isRoadType(grid[to.y]?.[to.x]?.type);
-}
-
 export function getRoundaboutNext(grid: Tile[][], pos: Vec2): Vec2 | undefined {
   const center = getRoundaboutCenter(grid, pos);
   if (!center) return undefined;
@@ -85,16 +81,6 @@ export function getRoundaboutNext(grid: Tile[][], pos: Vec2): Vec2 | undefined {
   const index = ring.findIndex((tile) => tile.x === pos.x && tile.y === pos.y);
   if (index < 0) return undefined;
   return ring[(index + 1) % ring.length];
-}
-
-export function getRoundaboutPrevious(grid: Tile[][], pos: Vec2): Vec2 | undefined {
-  const center = getRoundaboutCenter(grid, pos);
-  if (!center) return undefined;
-
-  const ring = getRoundaboutRing(center);
-  const index = getRoundaboutRingIndex(grid, pos);
-  if (index < 0) return undefined;
-  return ring[(index + ring.length - 1) % ring.length];
 }
 
 export function getRoundaboutRingIndex(grid: Tile[][], pos: Vec2): number {
@@ -116,12 +102,6 @@ export function getRoundaboutDistanceAlongRing(grid: Tile[][], from: Vec2, to: V
   return (toIndex - fromIndex + ring.length) % ring.length;
 }
 
-export function isRoundaboutSideTile(grid: Tile[][], pos: Vec2): boolean {
-  const center = getRoundaboutCenter(grid, pos);
-  if (!center) return false;
-  return Math.abs(pos.x - center.x) + Math.abs(pos.y - center.y) === 1;
-}
-
 export function willExitBeforeEntry(grid: Tile[][], car: Car, entryTile: Vec2): boolean {
   const current = car.route[car.routeIndex];
   if (!current || !isInsideRoundabout(grid, current)) return false;
@@ -133,11 +113,6 @@ export function willExitBeforeEntry(grid: Tile[][], car: Car, entryTile: Vec2): 
   }
 
   return false;
-}
-
-export function isValidRoundaboutInternalMove(grid: Tile[][], from: Vec2, to: Vec2): boolean {
-  const next = getRoundaboutNext(grid, from);
-  return Boolean(next && next.x === to.x && next.y === to.y);
 }
 
 export function getDrivableNeighbors(grid: Tile[][], current: Vec2): Vec2[] {

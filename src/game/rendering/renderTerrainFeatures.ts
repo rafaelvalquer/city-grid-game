@@ -73,21 +73,10 @@ export function drawTerrainFeatureAnimation(graphics: Graphics, grid: Tile[][], 
     for (let x = 0; x < (row?.length ?? 0); x += 1) {
       const tile = row?.[x];
       if (!tile) continue;
-      if (tile.type === 'lake') drawLakeWaterAnimation(graphics, grid, tile, x, y, ts, timeSeconds);
+      if (tile.type === 'lake') drawLakeWaterAnimation(graphics, grid, x, y, ts, timeSeconds);
       if (tile.type === 'mountain') drawMountainAtmosphere(graphics, grid, tile, x, y, ts, timeSeconds);
     }
   }
-}
-
-// Compatibilidade com pacotes anteriores que importavam o nome no plural.
-export const drawTerrainFeatureAnimations = drawTerrainFeatureAnimation;
-
-export function getTerrainNeighborMask(grid: Tile[][], x: number, y: number, type: TerrainKind): number {
-  const n = sameTerrain(grid, x, y - 1, type) ? 1 : 0;
-  const e = sameTerrain(grid, x + 1, y, type) ? 2 : 0;
-  const s = sameTerrain(grid, x, y + 1, type) ? 4 : 0;
-  const w = sameTerrain(grid, x - 1, y, type) ? 8 : 0;
-  return n | e | s | w;
 }
 
 function normalizeFeatureArgs(
@@ -224,7 +213,7 @@ function drawLakeCorner(graphics: Graphics, px: number, py: number, ts: number, 
   graphics.circle(x, y, 4).fill({ color: LAKE.shore, alpha: 0.28 });
 }
 
-function drawLakeWaterAnimation(graphics: Graphics, grid: Tile[][], tile: Tile, x: number, y: number, ts: number, timeSeconds: number): void {
+function drawLakeWaterAnimation(graphics: Graphics, grid: Tile[][], x: number, y: number, ts: number, timeSeconds: number): void {
   const n = neighbors(grid, x, y, 'lake');
   const edgeCount = externalEdgeCount(n);
   const rect = connectedRect(x, y, ts, n, edgeCount >= 3 ? 5 : 2);
