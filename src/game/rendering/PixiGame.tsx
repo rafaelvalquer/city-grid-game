@@ -14,6 +14,7 @@ import { createRenderWorldState, renderWorld } from './renderWorld';
 import { ParticleSystem } from './particleSystem';
 import { PerformanceDebugPanel } from '../../components/PerformanceDebugPanel';
 import type { GraphicsSettings } from '../config/graphicsSettings';
+import { getTargetRenderFps, shouldRenderFrame } from '../performance/renderScheduling';
 
 const UI_SYNC_INTERVAL_SECONDS = 0.2;
 
@@ -80,46 +81,69 @@ export function PixiGame({ world, graphics }: { world: GameWorld; graphics: Grap
       initialState.setStats(world.getSnapshotForUi());
       initialState.setSelected(world.selected);
       let uiTimer = UI_SYNC_INTERVAL_SECONDS;
+      let renderElapsedSeconds = Number.POSITIVE_INFINITY;
+      let visualElapsedSeconds = 0;
+      let ignoreElapsedUntilVisibleFrame = document.hidden;
+
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden) ignoreElapsedUntilVisibleFrame = true;
+      }, { signal: abortController.signal });
+
+      // Rendering is scheduled explicitly below so accelerated simulation can
+      // keep the CPU time that would otherwise be spent redrawing every tick.
+      view.app.ticker.remove(view.app.render, view.app);
 
       view.app.ticker.add((ticker) => {
         const { paused, speed, heatmapMode, viewLayer, mobilityFocusMode, setStats, setSelected, setPerformanceMetrics } = useGameStore.getState();
-        const dt = ticker.deltaMS / 1000;
+        const shouldIgnoreElapsed = document.hidden || ignoreElapsedUntilVisibleFrame;
+        const dt = shouldIgnoreElapsed ? 0 : Math.max(0, ticker.elapsedMS / 1000);
+        if (!document.hidden && ignoreElapsedUntilVisibleFrame) ignoreElapsedUntilVisibleFrame = false;
         const visibleBounds = camera.getVisibleTileBounds(3);
-        world.performanceProfiler.recordFrame(dt);
+        if (dt > 0) world.performanceProfiler.recordFrame(dt);
         world.performanceProfiler.setCounters({
           activeCars: world.cars.length,
           visibleCars: Math.min(world.countVisibleCarsInBounds(visibleBounds, 2), world.cars.length),
         });
         world.setActiveViewportBounds(visibleBounds);
         const updateStart = performance.now();
-        world.update(dt, speed, paused);
+        const updateResult = world.update(dt, speed, paused || shouldIgnoreElapsed);
         world.performanceProfiler.setCounters({ updateMs: performance.now() - updateStart });
-        const hover = useGameStore.getState().hoverPreview;
-        const renderStart = performance.now();
-        renderWorld(
-          view.staticGraphics,
-          view.environmentGraphics,
-          view.vehicleGraphics,
-          view.airGraphics,
-          view.overlayGraphics,
-          view.labels,
-          renderStateRef.current,
-          world,
-          heatmapMode,
-          hover,
-          cameraRef.current.x,
-          cameraRef.current.y,
-          cameraRef.current.scale,
-          viewLayer,
-          mobilityFocusMode,
-          particles,
-          visibleBounds,
-          graphics,
-        );
-        world.performanceProfiler.recordRender(performance.now() - renderStart);
-        applyParticleCamera(view.particleGraphics, view.particleLabels, cameraRef.current);
-        particles.update(dt);
-        particles.draw(view.particleGraphics, GAME_CONFIG.tileSize);
+        renderElapsedSeconds += dt;
+        visualElapsedSeconds += dt;
+        const targetRenderFps = getTargetRenderFps(speed, paused, updateResult.highLoadMode);
+        if (!document.hidden && shouldRenderFrame(renderElapsedSeconds, targetRenderFps)) {
+          const hover = useGameStore.getState().hoverPreview;
+          const renderStart = performance.now();
+          renderWorld(
+            view.staticGraphics,
+            view.environmentGraphics,
+            view.vehicleGraphics,
+            view.airGraphics,
+            view.overlayGraphics,
+            view.labels,
+            renderStateRef.current,
+            world,
+            heatmapMode,
+            hover,
+            cameraRef.current.x,
+            cameraRef.current.y,
+            cameraRef.current.scale,
+            viewLayer,
+            mobilityFocusMode,
+            particles,
+            visibleBounds,
+            graphics,
+          );
+          applyParticleCamera(view.particleGraphics, view.particleLabels, cameraRef.current);
+          particles.update(visualElapsedSeconds);
+          particles.draw(view.particleGraphics, GAME_CONFIG.tileSize);
+          view.app.render();
+          world.performanceProfiler.recordRender(performance.now() - renderStart);
+          renderElapsedSeconds = 0;
+          visualElapsedSeconds = 0;
+        } else {
+          world.performanceProfiler.recordRenderSkipped();
+        }
 
         uiTimer += dt;
         if (uiTimer >= UI_SYNC_INTERVAL_SECONDS) {

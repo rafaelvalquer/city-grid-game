@@ -7,7 +7,9 @@
     "dev": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build",
     "test:graphics": "node --experimental-strip-types tests/graphicsSettings.test.mjs",
+    "test:simulation": "node tests/runSimulationTimingTests.mjs",
     "test:helicopters": "node tests/runHelicopterTests.mjs",
+    "benchmark:simulation": "node tests/runSimulation4xBenchmark.mjs",
     "benchmark:helicopters": "node tests/runHelicopterBenchmark.mjs",
     "preview": "vite preview --host 0.0.0.0"
   },

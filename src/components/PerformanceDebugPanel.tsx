@@ -13,8 +13,12 @@ export function PerformanceDebugPanel({ enabled }: { enabled: boolean }) {
       <div><span>Frame</span><strong>{metrics.frameMs.toFixed(1)}ms</strong></div>
       <div><span>Frame P95</span><strong>{metrics.frameP95Ms.toFixed(1)}ms</strong></div>
       <div><span>Fixed steps</span><strong>{metrics.fixedSteps}</strong></div>
-      <div><span>Backlog desc.</span><strong>{metrics.backlogDiscardedSteps}</strong></div>
-      <div><span>Backlog ms</span><strong>{metrics.backlogDiscardedMs.toFixed(1)}ms</strong></div>
+      <div><span>Dívida inicial</span><strong>{metrics.simulationDebtBeforeMs.toFixed(1)}ms</strong></div>
+      <div><span>Dívida restante</span><strong>{metrics.simulationDebtRemainingMs.toFixed(1)}ms</strong></div>
+      <div><span>Steps pendentes</span><strong>{metrics.simulationPendingStepsBefore} → {metrics.simulationPendingStepsAfter}</strong></div>
+      <div><span>Fatia sim.</span><strong>{metrics.simulationSliceMs.toFixed(1)}ms</strong></div>
+      <div><span>Orçamento esgotado</span><strong>{metrics.simulationBudgetExhausted ? 'sim' : 'não'}</strong></div>
+      <div><span>Renders omitidos</span><strong>{metrics.renderFramesSkipped}</strong></div>
       <div><span>Carga alta</span><strong>{metrics.highLoadMode ? 'sim' : 'não'}</strong></div>
       <div><span>Carros</span><strong>{metrics.activeCars}</strong></div>
       <div><span>Visíveis</span><strong>{metrics.visibleCars}</strong></div>

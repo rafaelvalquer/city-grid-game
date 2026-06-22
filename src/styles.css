@@ -913,34 +913,6 @@ button:focus-visible {
   scrollbar-width: thin;
 }
 
-.brand {
-  min-width: 190px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding-right: 10px;
-  border-right: 1px solid var(--line);
-}
-
-.brand-mark {
-  width: 34px;
-  height: 34px;
-  display: grid;
-  place-items: center;
-  border-radius: 8px;
-  background: linear-gradient(135deg, #35d07f, #5cc8ff);
-  color: #06111d;
-  font-weight: 900;
-  font-size: 13px;
-}
-
-.brand strong {
-  display: block;
-  color: var(--text);
-  font-size: 14px;
-}
-
-.brand small,
 .hud-item small {
   color: var(--muted);
   font-size: 11px;
@@ -2072,10 +2044,6 @@ h3 {
     align-items: center;
   }
 
-  .brand {
-    min-width: 165px;
-  }
-
   .hud-item {
     min-height: 34px;
     padding-inline: 9px;
@@ -2240,21 +2208,6 @@ h3 {
   .hud-bar {
     padding: 7px 8px;
     gap: 7px;
-  }
-
-  .brand {
-    min-width: 142px;
-    gap: 8px;
-  }
-
-  .brand-mark {
-    width: 30px;
-    height: 30px;
-    font-size: 12px;
-  }
-
-  .brand strong {
-    font-size: 13px;
   }
 
   .hud-item {

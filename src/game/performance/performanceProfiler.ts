@@ -1,4 +1,5 @@
 import { EMPTY_PERFORMANCE_METRICS, type PerformanceMetrics } from './performanceTypes';
+import type { SimulationAdvanceResult } from '../engine/simulationClock';
 
 function smooth(previous: number, next: number, factor = 0.18): number {
   if (!Number.isFinite(previous) || previous <= 0) return next;
@@ -15,8 +16,6 @@ export class PerformanceProfiler {
   beginUpdate(): void {
     this.currentFixedSteps = 0;
     this.metrics.fixedSteps = 0;
-    this.metrics.backlogDiscardedMs = 0;
-    this.metrics.backlogDiscardedSteps = 0;
     this.metrics.vehicleLodCars = 0;
     this.metrics.tripAttemptsSkipped = 0;
     this.metrics.tripSpawnsSkipped = 0;
@@ -28,9 +27,18 @@ export class PerformanceProfiler {
     this.metrics.fixedSteps = this.currentFixedSteps;
   }
 
-  recordBacklogDiscarded(durationMs: number, steps: number): void {
-    this.metrics.backlogDiscardedMs = smooth(this.metrics.backlogDiscardedMs, Math.max(0, durationMs), 0.35);
-    this.metrics.backlogDiscardedSteps = Math.max(0, steps);
+  recordSimulationSlice(result: SimulationAdvanceResult): void {
+    this.metrics.simulationDebtBeforeMs = Math.max(0, result.debtBeforeSeconds * 1000);
+    this.metrics.simulationDebtRemainingMs = Math.max(0, result.debtSeconds * 1000);
+    this.metrics.simulationPendingStepsBefore = result.pendingStepsBefore;
+    this.metrics.simulationPendingStepsAfter = result.pendingStepsAfter;
+    this.metrics.simulationBudgetExhausted = result.budgetExhausted ? 1 : 0;
+    this.metrics.simulationSliceMs = result.processingMs;
+  }
+
+  recordRenderSkipped(): void {
+    this.metrics.renderFramesSkipped += 1;
+    if (this.metrics.renderFramesSkipped > 999999) this.metrics.renderFramesSkipped = 0;
   }
 
   time<T>(key: keyof PerformanceMetrics, fn: () => T): T {

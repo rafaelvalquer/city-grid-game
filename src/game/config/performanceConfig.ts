@@ -1,12 +1,15 @@
 export const PERFORMANCE_CONFIG = {
   enablePerformanceProfiler: true,
 
-  // Fixed-step catch-up control.
+  // Load detection and accelerated render cadence.
   highLoadCars: 700,
   highLoadFrameMs: 48,
   highLoadUpdateMs: 45,
-  maxFixedStepsNormal: 4,
-  maxFixedStepsHighLoad: 2,
+  simulationBudgetMs: 10,
+  renderFps2x: 30,
+  renderFps2xHighLoad: 15,
+  renderFps4x: 20,
+  renderFps4xHighLoad: 10,
 
   // Sort de carros e atualização reduzida.
   reducedSortThresholdCars: 650,
@@ -61,8 +64,8 @@ export const PERFORMANCE_CONFIG = {
   vehicleLodHighLoadCars: 850,
 
   // Simulação em grupos.
-  groupedCarUpdateThreshold: 700,
-  groupedCarUpdateExtremeThreshold: 1000,
+  groupedCarUpdateThreshold: 300,
+  groupedCarUpdateExtremeThreshold: 700,
   groupedCarUpdateBatches: 2,
   groupedCarUpdateExtremeBatches: 3,
   groupedCarViewportPaddingTiles: 4,

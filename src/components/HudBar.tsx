@@ -24,13 +24,6 @@ export function HudBar({ analyticsOpen = false, onToggleAnalytics }: { analytics
   const stats = useGameStore((s) => s.stats);
   return (
     <header className="hud-bar">
-      <div className="brand">
-        <span className="brand-mark">CF</span>
-        <span>
-          <strong>Cidade em Fluxo</strong>
-          <small>Nível {stats.cityLevel}</small>
-        </span>
-      </div>
       <div className="hud-cluster primary">
         <div className="hud-item money"><Banknote size={16} /><span>$ {stats.money}</span></div>
         <div className="hud-item"><Users size={16} /><span>{stats.population}</span><small>pop</small></div>

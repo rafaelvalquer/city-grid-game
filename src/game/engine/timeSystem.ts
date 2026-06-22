@@ -19,7 +19,7 @@ export class TimeSystem {
 
   getPeriod(): DayPeriod {
     const h = this.getHour();
-    if (h >= 6 && h < 10) return 'morning';
+    if (h >= 6 && h < 11) return 'morning';
     if (h >= 11 && h < 14) return 'noon';
     if (h >= 14 && h < 17) return 'afternoon';
     if (h >= 17 && h < 21) return 'evening';

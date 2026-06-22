@@ -3,8 +3,13 @@ export type PerformanceMetrics = {
   frameMs: number;
   frameP95Ms: number;
   fixedSteps: number;
-  backlogDiscardedMs: number;
-  backlogDiscardedSteps: number;
+  simulationDebtBeforeMs: number;
+  simulationDebtRemainingMs: number;
+  simulationPendingStepsBefore: number;
+  simulationPendingStepsAfter: number;
+  simulationBudgetExhausted: number;
+  simulationSliceMs: number;
+  renderFramesSkipped: number;
   highLoadMode: number;
   activeCars: number;
   visibleCars: number;
@@ -66,8 +71,13 @@ export const EMPTY_PERFORMANCE_METRICS: PerformanceMetrics = {
   frameMs: 0,
   frameP95Ms: 0,
   fixedSteps: 0,
-  backlogDiscardedMs: 0,
-  backlogDiscardedSteps: 0,
+  simulationDebtBeforeMs: 0,
+  simulationDebtRemainingMs: 0,
+  simulationPendingStepsBefore: 0,
+  simulationPendingStepsAfter: 0,
+  simulationBudgetExhausted: 0,
+  simulationSliceMs: 0,
+  renderFramesSkipped: 0,
   highLoadMode: 0,
   activeCars: 0,
   visibleCars: 0,

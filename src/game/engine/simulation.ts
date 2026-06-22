@@ -38,6 +38,7 @@ import { findMetroStationPath } from '../metro/metroGraph';
 import { buildMetroTrackTiles, pickMetroLineColor } from '../metro/metroLineBuilder';
 import { PERFORMANCE_CONFIG } from '../config/performanceConfig';
 import { createPerformanceProfiler } from '../performance/performanceProfiler';
+import { SimulationClock, type SimulationAdvanceResult } from './simulationClock';
 import { getTrafficMapClient } from '../workers/trafficMapClient';
 import { getPathfindingClient } from '../workers/pathfindingClient';
 import { createWorkerCarSnapshot, createWorkerGridSnapshot, createWorkerTrafficSnapshot } from '../workers/gridSnapshot';
@@ -71,8 +72,6 @@ const REPEATED_REROUTE_REMOVE_COUNT = 30;
 // Mantém a simulação de trânsito estável mesmo em 2x/4x ou em frames lentos.
 // Em vez de aplicar um delta grande de uma vez, o jogo divide o tempo em passos menores.
 // Isso evita carros pulando tiles, sobreposição brusca em filas e remoções repentinas por arrived/no_route.
-const FIXED_TRAFFIC_STEP_SECONDS = 1 / 30;
-const MAX_TRAFFIC_CATCH_UP_SECONDS = FIXED_TRAFFIC_STEP_SECONDS * 8;
 const SINGLE_TRAFFIC_MAP_PASS_CAR_THRESHOLD = 180;
 type RerouteOptions = {
   force?: boolean;
@@ -93,6 +92,7 @@ const DISTANT_CAR_UPDATE_EVERY_TICKS = 3;
 
 export class GameWorld {
   readonly performanceProfiler = createPerformanceProfiler();
+  private readonly simulationClock = new SimulationClock();
   private trafficMapWorkerAccumulator = 0;
   private trafficMapWorkerInFlight = false;
   private asyncRerouteCarIds = new Set<string>();
@@ -786,34 +786,24 @@ export class GameWorld {
       || metrics.frameMs >= PERFORMANCE_CONFIG.highLoadFrameMs
       || metrics.updateMs >= PERFORMANCE_CONFIG.highLoadUpdateMs;
   }
-  update(deltaSeconds: number, speed: number, paused: boolean): void {
-    if (paused || speed === 0) return;
+  update(deltaSeconds: number, speed: number, paused: boolean): SimulationAdvanceResult & { highLoadMode: boolean } {
     this.performanceProfiler.beginUpdate();
 
-    const rawDeltaSeconds = Math.max(0, deltaSeconds) * Math.max(0, speed);
-    const scaledDeltaSeconds = Math.min(rawDeltaSeconds, MAX_TRAFFIC_CATCH_UP_SECONDS);
-    let remainingSeconds = scaledDeltaSeconds;
     const highLoadMode = this.isPerformanceHighLoadMode();
-    const maxFixedSteps = highLoadMode
-      ? PERFORMANCE_CONFIG.maxFixedStepsHighLoad
-      : PERFORMANCE_CONFIG.maxFixedStepsNormal;
+    this.simulationClock.accumulate(
+      deltaSeconds,
+      Math.max(0, speed),
+      paused,
+    );
+    const result = this.simulationClock.processBudget(
+      paused || speed <= 0,
+      (dt) => this.updateStep(dt),
+      PERFORMANCE_CONFIG.simulationBudgetMs,
+    );
 
-    let fixedSteps = 0;
-    while (remainingSeconds > 0.0001 && fixedSteps < maxFixedSteps) {
-      const dt = Math.min(FIXED_TRAFFIC_STEP_SECONDS, remainingSeconds);
-      this.updateStep(dt);
-      remainingSeconds -= dt;
-      fixedSteps += 1;
-    }
-
-    if (remainingSeconds > 0.0001) {
-      const discardedMs = remainingSeconds * 1000;
-      const discardedSteps = Math.ceil(remainingSeconds / FIXED_TRAFFIC_STEP_SECONDS);
-      this.performanceProfiler.recordBacklogDiscarded(discardedMs, discardedSteps);
-      remainingSeconds = 0;
-    }
-
+    this.performanceProfiler.recordSimulationSlice(result);
     this.performanceProfiler.setCounters({ highLoadMode: highLoadMode ? 1 : 0 });
+    return { ...result, highLoadMode };
   }
   private updateStep(dt: number): void {
     const stepStarted = performance.now();
@@ -2313,9 +2303,9 @@ export class GameWorld {
       if (this.performanceUpdateTick % batches !== this.getCarPerformanceBucket(car) % batches) continue;
 
       const accumulatedDt = car.backgroundAccumulatedDt;
-      if (this.shouldPromoteBackgroundCar(car, accumulatedDt)) {
+      if (this.shouldPromoteBackgroundCar(car, accumulatedDt)
+        || !this.canAdvanceDistantCarLightweight(car)) {
         detailed.push(car);
-        criticalCars += 1;
         continue;
       }
 
@@ -2340,14 +2330,27 @@ export class GameWorld {
     if (car.vehicleType === 'bus') return true;
     if (this.selected.kind === 'car' && this.selected.carId === car.id) return true;
     if (car.lifecyclePhase !== 'driving') return true;
-    if (car.status !== 'moving' || car.trafficState !== 'moving') return true;
     if (car.intersectionStopKey || car.signalTransitionGraceSeconds > 0) return true;
-    if (car.stuckSeconds > 0.2 || car.immobileSeconds > 0.2 || car.rerouteCooldownSeconds > 0) return true;
+    if (car.stuckSeconds >= PERFORMANCE_CONFIG.priorityStuckSeconds
+      || car.immobileSeconds >= PERFORMANCE_CONFIG.priorityImmobileSeconds
+      || car.rerouteCooldownSeconds > 0) return true;
     const current = { x: car.currentTileX, y: car.currentTileY };
     if (isIntersection(this.grid, current)) return true;
     const next = car.route[car.routeIndex + 1];
     return Boolean(next && isIntersection(this.grid, next)
       && car.progressToNext >= PERFORMANCE_CONFIG.groupedCarIntersectionPromotionProgress);
+  }
+
+  private canAdvanceDistantCarLightweight(car: Car): boolean {
+    return car.lifecyclePhase === 'driving'
+      && car.status === 'moving'
+      && car.trafficState === 'moving'
+      && !car.blockedByCarId
+      && !car.intersectionStopKey
+      && car.signalTransitionGraceSeconds <= 0
+      && car.rerouteCooldownSeconds <= 0
+      && car.stuckSeconds < PERFORMANCE_CONFIG.priorityStuckSeconds
+      && car.immobileSeconds < PERFORMANCE_CONFIG.priorityImmobileSeconds;
   }
 
   private shouldPromoteBackgroundCar(car: Car, dt: number): boolean {
