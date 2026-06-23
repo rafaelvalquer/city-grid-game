@@ -5,7 +5,7 @@ import type { MetroLine, MetroLineStats, MetroStation, MetroTrack, MetroTrain } 
 import type { Helicopter, HelicopterLine, HelicopterLineStats, HelicopterPassengerGroup, Helipad } from '../../types/helicopter.types';
 import type { Tool } from '../../types/game.types';
 import { GAME_CONFIG } from '../config/gameConfig';
-import type { GameSetupOptions } from '../config/gameSetup';
+import type { CampaignCityId, GameMode, GameSetupOptions } from '../config/gameSetup';
 import { ROAD_CONFIG } from '../config/roadConfig';
 import { TRANSIT_CONFIG, BUS_LANE_CONFIG } from '../config/transitConfig';
 import { METRO_CONFIG } from '../config/metroConfig';
@@ -16,7 +16,8 @@ import { TERRAIN_CONFIG } from '../config/terrainConfig';
 import { createGrid, inBounds, isRoadType, isTerrainBlocked, keyOf, setGridBounds } from '../city/grid';
 import { CityGenerator } from '../city/cityGenerator';
 import { generateTerrainReliefForBounds, getTerrainSummary } from '../city/terrainGenerator';
-import { applyBuildingLevel, createBuilding, updateBuildingConnection } from '../city/buildings';
+import { applyBuildingLevel, createBuilding, isBuildingOperational, normalizeBuildingConstruction, updateBuildingConnection } from '../city/buildings';
+import { BUILDING_CONSTRUCTION_SECONDS, getBuildingLevelConfig } from '../config/buildingConfig';
 import { findFastestPath } from '../pathfinding/pathfinder';
 import { findBikeLanePath } from '../pathfinding/bikePathfinder';
 import { buildIntersectionControls, computeTrafficDecision, getDirection, getLaneOffset, isIntersection } from '../systems/trafficRules';
@@ -42,6 +43,8 @@ import { SimulationClock, type SimulationAdvanceResult } from './simulationClock
 import { getTrafficMapClient } from '../workers/trafficMapClient';
 import { getPathfindingClient } from '../workers/pathfindingClient';
 import { createWorkerCarSnapshot, createWorkerGridSnapshot, createWorkerTrafficSnapshot } from '../workers/gridSnapshot';
+import { getCampaignCity } from '../campaign/campaignMaps';
+import type { CampaignCityDefinition, CampaignMissionSnapshot } from '../campaign/campaignTypes';
 
 const BUILDING_DEMOLITION_COST: Record<Building['type'], number> = {
   house: 20,
@@ -91,6 +94,9 @@ type PerformanceViewportBounds = {
 const DISTANT_CAR_UPDATE_EVERY_TICKS = 3;
 
 export class GameWorld {
+  readonly mode: GameMode;
+  readonly campaignCityId?: CampaignCityId;
+  readonly campaignCity?: CampaignCityDefinition;
   readonly performanceProfiler = createPerformanceProfiler();
   private readonly simulationClock = new SimulationClock();
   private trafficMapWorkerAccumulator = 0;
@@ -129,6 +135,7 @@ export class GameWorld {
   completedTrips = 0;
   failedTrips = 0;
   publicTripsCompleted = 0;
+  busTripsCompleted = 0;
   carTripsAvoided = 0;
   bikeTripsCompleted = 0;
   bikeCarsAvoided = 0;
@@ -158,18 +165,35 @@ export class GameWorld {
   private performanceUpdateTick = 0;
   private pathfindingWorkerGridVersion = -1;
   private pathfindingWorkerTrafficSyncAt = 0;
+  private campaignMissionAccumulator = 0;
+  private campaignStabilitySeconds = 0;
+  private campaignElapsedSeconds = 0;
+  private campaignMissionCompleted = false;
+  private secondsSinceBikeTrip = Number.POSITIVE_INFINITY;
+  private secondsSinceMetroTrip = Number.POSITIVE_INFINITY;
 
   constructor(options: Partial<GameSetupOptions> = {}) {
+    this.mode = options.mode ?? 'sandbox';
+    this.campaignCityId = this.mode === 'campaign' ? options.campaignCityId : undefined;
+    this.campaignCity = getCampaignCity(this.campaignCityId);
+    this.money = this.campaignCity?.startingMoney ?? GAME_CONFIG.initialMoney;
     setGridBounds(GAME_CONFIG.gridWidth, GAME_CONFIG.gridHeight);
     this.grid = createGrid(GAME_CONFIG.gridWidth, GAME_CONFIG.gridHeight);
     this.initializeDistricts();
-    this.enableTerrainRelief = options.enableTerrainRelief ?? TERRAIN_CONFIG.enabledByDefault;
-    if (this.enableTerrainRelief) {
+    this.enableTerrainRelief = this.mode === 'campaign'
+      ? true
+      : options.enableTerrainRelief ?? TERRAIN_CONFIG.enabledByDefault;
+    if (this.campaignCity) {
+      const initialBuildings = this.campaignCity.applyMap(this.grid);
+      for (const building of initialBuildings) {
+        this.addBuilding(createBuilding(building.type, building.x, building.y, 'operational'));
+      }
+    } else if (this.enableTerrainRelief) {
       generateTerrainReliefForBounds(this.grid, { xStart: 0, yStart: 0, width: GAME_CONFIG.gridWidth, height: GAME_CONFIG.gridHeight });
     }
-    this.allowRoadDemolition = options.allowRoadDemolition ?? false;
+    this.allowRoadDemolition = this.mode === 'sandbox' && (options.allowRoadDemolition ?? false);
     this.generator = new CityGenerator(options);
-    this.seedInitialCity();
+    if (!this.campaignCity) this.seedInitialCity();
     this.entityIndex.setGrid(this.grid);
     this.entityIndex.rebuild(this.cars, this.buildings);
     this.updateConnections();
@@ -210,6 +234,137 @@ export class GameWorld {
     this.snapshotCache = snapshot;
     this.snapshotCacheAtMs = now;
     return snapshot;
+  }
+
+  getCampaignMissionSnapshot(): CampaignMissionSnapshot | null {
+    if (!this.campaignCity || !this.campaignCityId) return null;
+    const snapshot = this.getSnapshot();
+    const objectives = this.campaignCity.mission.objectives.map((objective) => {
+      const requirements = objective.requirements.map((requirement) => {
+        const current = this.getCampaignMetricValue(requirement.metric, snapshot);
+        return {
+          ...requirement,
+          current,
+          met: requirement.comparator === 'min' ? current >= requirement.target : current <= requirement.target,
+        };
+      });
+      return {
+        ...objective,
+        requirements,
+        met: requirements.every((requirement) => requirement.met),
+      };
+    });
+    return {
+      cityId: this.campaignCityId,
+      population: snapshot.population,
+      satisfaction: snapshot.satisfaction,
+      traffic: snapshot.averageCongestion,
+      holdSeconds: this.campaignCity.mission.holdSeconds,
+      objectives,
+      stabilitySeconds: Math.min(this.campaignCity.mission.holdSeconds, this.campaignStabilitySeconds),
+      completed: this.campaignMissionCompleted,
+      elapsedSeconds: this.campaignElapsedSeconds,
+      day: snapshot.day,
+      timeLabel: snapshot.timeLabel,
+    };
+  }
+
+  private getCampaignMetricValue(metric: import('../campaign/campaignTypes').CampaignObjectiveMetric, snapshot: CityStats): number {
+    if (metric === 'busLaneCoveragePercent') return Math.round(snapshot.busLaneCoverageRatio * 100);
+    if (metric === 'minMetroStationsPerActiveLine') {
+      const activeLines = this.metroLines.filter((line) => line.active);
+      return activeLines.length ? Math.min(...activeLines.map((line) => line.stationIds.length)) : 0;
+    }
+    if (metric === 'secondsSinceBikeTrip') return Number.isFinite(this.secondsSinceBikeTrip) ? Math.round(this.secondsSinceBikeTrip * 10) / 10 : 999;
+    if (metric === 'secondsSinceMetroTrip') return Number.isFinite(this.secondsSinceMetroTrip) ? Math.round(this.secondsSinceMetroTrip * 10) / 10 : 999;
+    if (metric === 'connectedCampaignZones') return this.getConnectedCampaignZoneCount();
+    return snapshot[metric] as number;
+  }
+
+  private getConnectedCampaignZoneCount(): number {
+    const zones = this.campaignCity?.zones ?? [];
+    if (!zones.length) return 0;
+
+    const positions = new Map<string, Vec2>();
+    const adjacency = new Map<string, Set<string>>();
+    const addNode = (id: string, position: Vec2) => {
+      positions.set(id, position);
+      if (!adjacency.has(id)) adjacency.set(id, new Set());
+    };
+    const connect = (a: string, b: string) => {
+      adjacency.get(a)?.add(b);
+      adjacency.get(b)?.add(a);
+    };
+
+    const activeMetroLines = this.metroLines.filter((candidate) => candidate.active);
+    const activeAirLines = this.helicopterLines.filter((candidate) => candidate.active);
+    const activeMetroStationIds = new Set(activeMetroLines.flatMap((line) => line.stationIds));
+    const activeHelipadIds = new Set(activeAirLines.flatMap((line) => line.helipadIds));
+    for (const station of this.metroStations.filter((candidate) => activeMetroStationIds.has(candidate.id))) addNode(`metro:${station.id}`, station);
+    for (const helipad of this.helipads.filter((candidate) => activeHelipadIds.has(candidate.id))) addNode(`air:${helipad.id}`, helipad);
+    for (const line of activeMetroLines) {
+      for (let index = 1; index < line.stationIds.length; index += 1) {
+        connect(`metro:${line.stationIds[index - 1]}`, `metro:${line.stationIds[index]}`);
+      }
+    }
+    for (const line of activeAirLines) {
+      connect(`air:${line.helipadIds[0]}`, `air:${line.helipadIds[1]}`);
+    }
+    for (const station of this.metroStations.filter((candidate) => activeMetroStationIds.has(candidate.id))) {
+      for (const helipad of this.helipads.filter((candidate) => activeHelipadIds.has(candidate.id))) {
+        if (manhattan(station, helipad) <= 3) connect(`metro:${station.id}`, `air:${helipad.id}`);
+      }
+    }
+
+    let maxConnectedZones = 0;
+    const visited = new Set<string>();
+    for (const nodeId of adjacency.keys()) {
+      if (visited.has(nodeId)) continue;
+      const component: string[] = [];
+      const queue = [nodeId];
+      visited.add(nodeId);
+      while (queue.length) {
+        const current = queue.shift();
+        if (!current) continue;
+        component.push(current);
+        for (const next of adjacency.get(current) ?? []) {
+          if (visited.has(next)) continue;
+          visited.add(next);
+          queue.push(next);
+        }
+      }
+      if (!component.some((id) => id.startsWith('metro:')) || !component.some((id) => id.startsWith('air:'))) continue;
+      const connectedZones = zones.filter((zone) => component.some((id) => {
+        const position = positions.get(id);
+        return position ? Math.abs(position.x - zone.x) + Math.abs(position.y - zone.y) <= zone.radius : false;
+      })).length;
+      maxConnectedZones = Math.max(maxConnectedZones, connectedZones);
+    }
+    return maxConnectedZones;
+  }
+
+  private updateCampaignMission(dt: number): void {
+    if (!this.campaignCity || this.campaignMissionCompleted) return;
+    this.campaignElapsedSeconds += dt;
+    this.campaignMissionAccumulator += dt;
+    if (this.campaignMissionAccumulator + Number.EPSILON < 0.5) return;
+
+    const evaluationSeconds = this.campaignMissionAccumulator;
+    this.campaignMissionAccumulator = 0;
+    const mission = this.getCampaignMissionSnapshot();
+    if (!mission) return;
+    if (mission.objectives.every((objective) => objective.met)) {
+      this.campaignStabilitySeconds = Math.min(
+        mission.holdSeconds,
+        this.campaignStabilitySeconds + evaluationSeconds,
+      );
+      if (this.campaignStabilitySeconds >= mission.holdSeconds - 1e-9) {
+        this.campaignMissionCompleted = true;
+        this.emit();
+      }
+    } else {
+      this.campaignStabilitySeconds = 0;
+    }
   }
 
 
@@ -477,6 +632,7 @@ export class GameWorld {
 
   canPurchaseEastDistrict(): { canPurchase: boolean; reason?: string; cost: number; requirements: ReturnType<GameWorld['getEastDistrictRequirementStatus']> } {
     const requirements = this.getEastDistrictRequirementStatus();
+    if (this.mode !== 'sandbox') return { canPurchase: false, reason: 'Expansão urbana disponível apenas no sandbox.', cost: DISTRICT_EXPANSION_CONFIG.cost, requirements };
     const district = this.getEastDistrict();
     if (!district) return { canPurchase: false, reason: 'Bairro Leste não configurado.', cost: DISTRICT_EXPANSION_CONFIG.cost, requirements };
     if (district.status === 'owned') return { canPurchase: false, reason: 'Bairro Leste já foi comprado.', cost: district.cost, requirements };
@@ -486,6 +642,7 @@ export class GameWorld {
   }
 
   purchaseEastDistrict(): { success: boolean; reason?: string; district?: District } {
+    if (this.mode !== 'sandbox') return { success: false, reason: 'Expansão urbana disponível apenas no sandbox.' };
     const availability = this.canPurchaseEastDistrict();
     if (!availability.canPurchase) return { success: false, reason: availability.reason };
 
@@ -543,14 +700,14 @@ export class GameWorld {
   }
 
   getSnapshot(): CityStats {
-    const disconnectedBuildings = this.buildings.filter((b) => !b.connected).length;
+    const disconnectedBuildings = this.buildings.filter((b) => isBuildingOperational(b) && !b.connected).length;
     const congestions = [...this.traffic.values()].map((t) => t.congestion);
     const averageCongestion = congestions.length ? congestions.reduce((a, b) => a + b, 0) / congestions.length : 0;
     const terrainSummary = getTerrainSummary(this.grid);
     const bikeLaneTiles = this.getBikeLaneTileCount();
     return {
       money: Math.floor(this.money),
-      population: this.buildings.reduce((sum, b) => sum + b.population, 0),
+      population: this.buildings.reduce((sum, b) => sum + (isBuildingOperational(b) ? b.population : 0), 0),
       activeCars: this.cars.filter((car) => car.vehicleType !== 'bus').length,
       satisfaction: Math.round(this.satisfaction),
       averageCongestion: Math.round(Math.min(300, averageCongestion * 100)),
@@ -559,6 +716,7 @@ export class GameWorld {
       completedTrips: this.completedTrips,
       failedTrips: this.failedTrips,
       publicTripsCompleted: this.publicTripsCompleted,
+      busTripsCompleted: this.busTripsCompleted,
       carTripsAvoided: this.carTripsAvoided,
       waitingPassengers: this.getWaitingPassengerCount(),
       activeBuses: this.getTransitBuses().length,
@@ -676,6 +834,7 @@ export class GameWorld {
       completedTrips: snapshot.completedTrips,
       failedTrips: snapshot.failedTrips,
       publicTripsCompleted: snapshot.publicTripsCompleted,
+      busTripsCompleted: snapshot.busTripsCompleted,
       carTripsAvoided: snapshot.carTripsAvoided,
       bikeLaneTiles: snapshot.bikeLaneTiles,
       bikeLaneCoverageRatio: snapshot.bikeLaneCoverageRatio,
@@ -754,13 +913,14 @@ export class GameWorld {
 
   seedInitialCity(): void {
     for (let i = 0; i < GAME_CONFIG.initialBuildings; i++) {
-      const b = this.generator.spawn(this.grid, this.buildings, this.cityLevel);
+      const b = this.generator.spawn(this.grid, this.buildings, this.cityLevel, 'operational');
       if (!b) continue;
       this.addBuilding(b);
     }
   }
 
   addBuilding(building: Building): void {
+    normalizeBuildingConstruction(building);
     this.buildings.push(building);
     this.entityIndex.addBuilding(building);
     this.grid[building.y][building.x] = { x: building.x, y: building.y, type: 'building', buildingId: building.id };
@@ -808,8 +968,11 @@ export class GameWorld {
   private updateStep(dt: number): void {
     const stepStarted = performance.now();
     this.performanceProfiler.addFixedStep();
+    this.secondsSinceBikeTrip += dt;
+    this.secondsSinceMetroTrip += dt;
 
     this.performanceProfiler.time('timeSystemMs', () => this.time.update(dt));
+    this.updateBuildingConstruction(dt);
     this.performanceProfiler.time('buildingActivityMs', () => this.updateDailyBuildingActivity());
     this.performanceProfiler.time('trafficLightsMs', () => this.updateTrafficLights(dt));
     this.buildingTimer += dt;
@@ -850,6 +1013,7 @@ export class GameWorld {
     }
 
     this.performanceProfiler.time('historyMs', () => this.recordHistorySample());
+    this.updateCampaignMission(dt);
     this.performanceProfiler.recordUpdateStep(performance.now() - stepStarted);
   }
 
@@ -1558,6 +1722,7 @@ export class GameWorld {
     }
 
     this.bikeTripsCompleted += 1;
+    this.secondsSinceBikeTrip = 0;
     this.bikeCarsAvoided += 1;
     this.carTripsAvoided += 1;
     this.completedTrips += 1;
@@ -1642,6 +1807,7 @@ export class GameWorld {
     if (alighted > 0) {
       stop.totalAlighted += alighted;
       this.publicTripsCompleted += alighted;
+      this.busTripsCompleted += alighted;
       this.completedTrips += alighted;
     }
 
@@ -1867,7 +2033,7 @@ export class GameWorld {
   }
   private generateTrips(): void {
     const multiplier = this.time.getTripMultiplier();
-    const population = this.buildings.reduce((sum, b) => sum + b.population, 0);
+    const population = this.buildings.reduce((sum, b) => sum + (isBuildingOperational(b) ? b.population : 0), 0);
     const desiredAttempts = Math.max(1, Math.floor((population / 32) * multiplier));
     const highLoad = this.isPerformanceHighLoadMode();
     const extremeLoad = this.cars.length >= PERFORMANCE_CONFIG.tripBudgetExtremeCars;
@@ -2987,6 +3153,32 @@ export class GameWorld {
     this.refreshSelectedBuilding();
   }
 
+  private updateBuildingConstruction(dt: number): void {
+    let completedAny = false;
+    for (const building of this.buildings) {
+      if (isBuildingOperational(building)) continue;
+      const duration = BUILDING_CONSTRUCTION_SECONDS[building.type];
+      const nextProgress = Math.max(0, building.constructionProgress ?? 0) + dt / duration;
+      const progress = nextProgress >= 1 - 1e-9 ? 1 : Math.min(1, nextProgress);
+      building.constructionProgress = progress;
+      if (progress < 1) continue;
+
+      const config = getBuildingLevelConfig(building.type, building.level);
+      building.constructionState = 'operational';
+      building.constructionProgress = 1;
+      building.population = config.population;
+      building.jobs = config.jobs;
+      building.attraction = config.attraction;
+      completedAny = true;
+    }
+
+    if (!completedAny) return;
+    this.entityIndex.rebuildBuildings(this.buildings);
+    this.snapshotCache = undefined;
+    this.markStaticRenderDirty();
+    this.refreshSelectedBuilding();
+  }
+
   private updateBuildingUpgrades(): void {
     const snapshot = this.getSnapshot();
     if (this.satisfaction < BUILDING_UPGRADE_MIN_SATISFACTION) return;
@@ -3019,6 +3211,7 @@ export class GameWorld {
   getBuildingUpgradeStatus(building: Building): { canUpgrade: boolean; reason: string; nextLevel: BuildingLevel | null; score: number } {
     const nextLevel = this.nextAllowedBuildingLevel(building);
     const score = this.getBuildingUpgradeScore(building);
+    if (!isBuildingOperational(building)) return { canUpgrade: false, reason: 'Aguardando conclusão da obra', nextLevel, score: 0 };
     if (!nextLevel) return { canUpgrade: false, reason: 'Construção no nível máximo', nextLevel: null, score };
     if (!building.connected) return { canUpgrade: false, reason: 'Precisa de conexão', nextLevel, score };
     if (this.satisfaction < BUILDING_UPGRADE_MIN_SATISFACTION) return { canUpgrade: false, reason: 'Satisfação baixa demais', nextLevel, score };
@@ -3670,6 +3863,7 @@ export class GameWorld {
     activeLine.waitingPassengers += 1;
     activeLine.totalPassengers += 1;
     this.metroTripsCompleted += 1;
+    this.secondsSinceMetroTrip = 0;
     this.metroCarsAvoided += 1;
     this.carTripsAvoided += 1;
     this.completedTrips += 1;
@@ -3769,8 +3963,8 @@ export class GameWorld {
   }
 
   private updateEconomyAndSatisfaction(): void {
-    const connectedShops = this.buildings.filter((b) => b.type === 'shop' && b.connected).length;
-    const connectedOffices = this.buildings.filter((b) => b.type === 'office' && b.connected).length;
+    const connectedShops = this.buildings.filter((b) => isBuildingOperational(b) && b.type === 'shop' && b.connected).length;
+    const connectedOffices = this.buildings.filter((b) => isBuildingOperational(b) && b.type === 'office' && b.connected).length;
     const recentTrips = this.tripHistory.slice(-20).length;
     this.money += recentTrips * 1.5 + connectedShops * 4 + connectedOffices * 6;
 

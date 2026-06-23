@@ -4,9 +4,31 @@ import type { Helicopter, HelicopterLine, Helipad } from './helicopter.types';
 export type TileType = 'empty' | 'road' | 'avenue' | 'roundabout' | 'roundaboutCenter' | 'building' | 'busStop' | 'metroStation' | 'helipad' | 'mountain' | 'lake';
 export type BuildingType = 'house' | 'shop' | 'office';
 export type BuildingLevel = 1 | 2 | 3;
+export type BuildingConstructionState = 'constructing' | 'operational';
 export type RoadType = 'road' | 'avenue' | 'roundabout';
 export type RoadDirection = 'north' | 'south' | 'east' | 'west';
 export type TerrainKind = 'mountain' | 'lake';
+export type VegetationKind =
+  | 'atlanticForest'
+  | 'palm'
+  | 'temperateConifer'
+  | 'fern'
+  | 'deciduous'
+  | 'willow'
+  | 'reeds'
+  | 'fynbos'
+  | 'protea'
+  | 'andeanForest'
+  | 'paramoShrub'
+  | 'koreanPine'
+  | 'cherryTree'
+  | 'tropicalRainforest'
+  | 'mangrove'
+  | 'araucaria'
+  | 'formalGarden'
+  | 'planeTree'
+  | 'ginkgo'
+  | 'banyan';
 
 export type DistrictStatus = 'owned' | 'available' | 'locked';
 export type DistrictDirection = 'center' | 'east';
@@ -40,6 +62,7 @@ export type Tile = {
   terrainClusterId?: string;
   terrainDepth?: number;
   terrainEdgeMask?: number;
+  vegetationKind?: VegetationKind;
 };
 
 export type Building = {
@@ -57,6 +80,8 @@ export type Building = {
   nearestRoad?: Vec2;
   tripsToday: number;
   upgradedAtDay?: number;
+  constructionState?: BuildingConstructionState;
+  constructionProgress?: number;
 };
 
 export type TrafficCell = {
@@ -135,6 +160,7 @@ export type CityStats = {
   completedTrips: number;
   failedTrips: number;
   publicTripsCompleted: number;
+  busTripsCompleted: number;
   carTripsAvoided: number;
   waitingPassengers: number;
   activeBuses: number;
@@ -194,6 +220,7 @@ export type CityHistorySample = {
   completedTrips: number;
   failedTrips: number;
   publicTripsCompleted: number;
+  busTripsCompleted: number;
   carTripsAvoided: number;
   bikeLaneTiles: number;
   bikeLaneCoverageRatio: number;

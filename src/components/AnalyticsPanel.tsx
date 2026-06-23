@@ -102,6 +102,7 @@ function emptyHistoryReference(): CityHistorySample {
     completedTrips: 0,
     failedTrips: 0,
     publicTripsCompleted: 0,
+    busTripsCompleted: 0,
     carTripsAvoided: 0,
     bikeLaneTiles: 0,
     bikeLaneCoverageRatio: 0,

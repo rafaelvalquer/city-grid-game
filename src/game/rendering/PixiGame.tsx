@@ -15,6 +15,7 @@ import { ParticleSystem } from './particleSystem';
 import { PerformanceDebugPanel } from '../../components/PerformanceDebugPanel';
 import type { GraphicsSettings } from '../config/graphicsSettings';
 import { getTargetRenderFps, shouldRenderFrame } from '../performance/renderScheduling';
+import { CampaignMissionPanel } from '../../components/CampaignMissionPanel';
 
 const UI_SYNC_INTERVAL_SECONDS = 0.2;
 
@@ -94,7 +95,7 @@ export function PixiGame({ world, graphics }: { world: GameWorld; graphics: Grap
       view.app.ticker.remove(view.app.render, view.app);
 
       view.app.ticker.add((ticker) => {
-        const { paused, speed, heatmapMode, viewLayer, mobilityFocusMode, setStats, setSelected, setPerformanceMetrics } = useGameStore.getState();
+        const { paused, speed, heatmapMode, viewLayer, mobilityFocusMode, setStats, setSelected, setPerformanceMetrics, setCampaignMission } = useGameStore.getState();
         const shouldIgnoreElapsed = document.hidden || ignoreElapsedUntilVisibleFrame;
         const dt = shouldIgnoreElapsed ? 0 : Math.max(0, ticker.elapsedMS / 1000);
         if (!document.hidden && ignoreElapsedUntilVisibleFrame) ignoreElapsedUntilVisibleFrame = false;
@@ -151,6 +152,7 @@ export function PixiGame({ world, graphics }: { world: GameWorld; graphics: Grap
           setStats(world.getSnapshotForUi());
           setSelected(world.selected);
           setPerformanceMetrics(world.performanceProfiler.getSnapshot());
+          setCampaignMission(world.getCampaignMissionSnapshot());
         }
       });
     }
@@ -177,6 +179,7 @@ export function PixiGame({ world, graphics }: { world: GameWorld; graphics: Grap
       </div>
       <LayerToggle />
       <PerformanceDebugPanel enabled={graphics.showPerformanceDebug} />
+      {world.mode === 'campaign' && <CampaignMissionPanel />}
       <CanvasToolDock />
       <button className={`metro-manager-toggle ${viewLayerUi}`} type="button" onClick={() => setMetroManagerOpen((open) => !open)}>
         {viewLayerUi === 'underground' ? '🚇' : '🚌'} Gerenciar linhas

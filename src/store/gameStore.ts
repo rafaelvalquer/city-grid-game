@@ -3,6 +3,7 @@ import type { CityStats, RoadDirection, SelectedEntity } from '../types/city.typ
 import type { Vec2 } from '../types/city.types';
 import type { SimulationSpeed, Tool } from '../types/game.types';
 import type { PerformanceMetrics } from '../game/performance/performanceTypes';
+import type { CampaignMissionSnapshot } from '../game/campaign/campaignTypes';
 
 export type HeatmapMode = 'traffic' | 'satisfaction' | 'flow' | 'off';
 export type ViewLayer = 'surface' | 'underground';
@@ -34,6 +35,7 @@ export type GameStore = {
   hoverPreview: HoverPreview | null;
   actionFeedback: string | null;
   performanceMetrics: PerformanceMetrics | null;
+  campaignMission: CampaignMissionSnapshot | null;
   setTool: (tool: Tool) => void;
   setHeatmapMode: (mode: HeatmapMode) => void;
   setViewLayer: (viewLayer: ViewLayer) => void;
@@ -47,6 +49,7 @@ export type GameStore = {
   setHoverPreview: (preview: HoverPreview | null) => void;
   setActionFeedback: (message: string | null) => void;
   setPerformanceMetrics: (metrics: PerformanceMetrics | null) => void;
+  setCampaignMission: (mission: CampaignMissionSnapshot | null) => void;
 };
 
 const initialStats: CityStats = {
@@ -60,6 +63,7 @@ const initialStats: CityStats = {
   completedTrips: 0,
   failedTrips: 0,
   publicTripsCompleted: 0,
+  busTripsCompleted: 0,
   carTripsAvoided: 0,
   waitingPassengers: 0,
   activeBuses: 0,
@@ -111,6 +115,7 @@ export const useGameStore = create<GameStore>((set) => ({
   hoverPreview: null,
   actionFeedback: null,
   performanceMetrics: null,
+  campaignMission: null,
   setTool: (tool) => set((state) => ({
     selectedTool: tool,
     actionFeedback: null,
@@ -135,4 +140,5 @@ export const useGameStore = create<GameStore>((set) => ({
   setHoverPreview: (preview) => set({ hoverPreview: preview }),
   setActionFeedback: (message) => set({ actionFeedback: message }),
   setPerformanceMetrics: (metrics) => set({ performanceMetrics: metrics }),
+  setCampaignMission: (campaignMission) => set({ campaignMission }),
 }));

@@ -6,6 +6,7 @@ import { MAP_COLORS } from './visualTheme';
 import type { Atmosphere } from './renderTypes';
 import { lotDecorAt } from './renderTerrain';
 import { buildingLightAlpha } from './renderBuildings';
+import { isBuildingOperational } from '../city/buildings';
 import { hash2, pulse, prefersReducedMotion } from './renderUtils';
 import type { GraphicsSettings } from '../config/graphicsSettings';
 export function getAtmosphere(rawPeriod: string, timeSeconds: number): Atmosphere {
@@ -156,6 +157,7 @@ export function drawBuildingLife(
   settings: Pick<GraphicsSettings, 'buildingLights' | 'pedestrians'>,
 ): void {
   for (const building of world.buildings) {
+    if (!isBuildingOperational(building)) continue;
     const px = building.x * ts;
     const py = building.y * ts;
     const activity = Math.min(1, (building.tripsToday + building.population + building.jobs + building.attraction) / 18);

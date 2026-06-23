@@ -1,11 +1,17 @@
 import { nanoid } from 'nanoid';
-import type { Building, BuildingLevel, BuildingType, Tile } from '../../types/city.types';
+import type { Building, BuildingConstructionState, BuildingLevel, BuildingType, Tile } from '../../types/city.types';
 import { getBuildingLevelConfig } from '../config/buildingConfig';
 import { getNeighbors4, isRoadType } from './grid';
 
-export function createBuilding(type: BuildingType, x: number, y: number): Building {
+export function createBuilding(
+  type: BuildingType,
+  x: number,
+  y: number,
+  constructionState: BuildingConstructionState = 'constructing',
+): Building {
   const level: BuildingLevel = 1;
   const cfg = getBuildingLevelConfig(type, level);
+  const operational = constructionState === 'operational';
   return {
     id: nanoid(8),
     type,
@@ -14,12 +20,30 @@ export function createBuilding(type: BuildingType, x: number, y: number): Buildi
     y,
     width: 1,
     height: 1,
-    population: cfg.population,
-    jobs: cfg.jobs,
-    attraction: cfg.attraction,
+    population: operational ? cfg.population : 0,
+    jobs: operational ? cfg.jobs : 0,
+    attraction: operational ? cfg.attraction : 0,
     connected: false,
     tripsToday: 0,
+    constructionState,
+    constructionProgress: operational ? 1 : 0,
   };
+}
+
+export function isBuildingOperational(building: Building): boolean {
+  return (building.constructionState ?? 'operational') === 'operational';
+}
+
+export function normalizeBuildingConstruction(building: Building): Building {
+  if (building.constructionState) {
+    building.constructionProgress = building.constructionState === 'operational'
+      ? 1
+      : Math.max(0, Math.min(1, building.constructionProgress ?? 0));
+    return building;
+  }
+  building.constructionState = 'operational';
+  building.constructionProgress = 1;
+  return building;
 }
 
 export function applyBuildingLevel(building: Building, level: BuildingLevel, day?: number): Building {

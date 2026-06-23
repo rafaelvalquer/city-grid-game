@@ -8,6 +8,12 @@ export type BuildingLevelConfig = {
   attraction: number;
 };
 
+export const BUILDING_CONSTRUCTION_SECONDS: Record<BuildingType, number> = {
+  house: 8,
+  shop: 12,
+  office: 16,
+};
+
 export const BUILDING_CONFIG: Record<BuildingType, { label: string; levels: Record<BuildingLevel, BuildingLevelConfig> }> = {
   house: {
     label: 'Residencial',

@@ -1,7 +1,8 @@
 import { BarChart3, Building2, BusFront, Car, CircleDot, MapPin, Plane, Route, X } from 'lucide-react';
 import { GameWorld } from '../game/engine/simulation';
 import { useGameStore } from '../store/gameStore';
-import { BUILDING_CONFIG, getBuildingLevelConfig } from '../game/config/buildingConfig';
+import { BUILDING_CONFIG, BUILDING_CONSTRUCTION_SECONDS, getBuildingLevelConfig } from '../game/config/buildingConfig';
+import { isBuildingOperational } from '../game/city/buildings';
 import { ROAD_CONFIG } from '../game/config/roadConfig';
 import { getTrafficLightOpenAxis } from '../game/systems/trafficLights';
 import { TrafficChart } from './TrafficChart';
@@ -68,6 +69,13 @@ export function DetailsPanel({ world, className = '', onClose }: { world: GameWo
   const nextBuildingLevelConfig = selected.kind === 'building' && buildingUpgrade?.nextLevel
     ? getBuildingLevelConfig(selected.building.type, buildingUpgrade.nextLevel)
     : undefined;
+  const buildingOperational = selected.kind === 'building' ? isBuildingOperational(selected.building) : true;
+  const buildingConstructionProgress = selected.kind === 'building'
+    ? Math.max(0, Math.min(1, selected.building.constructionProgress ?? 1))
+    : 1;
+  const buildingConstructionRemaining = selected.kind === 'building'
+    ? Math.max(0, BUILDING_CONSTRUCTION_SECONDS[selected.building.type] * (1 - buildingConstructionProgress))
+    : 0;
   const carLaneDisplayTotal = car ? getCarLaneDisplayTotal(world, car.currentTileX, car.currentTileY, car.laneCount) : 1;
 
   return (
@@ -77,7 +85,7 @@ export function DetailsPanel({ world, className = '', onClose }: { world: GameWo
         <h2>Detalhes</h2>
         <button className="panel-close" aria-label="Fechar detalhes" onClick={onClose}><X size={17} /></button>
       </div>
-      <DistrictExpansionCard world={world} />
+      {world.mode === 'sandbox' && <DistrictExpansionCard world={world} />}
 
       {selected.kind === 'none' && <p className="muted">Selecione uma rua, prédio ou carro.</p>}
 
@@ -102,11 +110,19 @@ export function DetailsPanel({ world, className = '', onClose }: { world: GameWo
       {selected.kind === 'building' && (
         <div className="detail-card">
           <h3><Building2 size={15} /> {buildingLevelConfig?.label ?? BUILDING_CONFIG[selected.building.type].label}</h3>
-          <p><span>Status</span><strong className={selected.building.connected ? 'good' : 'bad'}>{selected.building.connected ? 'Conectado' : 'Desconectado'}</strong></p>
+          <p>
+            <span>Status</span>
+            <strong className={buildingOperational ? (selected.building.connected ? 'good' : 'bad') : 'warn'}>
+              {buildingOperational
+                ? (selected.building.connected ? 'Conectado' : 'Desconectado')
+                : `Em construção — ${Math.round(buildingConstructionProgress * 100)}%`}
+            </strong>
+          </p>
+          {!buildingOperational && <p><span>Tempo restante</span><strong>{buildingConstructionRemaining.toFixed(1)}s simulados</strong></p>}
           <p><span>Nível da construção</span><strong>{selected.building.level}/3</strong></p>
-          <p><span>População</span><strong>{selected.building.population}</strong></p>
-          <p><span>Empregos</span><strong>{selected.building.jobs}</strong></p>
-          <p><span>Atração</span><strong>{selected.building.attraction}</strong></p>
+          <p><span>População</span><strong>{buildingOperational ? selected.building.population : 0}</strong></p>
+          <p><span>Empregos</span><strong>{buildingOperational ? selected.building.jobs : 0}</strong></p>
+          <p><span>Atração</span><strong>{buildingOperational ? selected.building.attraction : 0}</strong></p>
           <p><span>Viagens hoje</span><strong>{selected.building.tripsToday}</strong></p>
           <p><span>Posição</span><strong>{selected.building.x}, {selected.building.y}</strong></p>
           <div className="upgrade-box">
@@ -116,14 +132,16 @@ export function DetailsPanel({ world, className = '', onClose }: { world: GameWo
                 {buildingUpgrade?.reason ?? 'Avaliando'}
               </strong>
             </div>
-            {nextBuildingLevelConfig ? (
+            {buildingOperational && nextBuildingLevelConfig ? (
               <>
                 <p><span>Próximo nível</span><strong>{nextBuildingLevelConfig.label}</strong></p>
                 <p><span>Benefício</span><strong>+{Math.max(0, nextBuildingLevelConfig.population - selected.building.population)} pop · +{Math.max(0, nextBuildingLevelConfig.jobs - selected.building.jobs)} emp · +{Math.max(0, nextBuildingLevelConfig.attraction - selected.building.attraction)} atr</strong></p>
                 <p><span>Atividade</span><strong>{buildingUpgrade ? `${buildingUpgrade.score.toFixed(1)} pts` : '-'}</strong></p>
               </>
-            ) : (
+            ) : buildingOperational ? (
               <p><span>Próximo nível</span><strong>Máximo</strong></p>
+            ) : (
+              <p><span>Próximo nível</span><strong>Disponível após a obra</strong></p>
             )}
           </div>
         </div>
@@ -289,8 +307,10 @@ export function DetailsPanel({ world, className = '', onClose }: { world: GameWo
       )}
 
       <div className="detail-card muted-card">
-        <h3><MapPin size={15} /> Objetivo sandbox</h3>
-        <p>Mantenha a satisfação alta, conecte novos prédios e crie rotas alternativas para evitar colapso urbano.</p>
+        <h3><MapPin size={15} /> {world.mode === 'campaign' ? 'Objetivo da campanha' : 'Objetivo sandbox'}</h3>
+        <p>{world.mode === 'campaign'
+          ? 'Atenda população, satisfação e trânsito simultaneamente até completar a estabilidade da missão.'
+          : 'Mantenha a satisfação alta, conecte novos prédios e crie rotas alternativas para evitar colapso urbano.'}</p>
       </div>
     </aside>
   );

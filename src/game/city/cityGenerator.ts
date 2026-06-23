@@ -1,5 +1,5 @@
 import seedrandom from 'seedrandom';
-import type { Building, BuildingType, Tile } from '../../types/city.types';
+import type { Building, BuildingConstructionState, BuildingType, Tile } from '../../types/city.types';
 import { GAME_CONFIG } from '../config/gameConfig';
 import type { BuildingSpawnMode, GameSetupOptions } from '../config/gameSetup';
 import { DEFAULT_GAME_SETUP } from '../config/gameSetup';
@@ -214,11 +214,16 @@ export class CityGenerator {
     return distanceFromAnchor <= cityRadius + 8;
   }
 
-  spawn(grid: Tile[][], buildings: Building[], level: number): Building | null {
+  spawn(
+    grid: Tile[][],
+    buildings: Building[],
+    level: number,
+    constructionState: BuildingConstructionState = 'constructing',
+  ): Building | null {
     const type = this.chooseType(level);
     const spot = this.findSpot(grid, buildings, type);
     if (!spot) return null;
-    return createBuilding(type, spot.x, spot.y);
+    return createBuilding(type, spot.x, spot.y, constructionState);
   }
 }
 

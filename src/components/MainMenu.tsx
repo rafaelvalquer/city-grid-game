@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
-  ArrowLeft, CarFront, Clock3, Construction, Gauge, Map, MonitorCog, Play, Settings, Sparkles,
+  ArrowLeft, CarFront, Clock3, Construction, Gauge, Globe2, Map, MonitorCog, Play, Settings, Sparkles,
 } from 'lucide-react';
 import type { BuildingSpawnMode, GameSetupOptions } from '../game/config/gameSetup';
 import {
@@ -11,7 +11,7 @@ import {
   applyGraphicsPreset, updateGraphicsSetting, type GraphicsProfile, type GraphicsSettings,
 } from '../game/config/graphicsSettings';
 
-export function MainMenu({ onStartSandbox }: { onStartSandbox: (options: GameSetupOptions) => void }) {
+export function MainMenu({ onStartSandbox, onOpenCampaign }: { onStartSandbox: (options: GameSetupOptions) => void; onOpenCampaign: (options: GameSetupOptions) => void }) {
   const [view, setView] = useState<'home' | 'settings'>('home');
   const [settingsTab, setSettingsTab] = useState<'game' | 'graphics'>('game');
   const [options, setOptions] = useState<GameSetupOptions>({
@@ -48,6 +48,9 @@ export function MainMenu({ onStartSandbox }: { onStartSandbox: (options: GameSet
             <button className="menu-primary-action" onClick={() => onStartSandbox(options)}>
               <Play size={18} /> Jogar Sandbox
             </button>
+            <button className="menu-primary-action campaign-action" onClick={() => onOpenCampaign(options)}>
+              <Globe2 size={18} /> Jogar Campanha
+            </button>
             <button className="menu-secondary-action" onClick={() => setView('settings')}>
               <Settings size={17} /> Configurações
             </button>
@@ -57,7 +60,7 @@ export function MainMenu({ onStartSandbox }: { onStartSandbox: (options: GameSet
             <SettingSummary label="Gráficos" value={`${profileLabel} · Debug ${options.graphics.showPerformanceDebug ? 'ligado' : 'desligado'}`} />
             <div className="menu-mode-grid">
               <MenuMode icon={<Map size={16} />} title="Sandbox" subtitle="Modo infinito" active />
-              <MenuMode icon={<Clock3 size={16} />} title="Campanha" subtitle="Em breve" />
+              <MenuMode icon={<Clock3 size={16} />} title="Campanha" subtitle="4 cidades" active />
               <MenuMode icon={<CarFront size={16} />} title="Cenários" subtitle="Em breve" />
             </div>
           </>

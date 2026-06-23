@@ -6,11 +6,12 @@ import type { GameWorld } from '../engine/simulation';
 import { isRoadType, keyOf } from '../city/grid';
 import { MAP_COLORS } from './visualTheme';
 import { getAtmosphere, drawAtmosphereOverlay, drawBuildingLife, drawStreetFurniture } from './renderEffects';
-import { drawBaseTile, drawLotDecoration } from './renderTerrain';
+import { drawBaseTile, drawCampaignVegetation, drawLotDecoration } from './renderTerrain';
 import { drawTerrainFeatureAnimation, drawTerrainFeatureBase } from './renderTerrainFeatures';
 import { drawBusStop, drawBusStopCoverage, drawRoad, drawRoadSignage, drawRoundaboutIsland, drawTrafficLights, drawOneWayArrow } from './renderRoads';
 import { drawHeatmapMode } from './renderHeatmap';
-import { drawBuildingVariant } from './renderBuildings';
+import { drawBuildingConstruction, drawBuildingVariant } from './renderBuildings';
+import { isBuildingOperational } from '../city/buildings';
 import { drawCar, drawCarLod } from './renderVehicles';
 import { getStaticRenderSignature } from './renderInvalidation';
 import { drawConstructionPreview, drawSelectedCarMarker, drawSelectedRoute, drawSelection } from './renderUiOverlays';
@@ -145,8 +146,9 @@ function renderStaticLayer(
       const tile = world.grid[y]?.[x];
       if (!tile) continue;
       drawBaseTile(layer, tile, x, y, ts);
+      drawCampaignVegetation(layer, tile, x, y, ts);
       if (tile.type === 'mountain' || tile.type === 'lake') drawTerrainFeatureBase(layer, world.grid, tile, x, y, ts, timeSeconds);
-      if (tile.type === 'empty' && settings.streetFurniture) drawLotDecoration(layer, x, y, ts);
+      if (tile.type === 'empty' && !tile.vegetationKind && settings.streetFurniture) drawLotDecoration(layer, x, y, ts);
       if (tile.type === 'road') drawRoad(layer, world.grid, x, y, ts, 'road');
       if (tile.type === 'avenue') drawRoad(layer, world.grid, x, y, ts, 'avenue');
       if (tile.type === 'roundabout') drawRoad(layer, world.grid, x, y, ts, 'roundabout');
@@ -164,6 +166,7 @@ function renderStaticLayer(
   }
 
   for (const building of world.buildings) {
+    if (!isBuildingOperational(building)) continue;
     drawBuildingVariant(layer, building, ts, timeSeconds, atmosphere, settings.buildingLights);
     if (!building.connected) {
       layer.circle(building.x * ts + ts - 5, building.y * ts + 5, 4).fill(MAP_COLORS.disconnected);
@@ -194,6 +197,7 @@ function renderEnvironmentLayer(
   }
 
   drawStreetFurniture(graphics, world, ts, timeSeconds, atmosphere, settings);
+  for (const building of world.buildings) drawBuildingConstruction(graphics, building, ts, timeSeconds);
   if (settings.atmosphereOverlay) drawAtmosphereOverlay(graphics, world, atmosphere, 'off', ts);
   renderMetroLayer(graphics, world, viewLayer, ts, timeSeconds);
   drawHelipads(graphics, world, ts, timeSeconds);
@@ -342,7 +346,7 @@ function emitRenderParticles(
   } else {
     for (const building of world.buildings) {
       const wasConnected = state.buildingConnections.get(building.id);
-      if (graphics.constructionParticles && wasConnected === false && building.connected) {
+      if (graphics.constructionParticles && isBuildingOperational(building) && wasConnected === false && building.connected) {
         particles.emitConnectionPulse({ x: building.x, y: building.y });
       }
       state.buildingConnections.set(building.id, building.connected);
@@ -391,8 +395,8 @@ function syncRenderHistory(state: RenderWorldState, world: GameWorld): void {
 }
 
 function moneyParticleAnchor(world: GameWorld): { x: number; y: number } {
-  const activeBuilding = world.buildings.find((building) => building.connected && (building.type === 'shop' || building.type === 'office'))
-    ?? world.buildings.find((building) => building.connected);
+  const activeBuilding = world.buildings.find((building) => isBuildingOperational(building) && building.connected && (building.type === 'shop' || building.type === 'office'))
+    ?? world.buildings.find((building) => isBuildingOperational(building) && building.connected);
   if (activeBuilding) return { x: activeBuilding.x, y: activeBuilding.y };
   return { x: Math.floor((world.grid[0]?.length ?? GAME_CONFIG.gridWidth) / 2), y: Math.floor((world.grid.length || GAME_CONFIG.gridHeight) / 2) };
 }
@@ -400,7 +404,7 @@ function moneyParticleAnchor(world: GameWorld): { x: number; y: number } {
 function drawDisconnectedBuildingAlerts(graphics: Graphics, world: GameWorld, ts: number, timeSeconds: number): void {
   const pulse = 0.5 + Math.sin(timeSeconds * 3.8) * 0.5;
   for (const building of world.buildings) {
-    if (building.connected) continue;
+    if (!isBuildingOperational(building) || building.connected) continue;
     const px = building.x * ts;
     const py = building.y * ts;
     graphics.roundRect(px + 2, py + 2, ts - 4, ts - 4, 7).stroke({ color: MAP_COLORS.disconnected, width: 1.5 + pulse * 1.2, alpha: 0.28 + pulse * 0.36 });

@@ -6,8 +6,24 @@ import {
 } from './graphicsSettings.ts';
 
 export type BuildingSpawnMode = 'organic' | 'compact' | 'districts' | 'corridors' | 'gridBlocks';
+export type GameMode = 'sandbox' | 'campaign';
+export type CampaignCityId =
+  | 'rio'
+  | 'vancouver'
+  | 'amsterdam'
+  | 'cape-town'
+  | 'copenhagen'
+  | 'bogota'
+  | 'seoul'
+  | 'singapore'
+  | 'curitiba'
+  | 'paris'
+  | 'tokyo'
+  | 'hong-kong';
 
 export type GameSetupOptions = {
+  mode?: GameMode;
+  campaignCityId?: CampaignCityId;
   spawnMode: BuildingSpawnMode;
   allowRoadDemolition: boolean;
   enableTerrainRelief: boolean;

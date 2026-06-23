@@ -4,6 +4,7 @@ import type { GameWorld } from '../engine/simulation';
 import { keyOf } from '../city/grid';
 import { MAP_COLORS, congestionColor } from './visualTheme';
 import type { Atmosphere } from './renderTypes';
+import { isBuildingOperational } from '../city/buildings';
 export function drawHeatmapMode(graphics: Graphics, world: GameWorld, mode: HeatmapMode, ts: number, atmosphere: Atmosphere): void {
   if (mode === 'off') return;
   const boost = atmosphere.heatmapBoost;
@@ -28,6 +29,7 @@ export function drawHeatmapMode(graphics: Graphics, world: GameWorld, mode: Heat
   const citySatisfaction = world.getSnapshot().satisfaction;
   const cityColor = citySatisfaction >= 70 ? MAP_COLORS.treeLight : citySatisfaction >= 40 ? MAP_COLORS.lane : MAP_COLORS.disconnected;
   for (const building of world.buildings) {
+    if (!isBuildingOperational(building)) continue;
     const nearbyCongestion = nearbyTrafficCongestion(world, building.x, building.y);
     const localStress = building.connected ? nearbyCongestion : 1.2;
     const color = localStress > 0.9 || !building.connected ? MAP_COLORS.disconnected : cityColor;

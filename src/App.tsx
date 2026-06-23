@@ -11,13 +11,24 @@ import { AnalyticsPanel } from './components/AnalyticsPanel';
 import { useGameStore } from './store/gameStore';
 import type { GameSetupOptions } from './game/config/gameSetup';
 import { DEFAULT_GAME_SETUP } from './game/config/gameSetup';
+import type { CampaignCityId, GameMode } from './game/config/gameSetup';
+import { CampaignSelectionScreen } from './components/CampaignSelectionScreen';
+import { CampaignVictoryModal } from './components/CampaignVictoryModal';
+import { isCampaignLevel2Unlocked, isCampaignLevel3Unlocked, loadCampaignProgress, saveCampaignCompletion } from './game/campaign/campaignProgress';
+import { getCampaignCity } from './game/campaign/campaignMaps';
 
-type AppScreen = 'menu' | 'sandbox';
+type AppScreen = 'menu' | 'campaign-select' | 'game';
 
 export default function App() {
   const [screen, setScreen] = useState<AppScreen>('menu');
   const [setupOptions, setSetupOptions] = useState<GameSetupOptions>(DEFAULT_GAME_SETUP);
-  const world = useMemo(() => (screen === 'sandbox' ? new GameWorld(setupOptions) : null), [screen, setupOptions]);
+  const [gameMode, setGameMode] = useState<GameMode>('sandbox');
+  const [campaignCityId, setCampaignCityId] = useState<CampaignCityId | undefined>();
+  const [campaignSelectionLevel, setCampaignSelectionLevel] = useState<1 | 2 | 3>(1);
+  const [campaignLevelUnlockedByVictory, setCampaignLevelUnlockedByVictory] = useState<2 | 3 | null>(null);
+  const world = useMemo(() => (screen === 'game'
+    ? new GameWorld({ ...setupOptions, mode: gameMode, campaignCityId })
+    : null), [screen, setupOptions, gameMode, campaignCityId]);
   const [mobilePanel, setMobilePanel] = useState<'tools' | 'details' | null>(null);
   const [analyticsOpen, setAnalyticsOpen] = useState(false);
   const wasPausedBeforeAnalytics = useRef(false);
@@ -25,16 +36,44 @@ export default function App() {
   const setPaused = useGameStore((s) => s.setPaused);
   const setStats = useGameStore((s) => s.setStats);
   const setSelected = useGameStore((s) => s.setSelected);
+  const campaignMission = useGameStore((s) => s.campaignMission);
+  const setCampaignMission = useGameStore((s) => s.setCampaignMission);
 
   useEffect(() => {
     if (!world) return undefined;
     setStats(world.getSnapshot());
     setSelected(world.selected);
+    setCampaignMission(world.getCampaignMissionSnapshot());
     return world.subscribe(() => {
       setStats(world.getSnapshot());
       setSelected(world.selected);
+      setCampaignMission(world.getCampaignMissionSnapshot());
     });
-  }, [world, setStats, setSelected]);
+  }, [world, setStats, setSelected, setCampaignMission]);
+
+  useEffect(() => {
+    if (!campaignMission?.completed) return;
+    setPaused(true);
+    try {
+      const previousProgress = loadCampaignProgress();
+      const wasLevel2Unlocked = isCampaignLevel2Unlocked(previousProgress);
+      const wasLevel3Unlocked = isCampaignLevel3Unlocked(previousProgress);
+      const progress = saveCampaignCompletion({
+        cityId: campaignMission.cityId,
+        completedAt: new Date().toISOString(),
+        population: campaignMission.population,
+        satisfaction: campaignMission.satisfaction,
+        traffic: campaignMission.traffic,
+        elapsedSeconds: campaignMission.elapsedSeconds,
+        day: campaignMission.day,
+        timeLabel: campaignMission.timeLabel,
+      });
+      if (!wasLevel3Unlocked && isCampaignLevel3Unlocked(progress)) setCampaignLevelUnlockedByVictory(3);
+      else if (!wasLevel2Unlocked && isCampaignLevel2Unlocked(progress)) setCampaignLevelUnlockedByVictory(2);
+    } catch {
+      // Victory remains valid if storage is unavailable.
+    }
+  }, [campaignMission?.completed, campaignMission?.cityId, setPaused]);
 
   const openAnalytics = useCallback(() => {
     if (analyticsOpen) return;
@@ -53,12 +92,29 @@ export default function App() {
     else openAnalytics();
   }, [analyticsOpen, closeAnalytics, openAnalytics]);
 
-  if (screen === 'menu' || !world) {
-    return <MainMenu onStartSandbox={(options) => {
+  if (screen === 'menu') {
+    return <MainMenu onOpenCampaign={(options) => {
       setSetupOptions(options);
-      setScreen('sandbox');
+      setScreen('campaign-select');
+    }} onStartSandbox={(options) => {
+      setSetupOptions(options);
+      setGameMode('sandbox');
+      setCampaignCityId(undefined);
+      setCampaignMission(null);
+      setPaused(false);
+      setScreen('game');
     }} />;
   }
+  if (screen === 'campaign-select') {
+    return <CampaignSelectionScreen initialLevel={campaignSelectionLevel} onBack={() => setScreen('menu')} onSelect={(cityId) => {
+      setCampaignCityId(cityId);
+      setGameMode('campaign');
+      setCampaignMission(null);
+      setPaused(false);
+      setScreen('game');
+    }} />;
+  }
+  if (!world) return null;
 
   return (
     <div className="app-shell">
@@ -80,6 +136,13 @@ export default function App() {
         </nav>
       </div>
       {analyticsOpen && <AnalyticsPanel world={world} onClose={closeAnalytics} />}
+      {campaignMission?.completed && <CampaignVictoryModal mission={campaignMission} unlockedLevel={campaignLevelUnlockedByVictory} onBack={() => {
+        setCampaignSelectionLevel(campaignLevelUnlockedByVictory ?? getCampaignCity(campaignMission.cityId)?.campaignLevel ?? 1);
+        setCampaignLevelUnlockedByVictory(null);
+        setCampaignMission(null);
+        setPaused(false);
+        setScreen('campaign-select');
+      }} />}
       <BottomBar />
     </div>
   );

@@ -1,8 +1,9 @@
 import type { Building } from '../../types/city.types';
 import type { DayPeriod } from '../engine/timeSystem';
+import { isBuildingOperational } from '../city/buildings';
 
 export function chooseTrip(buildings: Building[], period: DayPeriod): { origin: Building; destination: Building } | null {
-  const connected = buildings.filter((b) => b.connected);
+  const connected = buildings.filter((b) => isBuildingOperational(b) && b.connected);
   const houses = connected.filter((b) => b.type === 'house');
   const shops = connected.filter((b) => b.type === 'shop');
   const offices = connected.filter((b) => b.type === 'office');

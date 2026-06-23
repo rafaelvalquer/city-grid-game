@@ -3,6 +3,7 @@ import type { Building } from '../../types/city.types';
 import { MAP_COLORS } from './visualTheme';
 import type { Atmosphere } from './renderTypes';
 import { hash2, pulse } from './renderUtils';
+import { isBuildingOperational } from '../city/buildings';
 export function drawBuildingVariant(
   graphics: Graphics,
   building: Building,
@@ -69,6 +70,48 @@ export function drawBuildingVariant(
   graphics.roundRect(px + 4, py + 4, ts - 8, ts - 8, 4).stroke({ color: connected ? MAP_COLORS.lotStroke : MAP_COLORS.disconnected, width: connected ? 1 : 3, alpha: connected ? 0.8 : 1 });
 }
 
+export function getBuildingConstructionStage(building: Building): 1 | 2 | 3 {
+  const progress = Math.max(0, Math.min(1, building.constructionProgress ?? 0));
+  if (progress <= 1 / 3) return 1;
+  if (progress <= 2 / 3) return 2;
+  return 3;
+}
+
+export function drawBuildingConstruction(graphics: Graphics, building: Building, ts: number, timeSeconds: number): void {
+  if (isBuildingOperational(building)) return;
+  const progress = Math.max(0, Math.min(1, building.constructionProgress ?? 0));
+  const stage = getBuildingConstructionStage(building);
+  const px = building.x * ts;
+  const py = building.y * ts;
+  const pulseAlpha = 0.72 + pulse(timeSeconds, 0.55, (building.x + building.y) * 0.13) * 0.2;
+
+  graphics.roundRect(px + 5, py + 27, ts - 10, 7, 2).fill({ color: MAP_COLORS.constructionFoundation, alpha: 0.9 });
+  graphics.rect(px + 8, py + 24, ts - 16, 3).fill({ color: MAP_COLORS.constructionFoundation, alpha: 0.74 });
+
+  if (stage >= 2) {
+    const structureHeight = stage === 2 ? 13 : 22;
+    const top = py + 27 - structureHeight;
+    for (const columnX of [px + 10, px + ts - 12]) {
+      graphics.rect(columnX, top, 3, structureHeight).fill({ color: MAP_COLORS.constructionFrame, alpha: 0.9 });
+    }
+    graphics.rect(px + 9, top, ts - 18, 3).fill({ color: MAP_COLORS.constructionFrame, alpha: 0.9 });
+    if (stage === 3) {
+      graphics.rect(px + 9, py + 15, ts - 18, 3).fill({ color: MAP_COLORS.constructionFrame, alpha: 0.82 });
+      graphics.rect(px + 7, py + 5, 2, 25).fill({ color: MAP_COLORS.constructionScaffold, alpha: pulseAlpha });
+      graphics.rect(px + ts - 9, py + 5, 2, 25).fill({ color: MAP_COLORS.constructionScaffold, alpha: pulseAlpha });
+      for (const yy of [py + 8, py + 17, py + 26]) {
+        graphics.rect(px + 6, yy, ts - 12, 1.5).fill({ color: MAP_COLORS.constructionScaffold, alpha: 0.72 });
+      }
+    }
+  } else {
+    graphics.rect(px + 9, py + 19, 7, 5).fill({ color: MAP_COLORS.constructionFrame, alpha: pulseAlpha });
+    graphics.rect(px + 21, py + 21, 10, 3).fill({ color: MAP_COLORS.constructionScaffold, alpha: 0.75 });
+  }
+
+  graphics.roundRect(px + 5, py + 2, ts - 10, 5, 2).fill({ color: MAP_COLORS.shadow, alpha: 0.52 });
+  graphics.roundRect(px + 6, py + 3, (ts - 12) * progress, 3, 1.5).fill({ color: MAP_COLORS.constructionProgress, alpha: 0.95 });
+}
+
 
 export function drawBuildingLevelBadge(graphics: Graphics, px: number, py: number, level: number): void {
   const badgeX = px + 7;
@@ -81,6 +124,7 @@ export function drawBuildingLevelBadge(graphics: Graphics, px: number, py: numbe
 
 
 export function buildingLightAlpha(building: Building, atmosphere: Atmosphere, timeSeconds: number, salt: number): number {
+  if (!isBuildingOperational(building)) return 0;
   const base = atmosphere.lightAlpha;
   if (base <= 0.04) return base;
   const stable = (hash2(building.x, building.y, salt + 41) % 100) / 100;
