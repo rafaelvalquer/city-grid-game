@@ -1,7 +1,8 @@
 import type { Car, IntersectionReason, TrafficState, TravelDirection } from '../../types/agent.types';
 import type { RoadDirection, RoadType, Tile, Vec2 } from '../../types/city.types';
 import { ROAD_CONFIG } from '../config/roadConfig';
-import { getNeighbors4, isRoadType, keyOf } from '../city/grid';
+import { isRoadType, keyOf } from '../city/grid';
+import { getConnectedRoadNeighbors } from '../city/roadConnections';
 import { getTrafficLightSignal, isTrafficLightControlling, type TrafficLightMap } from './trafficLights';
 import type { CarSpatialIndex } from './carSpatialIndex';
 import {
@@ -151,7 +152,7 @@ export function isIntersection(grid: Tile[][], pos: Vec2): boolean {
   const tile = grid[pos.y]?.[pos.x];
   if (!tile || !isRoadType(tile.type)) return false;
   if (isRoundaboutTile(tile)) return false;
-  return getNeighbors4(pos).filter((next) => isRoadType(grid[next.y]?.[next.x]?.type)).length >= 3;
+  return getConnectedRoadNeighbors(grid, pos).length >= 3;
 }
 
 export function buildIntersectionControls(grid: Tile[][], cars: Car[], spatialIndex?: CarSpatialIndex): IntersectionControls {
@@ -796,7 +797,7 @@ function debugRightTurnBlocked(
 function isTIntersectionByKey(grid: Tile[][], key: string): boolean {
   const [xText, yText] = key.split(',');
   const pos = { x: Number(xText), y: Number(yText) };
-  return getNeighbors4(pos).filter((next) => isRoadType(grid[next.y]?.[next.x]?.type)).length === 3;
+  return getConnectedRoadNeighbors(grid, pos).length === 3;
 }
 
 function isExitBlocked(grid: Tile[][], car: Car, cars: Car[], exitTile: Vec2 | undefined, exitDirection: TravelDirection, spatialIndex?: CarSpatialIndex): boolean {

@@ -14,7 +14,7 @@ import { drawBuildingConstruction, drawBuildingVariant } from './renderBuildings
 import { isBuildingOperational } from '../city/buildings';
 import { drawCar, drawCarLod } from './renderVehicles';
 import { getStaticRenderSignature } from './renderInvalidation';
-import { drawConstructionPreview, drawSelectedCarMarker, drawSelectedRoute, drawSelection } from './renderUiOverlays';
+import { drawConstructionPreview, drawSelectedCarMarker, drawSelectedRoadConnections, drawSelectedRoute, drawSelection } from './renderUiOverlays';
 import type { ParticleSystem } from './particleSystem';
 import { renderMetroLayer } from './renderMetro';
 import { drawMobilityFocusOverlay } from './renderMobilityFocus';
@@ -29,6 +29,7 @@ import { drawBikeTrips } from './renderBikes';
 import { PERFORMANCE_CONFIG } from '../config/performanceConfig';
 import { DEFAULT_GRAPHICS_SETTINGS, type GraphicsSettings } from '../config/graphicsSettings';
 import { drawAirLayer, drawHelipadCoverage, drawHelipads, getHelicopterPose } from './renderHelicopters';
+import { drawSurfaceTunnelPortals, drawUndergroundTunnels, isCarDeepInsideTunnel, isCarInTunnel } from './renderTunnels';
 
 export type RenderWorldState = {
   staticSignature: string | null;
@@ -155,6 +156,7 @@ function renderStaticLayer(
       if (tile.type === 'roundaboutCenter') drawRoundaboutIsland(layer, world.grid, x, y, ts);
     }
   }
+  drawSurfaceTunnelPortals(layer, world, ts, timeSeconds);
 
   for (let y = 0; y < world.grid.length; y++) {
     for (let x = 0; x < (world.grid[y]?.length ?? 0); x++) {
@@ -187,6 +189,7 @@ function renderEnvironmentLayer(
 
   if (viewLayer === 'underground') {
     renderMetroLayer(graphics, world, viewLayer, ts, timeSeconds);
+    drawUndergroundTunnels(graphics, world, ts, timeSeconds);
     return;
   }
 
@@ -218,7 +221,13 @@ function renderVehicleLayer(
   settings: GraphicsSettings,
 ): void {
   graphics.clear();
-  if (viewLayer === 'underground') return;
+  if (viewLayer === 'underground') {
+    for (const car of world.cars) {
+      if (!isCarInTunnel(car)) continue;
+      drawCar(graphics, car, world, ts, timeSeconds, atmosphere, settings);
+    }
+    return;
+  }
 
   const carCullBounds = visibleBounds ? expandViewportBounds(visibleBounds, 2) : undefined;
   const useVehicleLod = settings.vehicleDetail === 'simplified'
@@ -228,6 +237,7 @@ function renderVehicleLayer(
     ));
   let vehicleLodCars = 0;
   for (const car of world.cars) {
+    if (isCarDeepInsideTunnel(car)) continue;
     const selectedCar = world.selected.kind === 'car' && world.selected.carId === car.id;
     if (carCullBounds && !selectedCar && !isCarInsideBounds(car, carCullBounds)) continue;
     if (useVehicleLod && !selectedCar && car.vehicleType !== 'bus') {
@@ -261,7 +271,10 @@ function renderOverlayLayer(
 
   if (hoverPreview) drawConstructionPreview(graphics, world, hoverPreview, ts, timeSeconds);
   if (world.selected.kind === 'tile') drawSelection(graphics, world.selected.x, world.selected.y, ts);
-  if (world.selected.kind === 'road') drawSelection(graphics, world.selected.x, world.selected.y, ts);
+  if (world.selected.kind === 'road') {
+    drawSelection(graphics, world.selected.x, world.selected.y, ts);
+    drawSelectedRoadConnections(graphics, world, world.selected.x, world.selected.y, ts);
+  }
   if (world.selected.kind === 'building') drawSelection(graphics, world.selected.building.x, world.selected.building.y, ts);
   if (world.selected.kind === 'busStop') {
     drawBusStopCoverage(graphics, world.selected.stop.x, world.selected.stop.y, ts, 0.09, 0.4);
@@ -305,7 +318,7 @@ function getOverlaySignature(
               ? `helipad:${selected.helipad.id}`
             : selected.kind;
   const hoverKey = hoverPreview
-    ? `${hoverPreview.x},${hoverPreview.y}:${hoverPreview.valid}:${hoverPreview.tool ?? ''}:${hoverPreview.lineTiles?.length ?? 0}`
+    ? `${hoverPreview.x},${hoverPreview.y}:${hoverPreview.valid}:${hoverPreview.tool ?? ''}:${hoverPreview.lineTiles?.length ?? 0}:${hoverPreview.connectionDirection ?? ''}:${hoverPreview.connectionConnected ?? ''}`
     : 'none';
   return `${viewLayer}|${heatmapMode}|${mobilityFocusMode}|${selectedKey}|${hoverKey}|${world.getStaticRenderSignature()}`;
 }

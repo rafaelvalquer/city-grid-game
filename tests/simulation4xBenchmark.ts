@@ -6,6 +6,7 @@ import { isRoadType } from '../src/game/city/grid';
 import { createBuilding } from '../src/game/city/buildings';
 import type { BuildingType } from '../src/types/city.types';
 import { CAMPAIGN_CITIES } from '../src/game/campaign/campaignMaps';
+import { normalizeLegacyRoadConnections } from '../src/game/city/roadConnections';
 
 const world = new GameWorld({ enableTerrainRelief: false });
 prepareBenchmarkRoadGrid(world);
@@ -96,6 +97,7 @@ function prepareBenchmarkRoadGrid(worldToPrepare: GameWorld): void {
       if (tile && !isRoadType(tile.type)) worldToPrepare.grid[y][x] = { x, y, type: 'avenue' };
     }
   }
+  normalizeLegacyRoadConnections(worldToPrepare.grid);
   (worldToPrepare as unknown as { updateTrafficMap(): void }).updateTrafficMap();
 }
 

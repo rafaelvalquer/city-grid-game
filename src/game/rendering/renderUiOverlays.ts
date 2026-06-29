@@ -11,13 +11,30 @@ import { pulse } from './renderUtils';
 import { SIGNAL_GREEN, SIGNAL_OFF, SIGNAL_RED } from './renderTypes';
 import { HELICOPTER_CONFIG } from '../config/helicopterConfig';
 import { drawHelipadCoverage } from './renderHelicopters';
+import { getRoadConnectionDirections } from '../city/roadConnections';
 export function drawSelection(graphics: Graphics, x: number, y: number, ts: number): void {
   graphics.roundRect(x * ts + 1, y * ts + 1, ts - 2, ts - 2, 5).stroke({ color: MAP_COLORS.selection, width: 2 });
+}
+
+export function drawSelectedRoadConnections(graphics: Graphics, world: GameWorld, x: number, y: number, ts: number): void {
+  const centerX = x * ts + ts / 2;
+  const centerY = y * ts + ts / 2;
+  for (const direction of getRoadConnectionDirections(world.grid, { x, y })) {
+    const endX = direction === 'west' ? x * ts : direction === 'east' ? (x + 1) * ts : centerX;
+    const endY = direction === 'north' ? y * ts : direction === 'south' ? (y + 1) * ts : centerY;
+    graphics.moveTo(centerX, centerY).lineTo(endX, endY)
+      .stroke({ color: MAP_COLORS.selection, width: 4, alpha: 0.72 });
+    graphics.circle(endX, endY, 3.5).fill({ color: MAP_COLORS.selection, alpha: 0.95 });
+  }
 }
 
 
 export function drawConstructionPreview(graphics: Graphics, world: GameWorld, preview: HoverPreview, ts: number, timeSeconds: number): void {
   const { x, y, valid, tool } = preview;
+  if (tool === 'roadConnection' && preview.connectionDirection) {
+    drawRoadConnectionPreview(graphics, preview, preview.connectionDirection, ts, timeSeconds);
+    return;
+  }
   if (preview.lineTiles?.length && tool && isRoadLineTool(tool)) {
     drawRoadLinePreview(graphics, preview, tool, ts, timeSeconds);
     return;
@@ -112,8 +129,45 @@ export function drawConstructionPreview(graphics: Graphics, world: GameWorld, pr
   }
 }
 
+function drawRoadConnectionPreview(
+  graphics: Graphics,
+  preview: HoverPreview,
+  direction: RoadDirection,
+  ts: number,
+  timeSeconds: number,
+): void {
+  if (!inBounds(preview.x, preview.y)) return;
+  const px = preview.x * ts;
+  const py = preview.y * ts;
+  const padding = Math.max(5, ts * 0.14);
+  const activeColor = preview.connectionConnected ? MAP_COLORS.previewInvalid : MAP_COLORS.previewValid;
+  const color = preview.valid ? activeColor : MAP_COLORS.previewInvalid;
+  const glow = 5 + pulse(timeSeconds, 1.5, preview.x * 0.17 + preview.y * 0.11) * 3;
+  let x1 = px + padding;
+  let y1 = py;
+  let x2 = px + ts - padding;
+  let y2 = py;
+  if (direction === 'south') {
+    y1 = py + ts;
+    y2 = py + ts;
+  } else if (direction === 'west') {
+    x1 = px;
+    x2 = px;
+    y1 = py + padding;
+    y2 = py + ts - padding;
+  } else if (direction === 'east') {
+    x1 = px + ts;
+    x2 = px + ts;
+    y1 = py + padding;
+    y2 = py + ts - padding;
+  }
+  graphics.moveTo(x1, y1).lineTo(x2, y2).stroke({ color, width: glow, alpha: 0.2 });
+  graphics.moveTo(x1, y1).lineTo(x2, y2).stroke({ color, width: 3, alpha: 0.95 });
+  graphics.circle((x1 + x2) / 2, (y1 + y2) / 2, 4).fill({ color, alpha: 0.95 });
+}
 
-export function drawRoadLinePreview(graphics: Graphics, preview: HoverPreview, tool: 'road' | 'avenue' | 'busLane' | 'bikeLane' | 'bikeLane', ts: number, timeSeconds: number): void {
+
+export function drawRoadLinePreview(graphics: Graphics, preview: HoverPreview, tool: 'road' | 'avenue' | 'busLane' | 'bikeLane' | 'roadTunnel' | 'avenueTunnel', ts: number, timeSeconds: number): void {
   const lineTiles = preview.lineTiles ?? [];
   const visibleTiles = lineTiles.filter((tile) => inBounds(tile.x, tile.y));
   if (!visibleTiles.length) return;
@@ -122,8 +176,11 @@ export function drawRoadLinePreview(graphics: Graphics, preview: HoverPreview, t
   const color = preview.valid ? MAP_COLORS.previewValid : MAP_COLORS.previewInvalid;
   const isBusLanePreview = tool === 'busLane';
   const isBikeLanePreview = tool === 'bikeLane';
-  const roadColor = preview.valid ? (isBikeLanePreview ? 0x2563eb : isBusLanePreview ? 0x1d9bf0 : tool === 'avenue' ? MAP_COLORS.avenue : MAP_COLORS.road) : MAP_COLORS.previewInvalid;
-  const roadW = isBikeLanePreview ? 6 : isBusLanePreview ? 13 : tool === 'avenue' ? 32 : 23;
+  const isTunnelPreview = tool === 'roadTunnel' || tool === 'avenueTunnel';
+  const roadColor = preview.valid
+    ? (isTunnelPreview ? 0x7dd3fc : isBikeLanePreview ? 0x2563eb : isBusLanePreview ? 0x1d9bf0 : tool === 'avenue' ? MAP_COLORS.avenue : MAP_COLORS.road)
+    : MAP_COLORS.previewInvalid;
+  const roadW = isBikeLanePreview ? 6 : isBusLanePreview ? 13 : tool === 'avenue' || tool === 'avenueTunnel' ? 32 : 23;
   const minX = Math.min(...visibleTiles.map((tile) => tile.x));
   const maxX = Math.max(...visibleTiles.map((tile) => tile.x));
   const minY = Math.min(...visibleTiles.map((tile) => tile.y));
@@ -150,7 +207,8 @@ export function drawRoadLinePreview(graphics: Graphics, preview: HoverPreview, t
   }
 
   const invalidKeys = new Set((preview.invalidTiles ?? []).map((tile) => keyOf(tile.x, tile.y)));
-  for (const tile of visibleTiles) {
+  for (let index = 0; index < visibleTiles.length; index += 1) {
+    const tile = visibleTiles[index];
     const px = tile.x * ts;
     const py = tile.y * ts;
     const invalid = invalidKeys.has(keyOf(tile.x, tile.y));
@@ -159,6 +217,10 @@ export function drawRoadLinePreview(graphics: Graphics, preview: HoverPreview, t
     if (invalid) {
       graphics.moveTo(px + 12, py + 12).lineTo(px + ts - 12, py + ts - 12).stroke({ color: MAP_COLORS.previewInvalid, width: 2.5, alpha: 0.9 });
       graphics.moveTo(px + ts - 12, py + 12).lineTo(px + 12, py + ts - 12).stroke({ color: MAP_COLORS.previewInvalid, width: 2.5, alpha: 0.9 });
+    }
+    if (isTunnelPreview && (index === 0 || index === visibleTiles.length - 1)) {
+      graphics.circle(px + ts / 2, py + ts / 2, 12 + previewPulse * 3).stroke({ color: roadColor, width: 3, alpha: preview.valid ? 0.9 : 0.6 });
+      graphics.roundRect(px + 9, py + 13, ts - 18, ts - 26, 8).fill({ color: 0x020617, alpha: 0.36 });
     }
   }
 }

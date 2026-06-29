@@ -1,5 +1,6 @@
 import type { Tile, Vec2 } from '../../types/city.types';
 import { keyOf } from '../city/grid';
+import { areRoadTilesConnected } from '../city/roadConnections';
 
 function reconstruct(cameFrom: Map<string, string>, current: string): Vec2[] {
   const total = [current];
@@ -24,7 +25,7 @@ function bikeNeighbors(grid: Tile[][], pos: Vec2): Vec2[] {
     { x: pos.x - 1, y: pos.y },
     { x: pos.x, y: pos.y + 1 },
     { x: pos.x, y: pos.y - 1 },
-  ].filter((next) => isBikeLaneTile(grid, next));
+  ].filter((next) => isBikeLaneTile(grid, next) && areRoadTilesConnected(grid, pos, next));
 }
 
 export function findBikeLanePath(grid: Tile[][], start: Vec2, goal: Vec2): Vec2[] {

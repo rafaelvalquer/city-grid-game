@@ -17,6 +17,7 @@ export type ViewportTileBounds = {
 export type CameraController = {
   state: CameraState;
   toWorldTile: (clientX: number, clientY: number) => Vec2;
+  toWorldTilePosition: (clientX: number, clientY: number) => Vec2;
   getVisibleTileBounds: (paddingTiles?: number) => ViewportTileBounds;
   handlePointerDown: (event: PointerEvent) => boolean;
   handlePointerMove: (event: PointerEvent) => boolean;
@@ -29,6 +30,17 @@ export function createCameraController(canvas: HTMLCanvasElement, state: CameraS
 
   return {
     state,
+    toWorldTilePosition(clientX, clientY) {
+      const rect = canvas.getBoundingClientRect();
+      const px = clientX - rect.left;
+      const py = clientY - rect.top;
+      const worldX = (px - state.x) / state.scale;
+      const worldY = (py - state.y) / state.scale;
+      return {
+        x: worldX / GAME_CONFIG.tileSize,
+        y: worldY / GAME_CONFIG.tileSize,
+      };
+    },
     toWorldTile(clientX, clientY) {
       const rect = canvas.getBoundingClientRect();
       const px = clientX - rect.left;

@@ -1,6 +1,7 @@
 import type { Car } from '../../types/agent.types';
 import type { RoadDirection, Tile, Vec2 } from '../../types/city.types';
-import { getNeighbors4, inBounds, isRoadType, isTerrainBlocked, keyOf } from '../city/grid';
+import { inBounds, isRoadType, isTerrainBlocked, keyOf } from '../city/grid';
+import { getConnectedRoadNeighbors } from '../city/roadConnections';
 
 const RING_OFFSETS: Vec2[] = [
   { x: 0, y: -1 },
@@ -61,6 +62,8 @@ export function canPlaceRoundabout(grid: Tile[][], center: Vec2, allowBuildingDe
     if (tile.type === 'building' && !allowBuildingDemolition) return { valid: false, reason: 'Não é possível construir rotatória sobre prédio.' };
     if (tile.type === 'busStop') return { valid: false, reason: 'Remova o ponto de ônibus antes de construir a rotatória.' };
     if (tile.type === 'metroStation') return { valid: false, reason: 'Remova a estação de metrô antes de construir a rotatória.' };
+    if (tile.type === 'helipad') return { valid: false, reason: 'Remova o heliponto antes de construir a rotatória.' };
+    if (tile.type === 'tunnelPortal') return { valid: false, reason: 'Remova o portal de túnel antes de construir a rotatória.' };
   }
   return { valid: true };
 }
@@ -119,7 +122,7 @@ export function getDrivableNeighbors(grid: Tile[][], current: Vec2): Vec2[] {
   const tile = grid[current.y]?.[current.x];
   if (!tile || isRoundaboutCenter(tile)) return [];
 
-  const neighbors = getNeighbors4(current).filter((next) => isRoadType(grid[next.y]?.[next.x]?.type));
+  const neighbors = getConnectedRoadNeighbors(grid, current);
 
   if (!isRoundaboutTile(tile)) {
     const currentIsIntersection = isRoadIntersectionTile(grid, current);
@@ -163,7 +166,7 @@ function isRoadIntersectionTile(grid: Tile[][], pos: Vec2): boolean {
   const tile = grid[pos.y]?.[pos.x];
   if (!tile || !isRoadType(tile.type)) return false;
   if (isRoundaboutTile(tile) || isRoundaboutCenter(tile)) return false;
-  return getNeighbors4(pos).filter((next) => isRoadType(grid[next.y]?.[next.x]?.type)).length >= 3;
+  return getConnectedRoadNeighbors(grid, pos).length >= 3;
 }
 
 export function isLegalRoadMove(grid: Tile[][], from: Vec2, to: Vec2): boolean {

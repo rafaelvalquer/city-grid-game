@@ -27,6 +27,7 @@ export type CarRenderPose = {
   angle: number;
   turningAmount: number;
   alpha: number;
+  scale?: number;
 };
 
 export const TURN_IN_START = 0.64;

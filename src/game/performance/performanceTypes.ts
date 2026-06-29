@@ -13,6 +13,8 @@ export type PerformanceMetrics = {
   highLoadMode: number;
   activeCars: number;
   visibleCars: number;
+  activeTunnels: number;
+  tunnelCars: number;
 
   updateMs: number;
   updateStepMs: number;
@@ -81,6 +83,8 @@ export const EMPTY_PERFORMANCE_METRICS: PerformanceMetrics = {
   highLoadMode: 0,
   activeCars: 0,
   visibleCars: 0,
+  activeTunnels: 0,
+  tunnelCars: 0,
 
   updateMs: 0,
   updateStepMs: 0,

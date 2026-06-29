@@ -1,12 +1,21 @@
 import type { BuildingType, Tile, TileType, VegetationKind } from '../../types/city.types';
 import type { CampaignCityId } from '../config/gameSetup';
 import type { CampaignBuildingDefinition, CampaignCityDefinition } from './campaignTypes';
+import { clearRoadConnections, connectRoadPath, getConnectedRoadNeighbors, setRoadConnection } from '../city/roadConnections';
 
 type Point = { x: number; y: number };
 
 function setTile(grid: Tile[][], x: number, y: number, type: TileType, vegetationKind?: VegetationKind): void {
   if (!grid[y]?.[x]) return;
-  grid[y][x] = { x, y, type, vegetationKind, terrainVariant: Math.abs(x * 31 + y * 17) % 8 };
+  const current = grid[y][x];
+  if ((current.type === 'road' || current.type === 'avenue' || current.type === 'roundabout')
+    && type !== 'road' && type !== 'avenue' && type !== 'roundabout') {
+    clearRoadConnections(grid, { x, y });
+  }
+  const roadConnections = (type === 'road' || type === 'avenue' || type === 'roundabout')
+    ? current.roadConnections ?? 0
+    : undefined;
+  grid[y][x] = { x, y, type, vegetationKind, roadConnections, terrainVariant: Math.abs(x * 31 + y * 17) % 8 };
 }
 
 function rect(grid: Tile[][], x0: number, y0: number, x1: number, y1: number, type: TileType): void {
@@ -71,10 +80,13 @@ function drawAxisSegment(grid: Tile[][], from: Point, to: Point, type: 'road' | 
   let x = from.x;
   let y = from.y;
   setTile(grid, x, y, type);
+  let previous = { x, y };
   while (x !== to.x || y !== to.y) {
     x += dx;
     y += dy;
     setTile(grid, x, y, type);
+    setRoadConnection(grid, previous, { x, y }, true);
+    previous = { x, y };
   }
 }
 
@@ -153,6 +165,7 @@ function ensureBuildingAccess(grid: Tile[][], definitions: CampaignBuildingDefin
       setTile(grid, start.x, start.y, 'empty');
       const path = findConnectorPath(grid, start, road, blocked, seed + building.x * 7 + building.y * 11);
       for (const point of path) setTile(grid, point.x, point.y, 'road');
+      connectRoadPath(grid, path);
     }
   }
 }
@@ -175,6 +188,7 @@ function connectRoadComponents(grid: Tile[][], definitions: CampaignBuildingDefi
     if (!best) return;
     const path = findConnectorPath(grid, best.from, best.to, blocked, seed + attempt);
     for (const point of path) setTile(grid, point.x, point.y, 'road');
+    connectRoadPath(grid, path);
   }
 }
 
@@ -224,7 +238,7 @@ function getRoadComponents(grid: Tile[][]): Point[][] {
       const current = queue.shift();
       if (!current) continue;
       component.push(current);
-      for (const next of roadNeighbors(grid, current.x, current.y)) {
+      for (const next of getConnectedRoadNeighbors(grid, current)) {
         const key = `${next.x},${next.y}`;
         if (!remaining.delete(key)) continue;
         queue.push(next);

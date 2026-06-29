@@ -8,13 +8,15 @@ export function createWorkerGridSnapshot(grid: Tile[][]): WorkerGridSnapshot {
     y: tile.y,
     type: tile.type,
     oneWay: tile.oneWay,
+    roadConnections: tile.roadConnections,
     busLane: tile.busLane,
     bikeLane: tile.bikeLane,
   })));
 }
 
 export function createWorkerTrafficSnapshot(traffic: Map<string, TrafficCell>): WorkerTrafficCell[] {
-  return Array.from(traffic.values()).map((cell) => ({
+  return Array.from(traffic.entries()).map(([key, cell]) => ({
+    key,
     x: cell.x,
     y: cell.y,
     cars: cell.cars,
@@ -25,7 +27,7 @@ export function createWorkerTrafficSnapshot(traffic: Map<string, TrafficCell>): 
 
 export function trafficCellsToMap(cells: WorkerTrafficCell[]): Map<string, TrafficCell> {
   const map = new Map<string, TrafficCell>();
-  for (const cell of cells) map.set(cell.x + ',' + cell.y, { ...cell });
+  for (const cell of cells) map.set(cell.key ?? cell.x + ',' + cell.y, { ...cell });
   return map;
 }
 

@@ -7,6 +7,7 @@ import { HELICOPTER_CONFIG } from '../config/helicopterConfig';
 import { buildMetroTrackTiles } from '../metro/metroLineBuilder';
 import { getBuildingDemolitionCost, type GameWorld } from '../engine/simulation';
 import { inBounds, isRoadType, isTerrainBlocked, keyOf } from '../city/grid';
+import { areRoadTilesConnected, roadDirectionOffset } from '../city/roadConnections';
 import { isIntersection } from '../systems/trafficRules';
 import { TRAFFIC_LIGHT_BUILD_COST } from '../systems/trafficLights';
 import { canPlaceRoundabout, findRoundaboutCenterForTile, getRoundaboutArea, isRoundaboutCenter, isRoundaboutTile } from '../systems/roundabouts';
@@ -21,7 +22,7 @@ import { getHelicopterPose } from './renderHelicopters';
 export type RoadLineDrag = {
   startTile: Vec2;
   currentTile: Vec2;
-  tool: 'road' | 'avenue' | 'busLane' | 'bikeLane' | 'bikeLane';
+  tool: 'road' | 'avenue' | 'busLane' | 'bikeLane' | 'roadTunnel' | 'avenueTunnel';
 };
 
 export type OneWayLineDrag = {
@@ -69,12 +70,25 @@ export function connectInputController(params: {
       const helicopter = detectHelicopter(tileX, tileY);
       const car = detectCar(tileX, tileY);
       const station = world.getMetroStationAt(tileX, tileY);
+      const tunnel = state.viewLayer === 'underground' ? world.getTunnelAt(tileX, tileY) : undefined;
       if (state.viewLayer === 'surface' && helicopter) world.inspectHelicopter(helicopter.id);
       else if (state.viewLayer === 'underground' && station) world.inspectMetroStation(station.id);
+      else if (state.viewLayer === 'underground' && tunnel) world.inspectTunnel(tunnel.id);
       else if (car) world.inspectCar(car.id);
       else world.inspectAt(tileX, tileY);
       state.setActionFeedback(null);
       return;
+    }
+
+    if (state.selectedTool === 'remove' && state.viewLayer === 'underground') {
+      const tunnel = world.getTunnelAt(tileX, tileY);
+      if (tunnel) {
+        const result = world.removeTunnelAt(tileX, tileY);
+        state.setActionFeedback(result.success
+          ? `Túnel removido por $ ${result.cost}. Rotas recalculadas.`
+          : result.reason ?? 'Não foi possível remover o túnel.');
+        return;
+      }
     }
 
     if (state.selectedTool === 'metroStation') {
@@ -146,6 +160,11 @@ export function connectInputController(params: {
   const updateHover = (clientX: number, clientY: number) => {
     const state = useGameStore.getState();
     const tile = camera.toWorldTile(clientX, clientY);
+    if (state.selectedTool === 'roadConnection') {
+      const target = getRoadConnectionTarget(camera, clientX, clientY);
+      state.setHoverPreview(getRoadConnectionPreview(world, target.tile, target.direction));
+      return;
+    }
     const drag = refs.roadLineDragRef.current;
     if (drag) {
       drag.currentTile = tile;
@@ -181,6 +200,17 @@ export function connectInputController(params: {
     refs.lastTileRef.current = '';
     const tile = camera.toWorldTile(event.clientX, event.clientY);
     const state = useGameStore.getState();
+    if (state.selectedTool === 'roadConnection') {
+      const target = getRoadConnectionTarget(camera, event.clientX, event.clientY);
+      const preview = getRoadConnectionPreview(world, target.tile, target.direction);
+      const result = world.toggleRoadConnection(target.tile, target.direction);
+      state.setHoverPreview(getRoadConnectionPreview(world, target.tile, target.direction));
+      state.setActionFeedback(result.success
+        ? `${result.connected ? 'Conexão aberta' : 'Conexão separada'} para ${directionLabel(target.direction)}.${result.signalRemoved ? ' Semáforo removido automaticamente.' : ''} Rotas recalculadas.`
+        : result.reason ?? preview.reason ?? 'Não foi possível alterar a conexão.');
+      refs.isDrawingRef.current = false;
+      return;
+    }
     if (isRoadLineTool(state.selectedTool)) {
       refs.roadLineDragRef.current = { startTile: tile, currentTile: tile, tool: state.selectedTool };
       state.setHoverPreview(getLineBuildPreview(world, [tile], state.selectedTool, state.stats.money));
@@ -217,6 +247,12 @@ export function connectInputController(params: {
         state.setActionFeedback(result.success
           ? busLaneSuccessMessage(result.changed, result.cost, Boolean(result.removed))
           : result.reason ?? preview.reason ?? 'Não foi possível alterar o corredor de ônibus.');
+        state.setHoverPreview(null);
+      } else if (drag.tool === 'roadTunnel' || drag.tool === 'avenueTunnel') {
+        const result = world.buildTunnelLine(lineTiles, drag.tool);
+        state.setActionFeedback(result.success
+          ? `${ROAD_CONFIG[drag.tool].label} construído: ${lineTiles.length} tiles por $ ${result.cost}.`
+          : result.reason ?? preview.reason ?? 'Não foi possível construir o túnel.');
         state.setHoverPreview(null);
       } else {
         const result = world.buildRoadLine(lineTiles, drag.tool);
@@ -286,6 +322,7 @@ export function connectInputController(params: {
     if (!refs.isDrawingRef.current) return;
     if (refs.roadLineDragRef.current) return;
     if (refs.oneWayLineDragRef.current) return;
+    if (useGameStore.getState().selectedTool === 'roadConnection') return;
     const tile = camera.toWorldTile(event.clientX, event.clientY);
     applyTool(tile.x, tile.y);
   }, { signal });
@@ -300,6 +337,71 @@ export function connectInputController(params: {
   canvas.addEventListener('wheel', (event) => {
     camera.handleWheel(event);
   }, { passive: false, signal });
+}
+
+function getRoadConnectionTarget(camera: CameraController, clientX: number, clientY: number): { tile: Vec2; direction: RoadDirection } {
+  const position = camera.toWorldTilePosition(clientX, clientY);
+  const tile = { x: Math.floor(position.x), y: Math.floor(position.y) };
+  const localX = position.x - tile.x;
+  const localY = position.y - tile.y;
+  const edges: Array<{ direction: RoadDirection; distance: number }> = [
+    { direction: 'north', distance: localY },
+    { direction: 'east', distance: 1 - localX },
+    { direction: 'south', distance: 1 - localY },
+    { direction: 'west', distance: localX },
+  ];
+  edges.sort((a, b) => a.distance - b.distance);
+  return { tile, direction: edges[0].direction };
+}
+
+export function getRoadConnectionPreview(world: GameWorld, tile: Vec2, direction: RoadDirection): ActionPreview {
+  const offset = roadDirectionOffset(direction);
+  const neighbor = { x: tile.x + offset.x, y: tile.y + offset.y };
+  if (!inBounds(tile.x, tile.y) || !inBounds(neighbor.x, neighbor.y)) {
+    return {
+      ...tile,
+      label: 'Conexão fora do mapa',
+      valid: false,
+      reason: 'A conexão precisa unir dois tiles dentro do mapa.',
+      tool: 'roadConnection',
+      connectionDirection: direction,
+      successMessage: '',
+    };
+  }
+  const fromTile = world.grid[tile.y]?.[tile.x];
+  const toTile = world.grid[neighbor.y]?.[neighbor.x];
+  if (!fromTile || !toTile || !isRoadType(fromTile.type) || !isRoadType(toTile.type)) {
+    return {
+      ...tile,
+      label: 'Selecione a borda entre duas vias',
+      valid: false,
+      reason: 'Conexões só podem ser alteradas entre dois tiles viários adjacentes.',
+      tool: 'roadConnection',
+      connectionDirection: direction,
+      successMessage: '',
+    };
+  }
+  if (isRoundaboutTile(fromTile) || isRoundaboutTile(toTile)) {
+    return {
+      ...tile,
+      label: 'Conexão de rotatória protegida',
+      valid: false,
+      reason: 'As conexões internas da rotatória são gerenciadas automaticamente.',
+      tool: 'roadConnection',
+      connectionDirection: direction,
+      successMessage: '',
+    };
+  }
+  const connected = areRoadTilesConnected(world.grid, tile, neighbor);
+  return {
+    ...tile,
+    label: connected ? `Separar para ${directionLabel(direction)}` : `Conectar para ${directionLabel(direction)}`,
+    valid: true,
+    tool: 'roadConnection',
+    connectionDirection: direction,
+    connectionConnected: connected,
+    successMessage: connected ? 'Conexão separada.' : 'Conexão aberta.',
+  };
 }
 
 
@@ -586,8 +688,8 @@ function roadLineSuccessMessage(tool: 'road' | 'avenue' | 'bikeLane', built: num
   return `${label} construída: ${built} tiles por $ ${cost}.${demolitionText}`;
 }
 
-export function isRoadLineTool(tool: Tool): tool is 'road' | 'avenue' | 'busLane' | 'bikeLane' {
-  return tool === 'road' || tool === 'avenue' || tool === 'busLane' || tool === 'bikeLane';
+export function isRoadLineTool(tool: Tool): tool is 'road' | 'avenue' | 'busLane' | 'bikeLane' | 'roadTunnel' | 'avenueTunnel' {
+  return tool === 'road' || tool === 'avenue' || tool === 'busLane' || tool === 'bikeLane' || tool === 'roadTunnel' || tool === 'avenueTunnel';
 }
 
 
@@ -606,10 +708,11 @@ export function getLineTiles(start: Vec2, end: Vec2): Vec2[] {
 }
 
 
-export function getLineBuildPreview(world: GameWorld, tiles: Vec2[], tool: 'road' | 'avenue' | 'busLane' | 'bikeLane', money: number): ActionPreview {
+export function getLineBuildPreview(world: GameWorld, tiles: Vec2[], tool: 'road' | 'avenue' | 'busLane' | 'bikeLane' | 'roadTunnel' | 'avenueTunnel', money: number): ActionPreview {
   const uniqueTiles = dedupePreviewTiles(tiles);
   if (tool === 'busLane') return getBusLaneBuildPreview(world, uniqueTiles, money);
   if (tool === 'bikeLane') return getBikeLaneBuildPreview(world, uniqueTiles, money);
+  if (tool === 'roadTunnel' || tool === 'avenueTunnel') return getTunnelBuildPreview(world, uniqueTiles, tool, money);
   const invalidTiles: Vec2[] = [];
   let buildableTiles = 0;
   let demolishedBuildings = 0;
@@ -646,6 +749,16 @@ export function getLineBuildPreview(world: GameWorld, tiles: Vec2[], tool: 'road
     if (tile.type === 'metroStation') {
       invalidTiles.push(pos);
       reason ??= 'A linha passa por uma estação de metrô.';
+      continue;
+    }
+    if (tile.type === 'helipad') {
+      invalidTiles.push(pos);
+      reason ??= 'A linha passa por um heliponto.';
+      continue;
+    }
+    if (tile.type === 'tunnelPortal') {
+      invalidTiles.push(pos);
+      reason ??= 'A linha passa por um portal de túnel.';
       continue;
     }
     if (tile.type === 'building') {
@@ -785,6 +898,55 @@ function getBikeLaneBuildPreview(world: GameWorld, uniqueTiles: Vec2[], money: n
   };
 }
 
+function getTunnelBuildPreview(
+  world: GameWorld,
+  uniqueTiles: Vec2[],
+  tool: 'roadTunnel' | 'avenueTunnel',
+  money: number,
+): ActionPreview {
+  const invalidTiles: Vec2[] = [];
+  let reason: string | undefined;
+  const start = uniqueTiles[0];
+  const end = uniqueTiles[uniqueTiles.length - 1];
+  const config = ROAD_CONFIG[tool];
+  const cost = config.portalCost * 2 + uniqueTiles.length * config.buildCost;
+  if (!start || !end || uniqueTiles.length < 2) reason = 'Arraste do portal de entrada até o portal de saída.';
+  if (!reason && start.x === end.x && start.y === end.y) reason = 'Entrada e saída precisam ser tiles diferentes.';
+
+  for (const portal of [start, end].filter(Boolean) as Vec2[]) {
+    if (!inBounds(portal.x, portal.y)) {
+      invalidTiles.push(portal);
+      reason ??= 'O portal sai do mapa.';
+      continue;
+    }
+    const tile = world.grid[portal.y]?.[portal.x];
+    if (!tile || tile.type !== 'empty') {
+      invalidTiles.push(portal);
+      reason ??= 'Portais precisam ser construídos em tiles vazios.';
+      continue;
+    }
+    const opposite = portal.x === start?.x && portal.y === start?.y ? end : start;
+    if (!opposite || !world.getTunnelAccessRoad(portal, opposite)) {
+      invalidTiles.push(portal);
+      reason ??= 'Cada portal precisa ficar ao lado de uma rua ou avenida.';
+    }
+  }
+  if (!reason && money < cost) reason = `Faltam $ ${cost - money} para construir.`;
+  return {
+    x: end?.x ?? start?.x ?? 0,
+    y: end?.y ?? start?.y ?? 0,
+    label: `${config.label}: ${uniqueTiles.length} tiles`,
+    cost,
+    valid: !reason,
+    reason,
+    tool,
+    lineTiles: uniqueTiles,
+    invalidTiles,
+    buildableTiles: uniqueTiles.length,
+    successMessage: `${config.label} construído por $ ${cost}.`,
+  };
+}
+
 
 export function dedupePreviewTiles(tiles: Vec2[]): Vec2[] {
   const seen = new Set<string>();
@@ -881,6 +1043,7 @@ export function getActionPreview(world: GameWorld, x: number, y: number, tool: T
     }
     if (tile.type === 'busStop') return { x, y, label: 'Ponto ocupa o tile', cost, valid: false, reason: 'Remova o ponto de ônibus antes de construir uma via.', successMessage: '' };
     if (tile.type === 'metroStation' || tile.type === 'helipad') return { x, y, label: 'Infraestrutura ocupa o tile', cost, valid: false, reason: 'Remova a infraestrutura de transporte antes de construir uma via.', successMessage: '' };
+    if (tile.type === 'tunnelPortal') return { x, y, label: 'Portal ocupa o tile', cost, valid: false, reason: 'Remova o portal de túnel antes de construir uma via.', successMessage: '' };
     if (tile.type === 'building') return { x, y, label: 'Prédio ocupa o tile', cost, valid: false, reason: 'Não é possível construir sobre prédio.', successMessage: '' };
     if (isRoundaboutTile(tile) || isRoundaboutCenter(tile)) return { x, y, label: 'Rotatória ocupa o tile', cost, valid: false, reason: 'Remova a rotatória antes de construir outra via.', successMessage: '' };
     if (tile.type === tool) return { x, y, label: 'Via já construída', cost, valid: false, reason: 'Essa via já existe aqui.', successMessage: '' };
@@ -1009,6 +1172,11 @@ export function getActionPreview(world: GameWorld, x: number, y: number, tool: T
       const cost = Math.ceil(TRANSIT_CONFIG.busStopCost * TRANSIT_CONFIG.busStopRemoveCostRatio);
       if (money < cost) return { x, y, label: 'Dinheiro insuficiente', cost, valid: false, reason: `Faltam $ ${cost - money} para remover.`, successMessage: '' };
       return { x, y, label: 'Remover ponto de ônibus', cost, valid: true, successMessage: `Ponto de ônibus removido por $ ${cost}.` };
+    }
+    if (tile.type === 'tunnelPortal' && tile.tunnelPortalKind) {
+      const cost = ROAD_CONFIG[tile.tunnelPortalKind].removeCost;
+      if (money < cost) return { x, y, label: 'Dinheiro insuficiente', cost, valid: false, reason: `Faltam $ ${cost - money} para remover.`, successMessage: '' };
+      return { x, y, label: 'Remover portal de túnel', cost, valid: true, successMessage: `Túnel removido por $ ${cost}.` };
     }
     if (!isRoadType(tile.type) && !roundaboutCenter) return { x, y, label: 'Nada para remover', valid: false, reason: 'Só é possível remover ruas e avenidas.', successMessage: '' };
     const roadType = roundaboutCenter ? 'roundabout' : tile.type as RoadType;

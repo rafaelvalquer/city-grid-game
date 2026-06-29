@@ -1,4 +1,5 @@
 import { PERFORMANCE_CONFIG } from '../config/performanceConfig';
+import type { Tunnel } from '../../types/city.types';
 import type { PathfindingSnapshotRequest, PathfindingWorkerRequest, PathfindingWorkerResponse, WorkerGridSnapshot, WorkerTrafficCell } from './workerTypes';
 
 export type PathfindingClientResult = PathfindingWorkerResponse;
@@ -34,13 +35,14 @@ export class PathfindingClient {
     }
   }
 
-  updateSnapshots(grid?: WorkerGridSnapshot, trafficCells?: WorkerTrafficCell[]): void {
+  updateSnapshots(grid?: WorkerGridSnapshot, trafficCells?: WorkerTrafficCell[], tunnels?: Tunnel[]): void {
     if (!this.workers.length) return;
     const request: PathfindingSnapshotRequest = {
       id: 'snapshot-' + (++this.sequence),
       type: 'path-snapshot',
       grid,
       trafficCells,
+      tunnels,
     };
     for (const worker of this.workers) worker.postMessage(request);
   }

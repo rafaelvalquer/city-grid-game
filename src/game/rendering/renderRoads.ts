@@ -4,6 +4,7 @@ import { TRANSIT_CONFIG } from '../config/transitConfig';
 import { BIKE_LANE_CONFIG } from '../config/bikeConfig';
 import type { GameWorld } from '../engine/simulation';
 import { isRoadType, keyOf } from '../city/grid';
+import { getRoadConnectionDirections } from '../city/roadConnections';
 import { isIntersection } from '../systems/trafficRules';
 import { getTrafficLightSignal } from '../systems/trafficLights';
 import { getRoundaboutCenter, getRoundaboutRing, isRoundaboutTile } from '../systems/roundabouts';
@@ -353,12 +354,12 @@ export function signalColor(signal: 'green' | 'yellow' | 'red'): number {
 
 
 export function roadNeighbors(grid: Tile[][], x: number, y: number): RoadConnections {
-  const hasRoad = (tx: number, ty: number) => isRoadType(grid[ty]?.[tx]?.type);
+  const directions = new Set(getRoadConnectionDirections(grid, { x, y }));
   return {
-    north: hasRoad(x, y - 1),
-    south: hasRoad(x, y + 1),
-    east: hasRoad(x + 1, y),
-    west: hasRoad(x - 1, y),
+    north: directions.has('north'),
+    south: directions.has('south'),
+    east: directions.has('east'),
+    west: directions.has('west'),
   };
 }
 
@@ -444,18 +445,30 @@ export function drawRoadOutline(
   autoTile: RoadAutoTile,
 ): void {
   const center = ts / 2;
-  const width = halfWidth * 2;
-  const inset = center - halfWidth;
   const alpha = autoTile.shape === 'straight' ? 0.46 : 0.62;
-  graphics.roundRect(px + inset, py + inset, width, width, Math.min(7, halfWidth * 0.45))
-    .stroke({ color: edgeColor, width: 1, alpha });
-
+  const left = px + center - halfWidth;
+  const right = px + center + halfWidth;
+  const top = py + center - halfWidth;
+  const bottom = py + center + halfWidth;
   for (const direction of autoTile.directions) {
-    if (direction === 'west') graphics.moveTo(px, py + center - halfWidth).lineTo(px + center, py + center - halfWidth).stroke({ color: edgeColor, width: 1, alpha: 0.36 });
-    if (direction === 'east') graphics.moveTo(px + center, py + center - halfWidth).lineTo(px + ts, py + center - halfWidth).stroke({ color: edgeColor, width: 1, alpha: 0.36 });
-    if (direction === 'north') graphics.moveTo(px + center - halfWidth, py).lineTo(px + center - halfWidth, py + center).stroke({ color: edgeColor, width: 1, alpha: 0.36 });
-    if (direction === 'south') graphics.moveTo(px + center - halfWidth, py + center).lineTo(px + center - halfWidth, py + ts).stroke({ color: edgeColor, width: 1, alpha: 0.36 });
+    if (direction === 'west') {
+      graphics.moveTo(px, top).lineTo(left, top).moveTo(px, bottom).lineTo(left, bottom);
+    }
+    if (direction === 'east') {
+      graphics.moveTo(right, top).lineTo(px + ts, top).moveTo(right, bottom).lineTo(px + ts, bottom);
+    }
+    if (direction === 'north') {
+      graphics.moveTo(left, py).lineTo(left, top).moveTo(right, py).lineTo(right, top);
+    }
+    if (direction === 'south') {
+      graphics.moveTo(left, bottom).lineTo(left, py + ts).moveTo(right, bottom).lineTo(right, py + ts);
+    }
   }
+  if (!autoTile.connections.north) graphics.moveTo(left, top).lineTo(right, top);
+  if (!autoTile.connections.east) graphics.moveTo(right, top).lineTo(right, bottom);
+  if (!autoTile.connections.south) graphics.moveTo(left, bottom).lineTo(right, bottom);
+  if (!autoTile.connections.west) graphics.moveTo(left, top).lineTo(left, bottom);
+  graphics.stroke({ color: edgeColor, width: 1, alpha });
 }
 
 

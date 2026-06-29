@@ -1,4 +1,4 @@
-import type { RoadDirection, TileType, Vec2 } from '../../types/city.types';
+import type { RoadDirection, TileType, Tunnel, Vec2 } from '../../types/city.types';
 import type { PathfindingOptions } from '../pathfinding/pathfinder';
 
 export type WorkerTile = {
@@ -6,6 +6,7 @@ export type WorkerTile = {
   y: number;
   type: TileType;
   oneWay?: RoadDirection;
+  roadConnections?: number;
   busLane?: boolean;
   bikeLane?: boolean;
 };
@@ -13,6 +14,7 @@ export type WorkerTile = {
 export type WorkerGridSnapshot = WorkerTile[][];
 
 export type WorkerTrafficCell = {
+  key?: string;
   x: number;
   y: number;
   cars: number;
@@ -52,6 +54,7 @@ export type PathfindingSnapshotRequest = {
   type: 'path-snapshot';
   grid?: WorkerGridSnapshot;
   trafficCells?: WorkerTrafficCell[];
+  tunnels?: Tunnel[];
 };
 
 export type PathfindingWorkerRequest = {
@@ -62,6 +65,7 @@ export type PathfindingWorkerRequest = {
   goal: Vec2;
   grid?: WorkerGridSnapshot;
   trafficCells?: WorkerTrafficCell[];
+  tunnels?: Tunnel[];
   options?: PathfindingOptions;
 };
 
@@ -69,7 +73,7 @@ export type PathfindingWorkerResponse = {
   id: string;
   type: 'find-path-result';
   carId?: string;
-  route: Vec2[];
+  route: import('../../types/city.types').RouteStep[];
   durationMs: number;
   error?: string;
 };

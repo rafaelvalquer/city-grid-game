@@ -1,5 +1,5 @@
 import { nanoid } from 'nanoid';
-import type { Building, BuildingLevel, CityHistorySample, CityStats, District, RoadDirection, RoadType, SelectedEntity, Tile, TrafficCell, TrafficHeatmapCell, TrafficHeatmapSample, TrafficHeatmapSummary, BikeTripVisual, TrafficLightAxis, TrafficLightState, TransitLine, TransitPassengerGroup, TransitStop, Vec2 } from '../../types/city.types';
+import type { Building, BuildingLevel, CityHistorySample, CityStats, District, RoadDirection, RoadType, RouteStep, SelectedEntity, Tile, TrafficCell, TrafficHeatmapCell, TrafficHeatmapSample, TrafficHeatmapSummary, BikeTripVisual, TrafficLightAxis, TrafficLightState, TransitLine, TransitPassengerGroup, TransitStop, Tunnel, TunnelType, Vec2 } from '../../types/city.types';
 import type { Car } from '../../types/agent.types';
 import type { MetroLine, MetroLineStats, MetroStation, MetroTrack, MetroTrain } from '../../types/metro.types';
 import type { Helicopter, HelicopterLine, HelicopterLineStats, HelicopterPassengerGroup, Helipad } from '../../types/helicopter.types';
@@ -14,11 +14,20 @@ import { HELICOPTER_CONFIG } from '../config/helicopterConfig';
 import { DISTRICT_EXPANSION_CONFIG } from '../config/districtConfig';
 import { TERRAIN_CONFIG } from '../config/terrainConfig';
 import { createGrid, inBounds, isRoadType, isTerrainBlocked, keyOf, setGridBounds } from '../city/grid';
+import {
+  areRoadTilesConnected,
+  clearRoadConnections,
+  connectRoadPath,
+  normalizeLegacyRoadConnections,
+  roadDirectionBetween,
+  roadDirectionOffset,
+  setRoadConnection,
+} from '../city/roadConnections';
 import { CityGenerator } from '../city/cityGenerator';
 import { generateTerrainReliefForBounds, getTerrainSummary } from '../city/terrainGenerator';
 import { applyBuildingLevel, createBuilding, isBuildingOperational, normalizeBuildingConstruction, updateBuildingConnection } from '../city/buildings';
 import { BUILDING_CONSTRUCTION_SECONDS, getBuildingLevelConfig } from '../config/buildingConfig';
-import { findFastestPath } from '../pathfinding/pathfinder';
+import { findFastestPath, tunnelTrafficKey } from '../pathfinding/pathfinder';
 import { findBikeLanePath } from '../pathfinding/bikePathfinder';
 import { buildIntersectionControls, computeTrafficDecision, getDirection, getLaneOffset, isIntersection } from '../systems/trafficRules';
 import { WorldEntityIndex } from '../systems/worldEntityIndex';
@@ -123,6 +132,7 @@ export class GameWorld {
   helipads: Helipad[] = [];
   helicopterLines: HelicopterLine[] = [];
   helicopters: Helicopter[] = [];
+  tunnels: Tunnel[] = [];
   metroTripsCompleted = 0;
   metroCarsAvoided = 0;
   helicopterTripsCompleted = 0;
@@ -194,6 +204,7 @@ export class GameWorld {
     this.allowRoadDemolition = this.mode === 'sandbox' && (options.allowRoadDemolition ?? false);
     this.generator = new CityGenerator(options);
     if (!this.campaignCity) this.seedInitialCity();
+    normalizeLegacyRoadConnections(this.grid);
     this.entityIndex.setGrid(this.grid);
     this.entityIndex.rebuild(this.cars, this.buildings);
     this.updateConnections();
@@ -433,7 +444,7 @@ export class GameWorld {
       const start = roadTiles[(index * 17) % roadTiles.length];
       const goal = roadTiles[(roadTiles.length - 1 - index * 29 + roadTiles.length * 4) % roadTiles.length];
       if (samePos(start, goal)) continue;
-      const route = findFastestPath(this.grid, this.traffic, start, goal);
+      const route = findFastestPath(this.grid, this.traffic, start, goal, this.getPathfindingOptions());
       if (route.length >= 2) baseRoutes.push(route);
     }
     if (!baseRoutes.length) {
@@ -687,8 +698,27 @@ export class GameWorld {
     return this.cars.filter((car) => car.vehicleType !== 'bus').length;
   }
 
+  private getPathfindingOptions(vehicleType: 'car' | 'bus' = 'car'): { vehicleType: 'car' | 'bus'; tunnels: Tunnel[] } {
+    this.refreshTunnelAccessRoads();
+    return { vehicleType, tunnels: this.tunnels.filter((tunnel) => tunnel.active) };
+  }
+
+  private refreshTunnelAccessRoads(): void {
+    for (const tunnel of this.tunnels) {
+      if (!tunnel.active) continue;
+      if (!isRoadType(this.grid[tunnel.entryAccessRoad.y]?.[tunnel.entryAccessRoad.x]?.type)) {
+        const accessRoad = this.getTunnelAccessRoad(tunnel.entryPortal, tunnel.exitPortal);
+        if (accessRoad) tunnel.entryAccessRoad = accessRoad;
+      }
+      if (!isRoadType(this.grid[tunnel.exitAccessRoad.y]?.[tunnel.exitAccessRoad.x]?.type)) {
+        const accessRoad = this.getTunnelAccessRoad(tunnel.exitPortal, tunnel.entryPortal);
+        if (accessRoad) tunnel.exitAccessRoad = accessRoad;
+      }
+    }
+  }
+
   getStaticRenderSignature(lightingKey = ''): string {
-    return `lighting:${lightingKey}:static:${this.staticRenderVersion}`;
+    return `lighting:${lightingKey}:static:${this.staticRenderVersion}:tunnels:${this.tunnels.length}`;
   }
 
   private markStaticRenderDirty(): void {
@@ -1063,12 +1093,27 @@ export class GameWorld {
       }
       for (const pos of area) {
         this.trafficLights.delete(getTrafficLightKey(pos.x, pos.y));
+        const areaTile = this.grid[pos.y]?.[pos.x];
+        if (areaTile?.tunnelPortalId) this.removeTunnel(areaTile.tunnelPortalId);
         this.grid[pos.y][pos.x] = { x: pos.x, y: pos.y, type: 'empty' };
       }
       for (const pos of getRoundaboutRing(center)) {
-        this.grid[pos.y][pos.x] = { x: pos.x, y: pos.y, type: 'roundabout' };
+        this.grid[pos.y][pos.x] = { x: pos.x, y: pos.y, type: 'roundabout', roadConnections: 0 };
       }
       this.grid[y][x] = { x, y, type: 'roundaboutCenter' };
+      const ring = getRoundaboutRing(center);
+      connectRoadPath(this.grid, [...ring, ring[0]]);
+      for (const ringTile of ring) {
+        for (const neighbor of [
+          { x: ringTile.x + 1, y: ringTile.y },
+          { x: ringTile.x - 1, y: ringTile.y },
+          { x: ringTile.x, y: ringTile.y + 1 },
+          { x: ringTile.x, y: ringTile.y - 1 },
+        ]) {
+          if (Math.abs(neighbor.x - center.x) <= 1 && Math.abs(neighbor.y - center.y) <= 1) continue;
+          if (isRoadType(this.grid[neighbor.y]?.[neighbor.x]?.type)) setRoadConnection(this.grid, ringTile, neighbor, true);
+        }
+      }
       this.markStaticRenderDirty();
       this.rerouteCarsAffectedBy(area);
       this.money -= cost;
@@ -1130,6 +1175,7 @@ export class GameWorld {
       if (tile.type === 'busStop') return false;
       if (tile.type === 'metroStation') return false;
       if (tile.type === 'helipad') return false;
+      if (tile.type === 'tunnelPortal') return false;
       if (isRoundaboutTile(tile) || isRoundaboutCenter(tile)) return false;
       if (tile.type === tool) return false;
       const building = tile.type === 'building' && tile.buildingId ? this.getBuilding(tile.buildingId) : undefined;
@@ -1140,7 +1186,7 @@ export class GameWorld {
       const busLane = tile.type === 'road' || tile.type === 'avenue' ? tile.busLane : undefined;
       const bikeLane = tile.type === 'road' || tile.type === 'avenue' ? tile.bikeLane : undefined;
       if (building) this.removeBuildingForRoad(building.id);
-      this.grid[y][x] = { x, y, type: tool, oneWay, busLane, bikeLane: tool === 'road' ? bikeLane : undefined };
+      this.grid[y][x] = { x, y, type: tool, oneWay, busLane, bikeLane: tool === 'road' ? bikeLane : undefined, roadConnections: 0 };
       this.markStaticRenderDirty();
       this.money -= cost;
       this.rerouteCarsAffectedBy([{ x, y }]);
@@ -1168,6 +1214,11 @@ export class GameWorld {
         this.emit();
         return true;
       }
+      if (tile.type === 'tunnelPortal' && tile.tunnelPortalId) {
+        const result = this.removeTunnelAt(x, y);
+        if (!result.success) return false;
+        return true;
+      }
       if (!isRoadType(tile.type) && !isRoundaboutCenter(tile)) return false;
       const center = findRoundaboutCenterForTile(this.grid, { x, y });
       const roadType = center ? 'roundabout' : tile.type as RoadType;
@@ -1175,11 +1226,16 @@ export class GameWorld {
       if (this.money < cost) return false;
       if (center) {
         for (const pos of getRoundaboutArea(center)) {
+          const areaTile = this.grid[pos.y]?.[pos.x];
+          if (areaTile?.tunnelPortalId) this.removeTunnel(areaTile.tunnelPortalId);
+          clearRoadConnections(this.grid, pos);
           this.grid[pos.y][pos.x] = { x: pos.x, y: pos.y, type: 'empty' };
           this.trafficLights.delete(getTrafficLightKey(pos.x, pos.y));
         }
         this.rerouteCarsAffectedBy(getRoundaboutArea(center));
       } else {
+        if (tile.tunnelPortalId) this.removeTunnel(tile.tunnelPortalId);
+        clearRoadConnections(this.grid, { x, y });
         this.grid[y][x] = { x, y, type: 'empty' };
         this.markStaticRenderDirty();
         this.trafficLights.delete(getTrafficLightKey(x, y));
@@ -1269,6 +1325,7 @@ export class GameWorld {
       if (tile.type === 'busStop') return { success: false, built: 0, cost: 0, reason: 'A linha passa por um ponto de ônibus.' };
       if (tile.type === 'metroStation') return { success: false, built: 0, cost: 0, reason: 'A linha passa por uma estação de metrô.' };
       if (tile.type === 'helipad') return { success: false, built: 0, cost: 0, reason: 'A linha passa por um heliponto.' };
+      if (tile.type === 'tunnelPortal') return { success: false, built: 0, cost: 0, reason: 'A linha passa por um portal de túnel.' };
       if (tile.type === 'building') return { success: false, built: 0, cost: 0, reason: 'A linha passa por um prédio.' };
       if (isRoundaboutTile(tile) || isRoundaboutCenter(tile)) return { success: false, built: 0, cost: 0, reason: 'A linha passa por uma rotatória.' };
       if (tile.type !== roadType) built += 1;
@@ -1285,11 +1342,14 @@ export class GameWorld {
         const oneWay = current.type === 'road' || current.type === 'avenue' ? current.oneWay : undefined;
         const busLane = current.type === 'road' || current.type === 'avenue' ? current.busLane : undefined;
         const bikeLane = current.type === 'road' || current.type === 'avenue' ? current.bikeLane : undefined;
+        const roadConnections = current.type === 'road' || current.type === 'avenue' ? current.roadConnections ?? 0 : 0;
         if (current.type === 'building' && current.buildingId) this.removeBuildingForRoad(current.buildingId);
-        this.grid[pos.y][pos.x] = { x: pos.x, y: pos.y, type: roadType, oneWay, busLane, bikeLane: roadType === 'road' ? bikeLane : undefined };
+        this.grid[pos.y][pos.x] = { x: pos.x, y: pos.y, type: roadType, oneWay, busLane, bikeLane: roadType === 'road' ? bikeLane : undefined, roadConnections };
           this.markStaticRenderDirty();
       }
     }
+    connectRoadPath(this.grid, uniqueTiles);
+    this.connectRoadLineEndpoints(uniqueTiles);
 
     for (const light of [...this.trafficLights.values()]) {
       if (!isIntersection(this.grid, { x: light.x, y: light.y })) this.trafficLights.delete(getTrafficLightKey(light.x, light.y));
@@ -1301,6 +1361,173 @@ export class GameWorld {
     this.rebuildTransitLine();
     this.emit();
     return { success: true, built, cost, demolished };
+  }
+
+  buildTunnelLine(tiles: Vec2[], tunnelType: TunnelType): { success: boolean; tunnel?: Tunnel; cost: number; reason?: string } {
+    const path = dedupeTiles(tiles);
+    if (path.length < 2) return { success: false, cost: 0, reason: 'Arraste do portal de entrada até o portal de saída.' };
+    const entryPortal = path[0];
+    const exitPortal = path[path.length - 1];
+    if (entryPortal.x === exitPortal.x && entryPortal.y === exitPortal.y) return { success: false, cost: 0, reason: 'Entrada e saída precisam ser tiles diferentes.' };
+    const entryTile = this.grid[entryPortal.y]?.[entryPortal.x];
+    const exitTile = this.grid[exitPortal.y]?.[exitPortal.x];
+    if (!entryTile || !exitTile || entryTile.type !== 'empty' || exitTile.type !== 'empty') {
+      return { success: false, cost: 0, reason: 'Os portais precisam ser construídos em tiles vazios.' };
+    }
+    const entryAccessRoad = this.getTunnelAccessRoad(entryPortal, exitPortal);
+    const exitAccessRoad = this.getTunnelAccessRoad(exitPortal, entryPortal);
+    if (!entryAccessRoad || !exitAccessRoad) {
+      return { success: false, cost: 0, reason: 'Cada portal precisa ficar ao lado de uma rua ou avenida.' };
+    }
+    if (this.findDuplicateTunnel(path)) {
+      return { success: false, cost: 0, reason: 'Já existe um túnel exatamente nesse traçado.' };
+    }
+    const config = ROAD_CONFIG[tunnelType];
+    const cost = config.portalCost * 2 + config.buildCost * path.length;
+    if (this.money < cost) return { success: false, cost, reason: 'Faltam $ ' + (cost - this.money) + ' para construir o túnel.' };
+
+    const tunnel: Tunnel = {
+      id: nanoid(8),
+      type: tunnelType,
+      entryPortal,
+      exitPortal,
+      entryAccessRoad,
+      exitAccessRoad,
+      path,
+      createdAtDay: this.time.getDay(),
+      active: true,
+    };
+    this.tunnels.push(tunnel);
+    this.grid[entryPortal.y][entryPortal.x] = { ...entryTile, type: 'tunnelPortal', tunnelPortalId: tunnel.id, tunnelPortalKind: tunnelType };
+    this.grid[exitPortal.y][exitPortal.x] = { ...exitTile, type: 'tunnelPortal', tunnelPortalId: tunnel.id, tunnelPortalKind: tunnelType };
+    this.money -= cost;
+    this.markStaticRenderDirty();
+    this.pathfindingWorkerGridVersion = -1;
+    this.updateTrafficMap();
+    this.emit();
+    return { success: true, tunnel, cost };
+  }
+
+  getTunnelAccessRoad(portal: Vec2, oppositePortal: Vec2): Vec2 | undefined {
+    const direction = { x: Math.sign(oppositePortal.x - portal.x), y: Math.sign(oppositePortal.y - portal.y) };
+    const dominantAxis: 'x' | 'y' = Math.abs(oppositePortal.x - portal.x) >= Math.abs(oppositePortal.y - portal.y) ? 'x' : 'y';
+    const offsets: Vec2[] = [
+      { x: 0, y: -1 },
+      { x: 1, y: 0 },
+      { x: 0, y: 1 },
+      { x: -1, y: 0 },
+    ];
+    return offsets
+      .map((offset) => {
+        const pos = { x: portal.x + offset.x, y: portal.y + offset.y };
+        const type = this.grid[pos.y]?.[pos.x]?.type;
+        if (!isRoadType(type)) return undefined;
+        const axisAlignment = dominantAxis === 'x' ? Math.abs(offset.x) : Math.abs(offset.y);
+        const directionalAlignment = offset.x === direction.x && offset.y === direction.y ? 1 : 0;
+        const roadPriority = type === 'avenue' ? 2 : 1;
+        return { pos, score: axisAlignment * 100 + directionalAlignment * 10 + roadPriority };
+      })
+      .filter((candidate): candidate is { pos: Vec2; score: number } => Boolean(candidate))
+      .sort((a, b) => b.score - a.score)[0]?.pos;
+  }
+
+  getTunnelAt(x: number, y: number): Tunnel | undefined {
+    return this.tunnels.find((tunnel) => tunnel.active && tunnel.path.some((pos) => pos.x === x && pos.y === y));
+  }
+
+  inspectTunnel(tunnelId: string): void {
+    const tunnel = this.tunnels.find((candidate) => candidate.id === tunnelId && candidate.active);
+    if (!tunnel) return;
+    this.selected = {
+      kind: 'tunnel',
+      tunnel,
+      traffic: tunnel.path.map((pos) => this.traffic.get(tunnelTrafficKey(tunnel.id, pos.x, pos.y))).filter((cell): cell is TrafficCell => Boolean(cell)),
+    };
+    this.emit();
+  }
+
+  removeTunnelAt(x: number, y: number): { success: boolean; cost: number; reason?: string } {
+    const tunnel = this.getTunnelAt(x, y);
+    if (!tunnel) return { success: false, cost: 0, reason: 'Nenhum túnel nesse tile.' };
+    const cost = ROAD_CONFIG[tunnel.type].removeCost;
+    if (this.money < cost) return { success: false, cost, reason: 'Faltam $ ' + (cost - this.money) + ' para remover o túnel.' };
+    this.money -= cost;
+    this.removeTunnel(tunnel.id);
+    this.emit();
+    return { success: true, cost };
+  }
+
+  private removeTunnel(tunnelId: string): void {
+    const tunnel = this.tunnels.find((candidate) => candidate.id === tunnelId);
+    if (!tunnel) return;
+    tunnel.active = false;
+    this.tunnels = this.tunnels.filter((candidate) => candidate.id !== tunnelId);
+    for (const portal of [tunnel.entryPortal, tunnel.exitPortal]) {
+      const tile = this.grid[portal.y]?.[portal.x];
+      if (tile?.tunnelPortalId === tunnelId) {
+        this.grid[portal.y][portal.x] = { x: portal.x, y: portal.y, type: 'empty' };
+      }
+    }
+    this.markStaticRenderDirty();
+    this.pathfindingWorkerGridVersion = -1;
+    this.rerouteCarsAffectedBy(tunnel.path);
+    this.updateTrafficMap();
+    if (this.selected.kind === 'tunnel' && this.selected.tunnel.id === tunnelId) this.selected = { kind: 'none' };
+  }
+
+  private findDuplicateTunnel(path: Vec2[]): Tunnel | undefined {
+    const signature = pathSignature(path);
+    const reverseSignature = pathSignature([...path].reverse());
+    return this.tunnels.find((tunnel) => tunnel.active && (
+      pathSignature(tunnel.path) === signature || pathSignature(tunnel.path) === reverseSignature
+    ));
+  }
+
+  private connectRoadLineEndpoints(tiles: Vec2[]): void {
+    if (tiles.length < 2) return;
+    const endpoints: Array<[Vec2, Vec2]> = [
+      [tiles[0], tiles[1]],
+      [tiles[tiles.length - 1], tiles[tiles.length - 2]],
+    ];
+    for (const [endpoint, inward] of endpoints) {
+      const outwardDirection = roadDirectionBetween(inward, endpoint);
+      if (!outwardDirection) continue;
+      const offset = roadDirectionOffset(outwardDirection);
+      const outside = { x: endpoint.x + offset.x, y: endpoint.y + offset.y };
+      if (isRoadType(this.grid[outside.y]?.[outside.x]?.type)) setRoadConnection(this.grid, endpoint, outside, true);
+    }
+  }
+
+  toggleRoadConnection(from: Vec2, direction: RoadDirection): { success: boolean; connected?: boolean; signalRemoved?: boolean; reason?: string } {
+    const offset = roadDirectionOffset(direction);
+    const to = { x: from.x + offset.x, y: from.y + offset.y };
+    const fromTile = this.grid[from.y]?.[from.x];
+    const toTile = this.grid[to.y]?.[to.x];
+    if (!fromTile || !toTile || !isRoadType(fromTile.type) || !isRoadType(toTile.type)) {
+      return { success: false, reason: 'A conexão exige duas vias adjacentes.' };
+    }
+    if (isRoundaboutTile(fromTile) || isRoundaboutTile(toTile)) {
+      return { success: false, reason: 'Entradas de rotatórias são gerenciadas pela própria rotatória.' };
+    }
+    const connected = !areRoadTilesConnected(this.grid, from, to);
+    setRoadConnection(this.grid, from, to, connected);
+    let signalRemoved = false;
+    for (const pos of [from, to]) {
+      const key = getTrafficLightKey(pos.x, pos.y);
+      if (this.trafficLights.has(key) && !isIntersection(this.grid, pos)) {
+        this.trafficLights.delete(key);
+        signalRemoved = true;
+      }
+    }
+    this.markStaticRenderDirty();
+    this.pathfindingWorkerGridVersion = -1;
+    this.rerouteCarsAffectedBy([from, to]);
+    this.updateConnections();
+    this.rebuildTransitLine();
+    this.updateTrafficMap();
+    this.inspectAt(from.x, from.y);
+    this.emit();
+    return { success: true, connected, signalRemoved };
   }
 
   setBikeLaneLine(tiles: Vec2[]): { success: boolean; changed: number; removed?: boolean; cost: number; reason?: string } {
@@ -1419,9 +1646,20 @@ export class GameWorld {
     } else if (tile.type === 'helipad' && tile.helipadId) {
       const helipad = this.getHelipad(tile.helipadId);
       this.selected = helipad ? { kind: 'helipad', helipad } : { kind: 'tile', x, y, type: tile.type };
+    } else if (tile.type === 'tunnelPortal' && tile.tunnelPortalId) {
+      const tunnel = this.tunnels.find((candidate) => candidate.id === tile.tunnelPortalId && candidate.active);
+      if (tunnel) {
+        this.selected = {
+          kind: 'tunnel',
+          tunnel,
+          traffic: tunnel.path.map((pos) => this.traffic.get(tunnelTrafficKey(tunnel.id, pos.x, pos.y))).filter((cell): cell is TrafficCell => Boolean(cell)),
+        };
+      } else {
+        this.selected = { kind: 'tile', x, y, type: tile.type };
+      }
     } else if (isRoadType(tile.type)) {
       const t = this.traffic.get(keyOf(x, y)) ?? { x, y, cars: 0, capacity: ROAD_CONFIG[tile.type as RoadType].capacity, congestion: 0 };
-      this.selected = { kind: 'road', x, y, roadType: tile.type as RoadType, traffic: t, trafficLight: this.trafficLights.get(getTrafficLightKey(x, y)), oneWay: tile.oneWay, busLane: tile.busLane };
+      this.selected = { kind: 'road', x, y, roadType: tile.type as RoadType, traffic: t, trafficLight: this.trafficLights.get(getTrafficLightKey(x, y)), oneWay: tile.oneWay, busLane: tile.busLane, bikeLane: tile.bikeLane };
     } else {
       this.selected = { kind: 'tile', x, y, type: tile.type };
     }
@@ -1525,7 +1763,7 @@ export class GameWorld {
       const to = orderedStops[(index + 1) % orderedStops.length].accessRoad;
       const segment = keyOf(from.x, from.y) === keyOf(to.x, to.y)
         ? [from]
-        : findFastestPath(this.grid, this.traffic, from, to, { vehicleType: 'bus' });
+        : findFastestPath(this.grid, this.traffic, from, to, this.getPathfindingOptions('bus'));
       if (segment.length < 2 && keyOf(from.x, from.y) !== keyOf(to.x, to.y)) {
         this.transitLine = {
           id: 'bus-loop',
@@ -2013,9 +2251,25 @@ export class GameWorld {
         }
       }
     }
+    for (const tunnel of this.tunnels) {
+      if (!tunnel.active) continue;
+      const capacity = ROAD_CONFIG[tunnel.type].capacity;
+      for (const pos of tunnel.path) {
+        map.set(tunnelTrafficKey(tunnel.id, pos.x, pos.y), {
+          x: pos.x,
+          y: pos.y,
+          cars: 0,
+          capacity,
+          congestion: 0,
+        });
+      }
+    }
     for (const car of this.cars) {
       if (car.lifecyclePhase !== 'driving') continue;
-      const k = keyOf(car.currentTileX, car.currentTileY);
+      const currentStep = car.route[car.routeIndex];
+      const k = isTunnelRouteStep(currentStep) && currentStep.tunnelId
+        ? tunnelTrafficKey(currentStep.tunnelId, car.currentTileX, car.currentTileY)
+        : keyOf(car.currentTileX, car.currentTileY);
       const info = map.get(k);
       if (info) {
         const vehicleWeight = this.getVehicleTrafficWeight(car);
@@ -2025,11 +2279,15 @@ export class GameWorld {
         }
       }
     }
-    for (const info of map.values()) {
-      const queuePressure = pressure.get(keyOf(info.x, info.y)) ?? 0;
+    for (const [cellKey, info] of map.entries()) {
+      const queuePressure = pressure.get(cellKey) ?? 0;
       info.congestion = (info.cars + queuePressure) / Math.max(1, info.capacity);
     }
     this.traffic = map;
+    this.performanceProfiler.setCounters({
+      activeTunnels: this.tunnels.filter((tunnel) => tunnel.active).length,
+      tunnelCars: this.cars.filter((car) => isTunnelRouteStep(car.route[car.routeIndex])).length,
+    });
   }
   private generateTrips(): void {
     const multiplier = this.time.getTripMultiplier();
@@ -2087,7 +2345,7 @@ export class GameWorld {
         skippedSpawns += 1;
         continue;
       }
-      const route = this.performanceProfiler.time('pathfindingSyncMs', () => findFastestPath(this.grid, this.traffic, trip.origin.nearestRoad!, trip.destination.nearestRoad!));
+      const route = this.performanceProfiler.time('pathfindingSyncMs', () => findFastestPath(this.grid, this.traffic, trip.origin.nearestRoad!, trip.destination.nearestRoad!, this.getPathfindingOptions()));
       if (route.length < 2) {
         this.recordFailedTrip();
         continue;
@@ -2222,6 +2480,10 @@ export class GameWorld {
 
       const currentRouteTile = car.route[car.routeIndex];
       const nextRouteTile = car.route[car.routeIndex + 1];
+      if (currentRouteTile && nextRouteTile && this.updateTunnelDrivingCar(car, updateDt, currentRouteTile, nextRouteTile)) {
+        this.entityIndex.syncCar(car);
+        continue;
+      }
       if (currentRouteTile && nextRouteTile && !isLegalRoadMove(this.grid, currentRouteTile, nextRouteTile)) {
         if (car.vehicleType === 'bus') {
           this.rebuildTransitLine();
@@ -2392,6 +2654,77 @@ export class GameWorld {
       this.replaceCars(this.cars.filter((c) => c.status !== 'arrived' && c.status !== 'no_route'));
       this.averageTravelTime = this.tripHistory.length ? this.tripHistory.reduce((a, b) => a + b, 0) / this.tripHistory.length : 0;
     }
+  }
+
+  private updateTunnelDrivingCar(car: Car, dt: number, current: RouteStep, next: RouteStep): boolean {
+    if (!isTunnelRouteStep(current) && !isTunnelRouteStep(next)) return false;
+    if (current.x === next.x && current.y === next.y) {
+      car.routeIndex += 1;
+      car.progressToNext = 0;
+      car.currentTileX = next.x;
+      car.currentTileY = next.y;
+      car.x = next.x;
+      car.y = next.y;
+      car.trafficState = 'moving';
+      car.status = 'moving';
+      return true;
+    }
+
+    const tunnel = this.getTunnelForRouteStep(isTunnelRouteStep(next) ? next : current);
+    if (!tunnel) return false;
+    const surfaceRoadType: RoadType = tunnel.type === 'avenueTunnel' ? 'avenue' : 'road';
+    const direction = getDirection(current, next);
+    const lane = getLaneOffset(direction, surfaceRoadType, car.id, undefined);
+    const desired = car.baseSpeed * ROAD_CONFIG[tunnel.type].speed;
+    car.desiredSpeed = desired;
+    car.targetSpeed = desired;
+    car.currentSpeed = Math.min(desired, Math.max(car.currentSpeed, desired * 0.82) + car.acceleration * dt);
+    car.direction = direction;
+    car.laneOffset = lane.offset;
+    car.laneIndex = lane.laneIndex;
+    car.laneCount = lane.laneCount;
+    car.laneSide = lane.laneSide;
+    car.trafficState = 'moving';
+    car.status = 'moving';
+    car.intersectionStopKey = undefined;
+    car.intersectionWaitSeconds = 0;
+    car.waitTimer = 0;
+    car.stuckSeconds = Math.max(0, car.stuckSeconds - dt * 3);
+    car.immobileSeconds = Math.max(0, car.immobileSeconds - dt * 3);
+    car.progressToNext += car.currentSpeed * dt;
+    while (car.progressToNext >= 1 && car.routeIndex < car.route.length - 1) {
+      car.progressToNext -= 1;
+      car.routeIndex += 1;
+      const pos = car.route[car.routeIndex];
+      car.currentTileX = pos.x;
+      car.currentTileY = pos.y;
+      car.x = pos.x;
+      car.y = pos.y;
+      const following = car.route[car.routeIndex + 1];
+      if (!following || (!isTunnelRouteStep(pos) && !isTunnelRouteStep(following))) break;
+      if (pos.x === following.x && pos.y === following.y) continue;
+      break;
+    }
+    if (car.routeIndex >= car.route.length - 1 && car.vehicleType !== 'bus') {
+      car.lifecyclePhase = 'destinationEntry';
+      car.lifecycleProgress = 0;
+      car.currentSpeed = Math.min(car.currentSpeed, 0.5);
+      car.targetSpeed = 0;
+      return true;
+    }
+    const routeCurrent = car.route[car.routeIndex];
+    const routeNext = car.route[car.routeIndex + 1];
+    if (routeCurrent && routeNext) {
+      car.x = routeCurrent.x + (routeNext.x - routeCurrent.x) * car.progressToNext + car.laneOffset.x;
+      car.y = routeCurrent.y + (routeNext.y - routeCurrent.y) * car.progressToNext + car.laneOffset.y;
+    }
+    return true;
+  }
+
+  private getTunnelForRouteStep(step: RouteStep): Tunnel | undefined {
+    return step.tunnelId
+      ? this.tunnels.find((tunnel) => tunnel.id === step.tunnelId && tunnel.active)
+      : undefined;
   }
   private updateConnectionsOptimized(dt: number): void {
     const highLoad = this.cars.length >= PERFORMANCE_CONFIG.connectionUpdateHighLoadThresholdCars;
@@ -2620,6 +2953,7 @@ export class GameWorld {
     client.updateSnapshots(
       gridChanged ? createWorkerGridSnapshot(this.grid) : undefined,
       trafficStale ? createWorkerTrafficSnapshot(trafficForReroute ?? this.traffic) : undefined,
+      gridChanged ? this.tunnels.filter((tunnel) => tunnel.active) : undefined,
     );
     if (gridChanged) this.pathfindingWorkerGridVersion = this.staticRenderVersion;
     if (trafficStale) this.pathfindingWorkerTrafficSyncAt = now;
@@ -2647,7 +2981,8 @@ export class GameWorld {
       carId: car.id,
       start,
       goal: destination,
-      options: { vehicleType: 'car' },
+      options: this.getPathfindingOptions('car'),
+      tunnels: this.tunnels.filter((tunnel) => tunnel.active),
     }, { highLoad, extremeLoad });
 
     if (request.status !== 'accepted') {
@@ -2680,7 +3015,7 @@ export class GameWorld {
     this.performanceProfiler.setCounters({ pathfindingPending: client.getPendingCount() });
   }
 
-  private applyWorkerRouteToCar(carId: string, route: Vec2[]): void {
+  private applyWorkerRouteToCar(carId: string, route: RouteStep[]): void {
     const car = this.getCar(carId);
     if (!car) return;
     if (!isRouteLegal(this.grid, route)) return;
@@ -2878,7 +3213,7 @@ export class GameWorld {
       this.requestAsyncCarReroute(car, start, destination, trafficForReroute, options);
       return true;
     }
-    let newRoute = this.performanceProfiler.time('pathfindingSyncMs', () => findFastestPath(this.grid, trafficForReroute, start, destination));
+    let newRoute = this.performanceProfiler.time('pathfindingSyncMs', () => findFastestPath(this.grid, trafficForReroute, start, destination, this.getPathfindingOptions(car.vehicleType === 'bus' ? 'bus' : 'car')));
     if (!isRouteLegal(this.grid, newRoute)) newRoute = [];
     if (newRoute.length < 2 && options.allowNeighborFallback) {
       newRoute = this.findBestFallbackRouteFromLegalNeighbor(start, destination, trafficForReroute);
@@ -2903,13 +3238,13 @@ export class GameWorld {
     return true;
   }
 
-  private findBestFallbackRouteFromLegalNeighbor(start: Vec2, destination: Vec2, traffic: Map<string, TrafficCell>): Vec2[] {
-    let bestRoute: Vec2[] = [];
+  private findBestFallbackRouteFromLegalNeighbor(start: Vec2, destination: Vec2, traffic: Map<string, TrafficCell>): RouteStep[] {
+    let bestRoute: RouteStep[] = [];
     let bestCost = Infinity;
 
     for (const next of getDrivableNeighbors(this.grid, start)) {
       if (!isLegalRoadMove(this.grid, start, next)) continue;
-      const routeFromNeighbor = findFastestPath(this.grid, traffic, next, destination);
+      const routeFromNeighbor = findFastestPath(this.grid, traffic, next, destination, this.getPathfindingOptions());
       if (!routeFromNeighbor.length) continue;
       const candidate = [start, ...routeFromNeighbor];
       if (!isRouteLegal(this.grid, candidate)) continue;
@@ -2925,7 +3260,7 @@ export class GameWorld {
 
   private applyRouteToCar(
     car: Car,
-    route: Vec2[],
+    route: RouteStep[],
     options: { reason: string; cooldownSeconds: number; stopBeforeMoving?: boolean },
   ): void {
     const direction = getDirection(route[0], route[1]);
@@ -3044,7 +3379,7 @@ export class GameWorld {
         continue;
       }
 
-      const newRoute = findFastestPath(this.grid, this.traffic, fallbackStart, destination);
+      const newRoute = findFastestPath(this.grid, this.traffic, fallbackStart, destination, this.getPathfindingOptions());
       if (newRoute.length < 2) {
         car.route = [fallbackStart];
         car.routeIndex = 0;
@@ -4082,9 +4417,14 @@ function addTrafficPenalty(map: Map<string, TrafficCell>, x: number, y: number, 
   current.cars += Math.ceil(amount);
 }
 
-function estimateRouteCost(grid: Tile[][], traffic: Map<string, TrafficCell>, route: Vec2[]): number {
+function estimateRouteCost(grid: Tile[][], traffic: Map<string, TrafficCell>, route: RouteStep[]): number {
   let total = 0;
   for (const pos of route) {
+    if (isTunnelRouteStep(pos)) {
+      const trafficCell = pos.tunnelId ? traffic.get(tunnelTrafficKey(pos.tunnelId, pos.x, pos.y)) : undefined;
+      total += 5 + (trafficCell ? Math.max(0, trafficCell.congestion - 0.2) * 10 : 0);
+      continue;
+    }
     const tile = grid[pos.y]?.[pos.x];
     if (!tile || !isRoadType(tile.type)) {
       total += 999;
@@ -4099,16 +4439,25 @@ function estimateRouteCost(grid: Tile[][], traffic: Map<string, TrafficCell>, ro
   return total;
 }
 
-function isRouteLegal(grid: Tile[][], route: Vec2[]): boolean {
+function isRouteLegal(grid: Tile[][], route: RouteStep[]): boolean {
   if (route.length < 2) return false;
   for (let index = 0; index < route.length - 1; index += 1) {
+    if (isTunnelRouteStep(route[index]) || isTunnelRouteStep(route[index + 1])) continue;
     if (!isLegalRoadMove(grid, route[index], route[index + 1])) return false;
   }
   return true;
 }
 
-function routeSignature(route: Vec2[]): string {
-  return route.slice(0, 6).map((pos) => keyOf(pos.x, pos.y)).join('|');
+function routeSignature(route: RouteStep[]): string {
+  return route.slice(0, 6).map((pos) => `${pos.layer ?? 'surface'}:${pos.tunnelId ?? ''}:${keyOf(pos.x, pos.y)}`).join('|');
+}
+
+function pathSignature(path: Vec2[]): string {
+  return path.map((pos) => keyOf(pos.x, pos.y)).join('|');
+}
+
+function isTunnelRouteStep(step: RouteStep | undefined): step is RouteStep & { layer: 'tunnel' } {
+  return step?.layer === 'tunnel';
 }
 
 function dedupeIds(ids: string[]): string[] {

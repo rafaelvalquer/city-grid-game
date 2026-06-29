@@ -4,7 +4,7 @@ export const GAME_CONFIG = {
   tileSize: 40,
   initialMoney: 1000,
   initialBuildings: 14,
-  maxCars: 1000,
+  maxCars: 700,
   spawnBuildingEverySeconds: 14,
   tripGenerationEverySeconds: 0.72,
   economyTickSeconds: 4,

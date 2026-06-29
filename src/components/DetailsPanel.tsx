@@ -4,6 +4,7 @@ import { useGameStore } from '../store/gameStore';
 import { BUILDING_CONFIG, BUILDING_CONSTRUCTION_SECONDS, getBuildingLevelConfig } from '../game/config/buildingConfig';
 import { isBuildingOperational } from '../game/city/buildings';
 import { ROAD_CONFIG } from '../game/config/roadConfig';
+import { getRoadConnectionDirections } from '../game/city/roadConnections';
 import { getTrafficLightOpenAxis } from '../game/systems/trafficLights';
 import { TrafficChart } from './TrafficChart';
 import { DistrictExpansionCard } from './DistrictExpansionCard';
@@ -77,6 +78,9 @@ export function DetailsPanel({ world, className = '', onClose }: { world: GameWo
     ? Math.max(0, BUILDING_CONSTRUCTION_SECONDS[selected.building.type] * (1 - buildingConstructionProgress))
     : 0;
   const carLaneDisplayTotal = car ? getCarLaneDisplayTotal(world, car.currentTileX, car.currentTileY, car.laneCount) : 1;
+  const roadConnections = selected.kind === 'road'
+    ? new Set(getRoadConnectionDirections(world.grid, { x: selected.x, y: selected.y }))
+    : new Set();
 
   return (
     <aside className={`details-panel ${className}`}>
@@ -245,6 +249,17 @@ export function DetailsPanel({ world, className = '', onClose }: { world: GameWo
           <p><span>Congestionamento</span><strong>{Math.round(selected.traffic.congestion * 100)}%</strong></p>
           <p><span>Velocidade base</span><strong>{ROAD_CONFIG[selected.roadType].speed}x</strong></p>
           <p><span>Sentido</span><strong>{selected.oneWay ? oneWayLabel[selected.oneWay] : 'Mão dupla'}</strong></p>
+          <p>
+            <span>Conexões</span>
+            <strong>
+              {[
+                roadConnections.has('north') ? 'N' : '–',
+                roadConnections.has('east') ? 'L' : '–',
+                roadConnections.has('south') ? 'S' : '–',
+                roadConnections.has('west') ? 'O' : '–',
+              ].join(' · ')}
+            </strong>
+          </p>
           <p><span>Ciclovia</span><strong className={selected.bikeLane ? 'good' : ''}>{selected.bikeLane ? 'Ativa' : 'Inativa'}</strong></p>
           <p><span>Corredor de ônibus</span><strong className={selected.busLane ? 'good' : undefined}>{selected.busLane ? 'Ativo' : 'Não'}</strong></p>
           {selected.trafficLight && (
@@ -264,6 +279,21 @@ export function DetailsPanel({ world, className = '', onClose }: { world: GameWo
               )}
             </>
           )}
+        </div>
+      )}
+
+      {selected.kind === 'tunnel' && (
+        <div className="detail-card">
+          <h3><Route size={15} /> {ROAD_CONFIG[selected.tunnel.type].label}</h3>
+          <p><span>Extensão</span><strong>{selected.tunnel.path.length} tiles</strong></p>
+          <p><span>Portal A</span><strong>{selected.tunnel.entryPortal.x}, {selected.tunnel.entryPortal.y}</strong></p>
+          <p><span>Acesso A</span><strong>{selected.tunnel.entryAccessRoad.x}, {selected.tunnel.entryAccessRoad.y}</strong></p>
+          <p><span>Portal B</span><strong>{selected.tunnel.exitPortal.x}, {selected.tunnel.exitPortal.y}</strong></p>
+          <p><span>Acesso B</span><strong>{selected.tunnel.exitAccessRoad.x}, {selected.tunnel.exitAccessRoad.y}</strong></p>
+          <p><span>Capacidade</span><strong>{ROAD_CONFIG[selected.tunnel.type].capacity}</strong></p>
+          <p><span>Velocidade</span><strong>{ROAD_CONFIG[selected.tunnel.type].speed}x</strong></p>
+          <p><span>Carros no túnel</span><strong>{selected.traffic.reduce((sum, cell) => sum + cell.cars, 0)}</strong></p>
+          <p><span>Congestionamento</span><strong>{Math.round(Math.max(0, ...selected.traffic.map((cell) => cell.congestion)) * 100)}%</strong></p>
         </div>
       )}
 

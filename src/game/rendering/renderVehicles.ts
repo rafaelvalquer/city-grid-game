@@ -24,7 +24,8 @@ export function drawCarLod(
   const cy = pose.y * ts + ts / 2;
   const isBus = car.vehicleType === 'bus';
   const color = isBus ? 0x24a0b7 : carDestinationColor(world, car);
-  const radius = isBus ? 3.4 : 2.4;
+  const scale = pose.scale ?? 1;
+  const radius = (isBus ? 3.4 : 2.4) * scale;
   const alpha = Math.max(0.55, Math.min(0.9, pose.alpha));
   if (settings.vehicleShadows) {
     graphics.circle(cx, cy, radius + 1.4).fill({ color: MAP_COLORS.shadow, alpha: 0.18 * alpha });
@@ -48,8 +49,9 @@ export function drawCar(
   const cx = pose.x * ts + ts / 2;
   const cy = pose.y * ts + ts / 2;
   const isBus = car.vehicleType === 'bus';
-  const length = isBus ? 22 : 13;
-  const width = isBus ? 10 : 7;
+  const scale = pose.scale ?? 1;
+  const length = (isBus ? 22 : 13) * scale;
+  const width = (isBus ? 10 : 7) * scale;
   const baseColor = isBus ? 0x24a0b7 : carDestinationColor(world, car);
   const color = car.trafficState === 'intersection'
     ? blendCarStateColor(baseColor, MAP_COLORS.carAltC)
@@ -164,6 +166,14 @@ export function getCarRenderPose(car: Car, world: GameWorld): CarRenderPose {
   const next = car.route[car.routeIndex + 1];
   if (!current || !next) return { x: car.x, y: car.y, angle: directionAngle(car.direction), turningAmount: 0, alpha: 1 };
 
+  if (isSurfaceToTunnel(current, next)) {
+    return getTunnelEntryPose(car, world, current, next);
+  }
+
+  if (isTunnelToSurface(current, next)) {
+    return getTunnelExitPose(car, world, current, next);
+  }
+
   const after = car.route[car.routeIndex + 2];
   if (after && isRouteTurn(current, next, after) && car.progressToNext >= TURN_IN_START) {
     const curve = buildTurnCurve(car, grid, current, next, after);
@@ -237,6 +247,59 @@ export function getLifecyclePose(car: Car, world: GameWorld, phase: 'spawnExit' 
 }
 
 
+function getTunnelEntryPose(car: Car, world: GameWorld, road: Vec2, portal: Vec2): CarRenderPose {
+  const t = smoothStep(Math.max(0, Math.min(1, car.progressToNext)));
+  const start = {
+    x: road.x + car.laneOffset.x,
+    y: road.y + car.laneOffset.y,
+  };
+  const direction = Math.atan2(portal.y - road.y, portal.x - road.x);
+  const curve = {
+    p0: start,
+    p1: {
+      x: start.x + Math.cos(direction) * 0.35,
+      y: start.y + Math.sin(direction) * 0.35,
+    },
+    p2: {
+      x: portal.x,
+      y: portal.y,
+    },
+  };
+  return {
+    ...poseOnCurve(curve, t),
+    alpha: 1 - t * 0.72,
+    scale: 1 - t * 0.36,
+  };
+}
+
+
+function getTunnelExitPose(car: Car, world: GameWorld, portal: Vec2, road: Vec2): CarRenderPose {
+  const t = smoothStep(Math.max(0, Math.min(1, car.progressToNext)));
+  const endOffset = laneOffsetForSegment(car, world.grid, portal, road);
+  const end = {
+    x: road.x + endOffset.x,
+    y: road.y + endOffset.y,
+  };
+  const direction = Math.atan2(road.y - portal.y, road.x - portal.x);
+  const curve = {
+    p0: {
+      x: portal.x,
+      y: portal.y,
+    },
+    p1: {
+      x: portal.x + Math.cos(direction) * 0.35,
+      y: portal.y + Math.sin(direction) * 0.35,
+    },
+    p2: end,
+  };
+  return {
+    ...poseOnCurve(curve, t),
+    alpha: 0.28 + t * 0.72,
+    scale: 0.64 + t * 0.36,
+  };
+}
+
+
 export function buildingPoint(building: Building): Vec2 {
   return { x: building.x, y: building.y };
 }
@@ -282,5 +345,15 @@ export function laneOffsetForSegment(car: Car, grid: Tile[][], from: Vec2, to: V
 
 export function isRouteTurn(from: Vec2, corner: Vec2, to: Vec2): boolean {
   return getDirection(from, corner) !== getDirection(corner, to);
+}
+
+
+function isSurfaceToTunnel(current: Vec2 & { layer?: string }, next: Vec2 & { layer?: string }): boolean {
+  return current.layer !== 'tunnel' && next.layer === 'tunnel';
+}
+
+
+function isTunnelToSurface(current: Vec2 & { layer?: string }, next: Vec2 & { layer?: string }): boolean {
+  return current.layer === 'tunnel' && next.layer !== 'tunnel';
 }
 

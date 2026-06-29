@@ -22,6 +22,8 @@ export function PerformanceDebugPanel({ enabled }: { enabled: boolean }) {
       <div><span>Carga alta</span><strong>{metrics.highLoadMode ? 'sim' : 'não'}</strong></div>
       <div><span>Carros</span><strong>{metrics.activeCars}</strong></div>
       <div><span>Visíveis</span><strong>{metrics.visibleCars}</strong></div>
+      <div><span>Túneis</span><strong>{metrics.activeTunnels}</strong></div>
+      <div><span>Carros sub.</span><strong>{metrics.tunnelCars}</strong></div>
       <div><span>Update</span><strong>{metrics.updateMs.toFixed(1)}ms</strong></div>
       <div><span>Step médio</span><strong>{metrics.updateStepMs.toFixed(1)}ms</strong></div>
       <div><span>Carros</span><strong>{metrics.updateCarsMs.toFixed(1)}ms</strong></div>

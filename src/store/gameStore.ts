@@ -21,6 +21,8 @@ export type HoverPreview = {
   invalidTiles?: Vec2[];
   buildableTiles?: number;
   oneWayDirection?: RoadDirection;
+  connectionDirection?: RoadDirection;
+  connectionConnected?: boolean;
 };
 
 export type GameStore = {
@@ -119,7 +121,7 @@ export const useGameStore = create<GameStore>((set) => ({
   setTool: (tool) => set((state) => ({
     selectedTool: tool,
     actionFeedback: null,
-    viewLayer: tool === 'metroTrack' || tool === 'metroLine'
+    viewLayer: tool === 'metroTrack' || tool === 'metroLine' || tool === 'roadTunnel' || tool === 'avenueTunnel'
       ? 'underground'
       : tool === 'helipad' || tool === 'helicopterLine'
         ? 'surface'

@@ -1,4 +1,4 @@
-import type { TransitPassengerGroup, Vec2 } from './city.types';
+import type { RouteStep, TransitPassengerGroup, Vec2 } from './city.types';
 
 export type CarStatus = 'moving' | 'stopped' | 'arrived' | 'no_route';
 export type TrafficState = 'moving' | 'queued' | 'intersection' | 'turning';
@@ -16,7 +16,7 @@ export type Car = {
   y: number;
   currentTileX: number;
   currentTileY: number;
-  route: Vec2[];
+  route: RouteStep[];
   routeIndex: number;
   progressToNext: number;
   baseSpeed: number;

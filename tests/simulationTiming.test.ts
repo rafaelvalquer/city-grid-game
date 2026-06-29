@@ -9,6 +9,17 @@ import {
 } from '../src/game/performance/renderScheduling';
 import { GameWorld } from '../src/game/engine/simulation';
 import { isRoadType } from '../src/game/city/grid';
+import {
+  areRoadTilesConnected,
+  clearRoadConnections,
+  connectRoadPath,
+  getConnectedRoadNeighbors,
+  normalizeLegacyRoadConnections,
+  setRoadConnection,
+  validateRoadConnectionReciprocity,
+} from '../src/game/city/roadConnections';
+import { findFastestPath } from '../src/game/pathfinding/pathfinder';
+import { findBikeLanePath } from '../src/game/pathfinding/bikePathfinder';
 import { TimeSystem } from '../src/game/engine/timeSystem';
 import { createBuilding, isBuildingOperational } from '../src/game/city/buildings';
 import { BUILDING_CONSTRUCTION_SECONDS, getBuildingLevelConfig } from '../src/game/config/buildingConfig';
@@ -31,6 +42,89 @@ import {
   getInitialCampaignIndex,
   wrapCampaignIndex,
 } from '../src/game/campaign/campaignCarousel';
+
+{
+  const grid = Array.from({ length: 3 }, (_, y) => Array.from({ length: 2 }, (_, x) => ({
+    x,
+    y,
+    type: 'road' as const,
+    roadConnections: 0,
+  })));
+  connectRoadPath(grid, [{ x: 0, y: 0 }, { x: 0, y: 1 }, { x: 0, y: 2 }]);
+  connectRoadPath(grid, [{ x: 1, y: 0 }, { x: 1, y: 1 }, { x: 1, y: 2 }]);
+  for (const tile of grid.flat()) tile.bikeLane = true;
+  assert.equal(areRoadTilesConnected(grid, { x: 0, y: 1 }, { x: 1, y: 1 }), false, 'touching parallel roads must remain disconnected');
+  assert.deepEqual(findFastestPath(grid, new Map(), { x: 0, y: 0 }, { x: 1, y: 0 }), []);
+  assert.deepEqual(findBikeLanePath(grid, { x: 0, y: 0 }, { x: 1, y: 0 }), []);
+  setRoadConnection(grid, { x: 0, y: 1 }, { x: 1, y: 1 }, true);
+  assert.equal(validateRoadConnectionReciprocity(grid), true);
+  assert.ok(findFastestPath(grid, new Map(), { x: 0, y: 0 }, { x: 1, y: 0 }).length > 0);
+}
+
+{
+  const legacyGrid = Array.from({ length: 2 }, (_, y) => Array.from({ length: 2 }, (_, x) => ({
+    x,
+    y,
+    type: 'road' as const,
+  })));
+  normalizeLegacyRoadConnections(legacyGrid);
+  const edgeCount = legacyGrid.flat().reduce((sum, tile) => sum + getConnectedRoadNeighbors(legacyGrid, tile).length, 0) / 2;
+  assert.equal(validateRoadConnectionReciprocity(legacyGrid), true);
+  assert.equal(countReachableRoadTiles(legacyGrid, { x: 0, y: 0 }), 4);
+  assert.ok(edgeCount < 4, 'legacy 2x2 road blocks should not retain every redundant turn');
+}
+
+{
+  const world = new GameWorld({ enableTerrainRelief: false });
+  for (let y = 1; y <= 6; y += 1) {
+    for (let x = 1; x <= 6; x += 1) {
+      clearRoadConnections(world.grid, { x, y });
+      world.grid[y][x] = { x, y, type: 'empty' };
+    }
+  }
+  assert.equal(world.buildRoadLine([{ x: 1, y: 2 }, { x: 2, y: 2 }, { x: 3, y: 2 }], 'road').success, true);
+  assert.equal(world.buildRoadLine([{ x: 2, y: 1 }, { x: 2, y: 2 }, { x: 2, y: 3 }], 'road').success, true);
+  assert.equal(getConnectedRoadNeighbors(world.grid, { x: 2, y: 2 }).length, 4, 'a traced crossing must expose all four exits');
+  assert.equal(world.buildRoadLine([{ x: 1, y: 5 }, { x: 2, y: 5 }, { x: 3, y: 5 }], 'road').success, true);
+  assert.equal(world.buildRoadLine([{ x: 1, y: 6 }, { x: 2, y: 6 }, { x: 3, y: 6 }], 'road').success, true);
+  assert.equal(areRoadTilesConnected(world.grid, { x: 2, y: 5 }, { x: 2, y: 6 }), false, 'parallel traced roads must not connect laterally');
+  assert.equal(world.toggleRoadConnection({ x: 2, y: 5 }, 'south').connected, true);
+  assert.equal(areRoadTilesConnected(world.grid, { x: 2, y: 5 }, { x: 2, y: 6 }), true);
+  assert.equal(world.toggleRoadConnection({ x: 2, y: 5 }, 'south').connected, false);
+}
+
+{
+  const world = new GameWorld({ enableTerrainRelief: false });
+  world.money = 99999;
+  for (let y = 0; y <= 8; y += 1) {
+    for (let x = 0; x <= 10; x += 1) {
+      clearRoadConnections(world.grid, { x, y });
+      world.grid[y][x] = { x, y, type: 'empty' };
+    }
+  }
+  assert.equal(world.buildRoadLine([{ x: 2, y: 2 }, { x: 2, y: 5 }], 'road').success, true);
+  assert.equal(world.buildRoadLine([{ x: 2, y: 5 }, { x: 7, y: 5 }], 'road').success, true);
+  assert.equal(world.buildRoadLine([{ x: 7, y: 5 }, { x: 7, y: 2 }], 'road').success, true);
+  assert.equal(world.buildTunnelLine([{ x: 2, y: 2 }, { x: 3, y: 2 }], 'roadTunnel').success, false, 'tunnel portals must not be built on roads');
+  assert.equal(world.buildTunnelLine([{ x: 4, y: 7 }, { x: 6, y: 7 }], 'roadTunnel').success, false, 'a portal without adjacent road access is invalid');
+  const tunnelResult = world.buildTunnelLine(
+    Array.from({ length: 6 }, (_, index) => ({ x: index + 2, y: 1 })),
+    'roadTunnel',
+  );
+  assert.equal(tunnelResult.success, true);
+  assert.equal(world.grid[1][2].type, 'tunnelPortal');
+  assert.equal(world.grid[1][7].type, 'tunnelPortal');
+  assert.deepEqual(tunnelResult.tunnel?.entryAccessRoad, { x: 2, y: 2 });
+  assert.deepEqual(tunnelResult.tunnel?.exitAccessRoad, { x: 7, y: 2 });
+  const route = findFastestPath(world.grid, world.traffic, { x: 2, y: 2 }, { x: 7, y: 2 }, { tunnels: world.tunnels });
+  assert.ok(route.some((step) => step.layer === 'tunnel'), 'cars should choose a useful tunnel shortcut');
+  const bikeRoute = findBikeLanePath(world.grid, { x: 2, y: 2 }, { x: 7, y: 2 });
+  assert.equal(bikeRoute.some((step) => 'layer' in step), false, 'bike pathfinder must not use road tunnels');
+  assert.equal(world.removeTunnelAt(4, 1).success, true);
+  assert.equal(world.tunnels.length, 0);
+  assert.equal(world.grid[1][2].type, 'empty');
+  assert.equal(world.grid[1][7].type, 'empty');
+}
 
 for (const fps of [60, 30, 15]) {
   const { simulatedSeconds, debtSeconds, fixedSteps } = simulate(10, fps, 4);
@@ -435,18 +529,29 @@ assert.deepEqual(CAMPAIGN_LEVEL_3_CITIES.map((city) => city.startingMoney), [700
 
 {
   const world = new GameWorld({ mode: 'campaign', campaignCityId: 'curitiba' });
-  world.transitLine.route = Array.from({ length: 10 }, (_, index) => ({ x: index + 2, y: 11 }));
-  for (let index = 0; index < 7; index += 1) world.grid[11][index + 2].busLane = true;
-  const coverage = () => world.getCampaignMissionSnapshot()?.objectives
-    .find((objective) => objective.id === 'brt-megacity')?.requirements
-    .find((requirement) => requirement.metric === 'busLaneCoveragePercent');
+  world.transitLine.route = world.grid.flat()
+    .filter((tile) => tile.type === 'road' || tile.type === 'avenue')
+    .slice(0, 10)
+    .map((tile) => ({ x: tile.x, y: tile.y }));
+  for (let index = 0; index < 7; index += 1) {
+    const tile = world.transitLine.route[index];
+    world.grid[tile.y][tile.x].busLane = true;
+  }
+  const coverage = () => {
+    (world as unknown as { snapshotCacheAtMs: number }).snapshotCacheAtMs = Number.NEGATIVE_INFINITY;
+    return world.getCampaignMissionSnapshot()?.objectives
+      .find((objective) => objective.id === 'brt-megacity')?.requirements
+      .find((requirement) => requirement.metric === 'busLaneCoveragePercent');
+  };
   assert.equal(coverage()?.current, 70);
   assert.equal(coverage()?.met, true);
-  world.grid[11][8].busLane = undefined;
+  const seventh = world.transitLine.route[6];
+  world.grid[seventh.y][seventh.x].busLane = undefined;
   assert.equal(coverage()?.current, 60);
   assert.equal(coverage()?.met, false);
-  world.grid[11][8].busLane = true;
-  world.grid[11][9].busLane = true;
+  world.grid[seventh.y][seventh.x].busLane = true;
+  const eighth = world.transitLine.route[7];
+  world.grid[eighth.y][eighth.x].busLane = true;
   assert.equal(coverage()?.current, 80);
 }
 
@@ -657,6 +762,7 @@ function createCarGroupingWorld(carCount: number): GameWorld {
       if (tile && !isRoadType(tile.type)) world.grid[y][x] = { x, y, type: 'avenue' };
     }
   }
+  normalizeLegacyRoadConnections(world.grid);
   (world as unknown as { updateTrafficMap(): void }).updateTrafficMap();
   world.seedPerformanceBenchmarkCars(carCount);
   world.setActiveViewportBounds({ minX: 100, minY: 100, maxX: 101, maxY: 101 });
@@ -673,7 +779,7 @@ function findEmptyTile(world: GameWorld): { x: number; y: number } {
 }
 
 function campaignMapSignature(world: GameWorld): string {
-  return world.grid.flat().map((tile) => `${tile.type}:${tile.vegetationKind ?? ''}`).join('|')
+  return world.grid.flat().map((tile) => `${tile.type}:${tile.vegetationKind ?? ''}:${tile.roadConnections ?? ''}`).join('|')
     + world.buildings.map((building) => `${building.type}:${building.x},${building.y}`).join('|');
 }
 
@@ -681,18 +787,16 @@ function countConnectedRoadTiles(world: GameWorld): number {
   const roadTiles = world.grid.flat().filter((tile) => isRoadType(tile.type));
   const first = roadTiles[0];
   if (!first) return 0;
-  const seen = new Set<string>([`${first.x},${first.y}`]);
-  const queue = [first];
+  return countReachableRoadTiles(world.grid, first);
+}
+
+function countReachableRoadTiles(grid: GameWorld['grid'], start: { x: number; y: number }): number {
+  const seen = new Set<string>([`${start.x},${start.y}`]);
+  const queue = [start];
   while (queue.length) {
     const current = queue.shift();
     if (!current) continue;
-    for (const next of [
-      world.grid[current.y - 1]?.[current.x],
-      world.grid[current.y + 1]?.[current.x],
-      world.grid[current.y]?.[current.x - 1],
-      world.grid[current.y]?.[current.x + 1],
-    ]) {
-      if (!next || !isRoadType(next.type)) continue;
+    for (const next of getConnectedRoadNeighbors(grid, current)) {
       const key = `${next.x},${next.y}`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -714,13 +818,7 @@ function countRoadComponents(world: GameWorld): number {
     while (queue.length) {
       const current = queue.shift();
       if (!current) continue;
-      for (const next of [
-        world.grid[current.y - 1]?.[current.x],
-        world.grid[current.y + 1]?.[current.x],
-        world.grid[current.y]?.[current.x - 1],
-        world.grid[current.y]?.[current.x + 1],
-      ]) {
-        if (!next || !isRoadType(next.type)) continue;
+      for (const next of getConnectedRoadNeighbors(world.grid, current)) {
         const key = `${next.x},${next.y}`;
         if (!unvisited.delete(key)) continue;
         queue.push(next);

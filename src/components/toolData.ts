@@ -1,5 +1,5 @@
 import type { LucideIcon } from 'lucide-react';
-import { ArrowRight, BusFront, Bike, Circle, CircleDot, Eye, Gauge, Plane, Route, TrafficCone, Trash2, Wrench } from 'lucide-react';
+import { ArrowRight, BusFront, Bike, Circle, CircleDot, Eye, Gauge, GitFork, Plane, Route, TrafficCone, Trash2, Wrench } from 'lucide-react';
 import { ROAD_CONFIG } from '../game/config/roadConfig';
 import { TRANSIT_CONFIG, BUS_LANE_CONFIG } from '../game/config/transitConfig';
 import { METRO_CONFIG } from '../game/config/metroConfig';
@@ -53,6 +53,8 @@ export const toolGroups: ToolGroup[] = [
       { id: 'metroStation', label: 'Estação', cost: METRO_CONFIG.stationBuildCost, Icon: CircleDot },
       { id: 'metroTrack', label: 'Trilho', cost: METRO_CONFIG.trackCostPerTile, Icon: Route },
       { id: 'metroLine', label: 'Criar linha', cost: METRO_CONFIG.lineActivationCost, Icon: BusFront },
+      { id: 'roadTunnel', label: 'Túnel 2 faixas', cost: ROAD_CONFIG.roadTunnel.buildCost, Icon: Route },
+      { id: 'avenueTunnel', label: 'Túnel 4 faixas', cost: ROAD_CONFIG.avenueTunnel.buildCost, Icon: Gauge },
     ],
   },
   {
@@ -69,6 +71,7 @@ export const toolGroups: ToolGroup[] = [
     label: 'Edição',
     Icon: Wrench,
     tools: [
+      { id: 'roadConnection', label: 'Conexões', Icon: GitFork },
       { id: 'remove', label: 'Remover', cost: ROAD_CONFIG.road.removeCost, Icon: Trash2 },
       { id: 'inspect', label: 'Inspecionar', Icon: Eye },
     ],

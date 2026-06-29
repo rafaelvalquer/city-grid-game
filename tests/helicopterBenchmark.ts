@@ -4,6 +4,7 @@ import { Graphics } from 'pixi.js';
 import { GameWorld } from '../src/game/engine/simulation';
 import { drawAirLayer } from '../src/game/rendering/renderHelicopters';
 import { DEFAULT_GRAPHICS_SETTINGS } from '../src/game/config/graphicsSettings';
+import { normalizeLegacyRoadConnections } from '../src/game/city/roadConnections';
 import type { HelicopterLine, Helipad } from '../src/types/helicopter.types';
 
 const world = new GameWorld({ enableTerrainRelief: false });
@@ -112,5 +113,6 @@ function prepareBenchmarkRoadGrid(world: GameWorld): void {
       if (world.grid[y]?.[x]) world.grid[y][x] = { x, y, type: 'avenue' };
     }
   }
+  normalizeLegacyRoadConnections(world.grid);
   (world as unknown as { updateTrafficMap(): void }).updateTrafficMap();
 }

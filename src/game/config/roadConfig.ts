@@ -23,4 +23,22 @@ export const ROAD_CONFIG = {
     removeCost: 18,
     pathCost: 5,
   },
+  roadTunnel: {
+    label: 'Túnel 2 faixas',
+    speed: 1.12,
+    capacity: 6,
+    buildCost: 22,
+    portalCost: 90,
+    removeCost: 18,
+    pathCost: 7,
+  },
+  avenueTunnel: {
+    label: 'Túnel 4 faixas',
+    speed: 1.65,
+    capacity: 14,
+    buildCost: 48,
+    portalCost: 160,
+    removeCost: 30,
+    pathCost: 4,
+  },
 } as const;

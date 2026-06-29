@@ -1,11 +1,14 @@
 import type { MetroLine, MetroStation, MetroTrain } from './metro.types';
 import type { Helicopter, HelicopterLine, Helipad } from './helicopter.types';
 
-export type TileType = 'empty' | 'road' | 'avenue' | 'roundabout' | 'roundaboutCenter' | 'building' | 'busStop' | 'metroStation' | 'helipad' | 'mountain' | 'lake';
+export type TileType = 'empty' | 'road' | 'avenue' | 'roundabout' | 'roundaboutCenter' | 'building' | 'busStop' | 'metroStation' | 'helipad' | 'tunnelPortal' | 'mountain' | 'lake';
 export type BuildingType = 'house' | 'shop' | 'office';
 export type BuildingLevel = 1 | 2 | 3;
 export type BuildingConstructionState = 'constructing' | 'operational';
 export type RoadType = 'road' | 'avenue' | 'roundabout';
+export type TunnelType = 'roadTunnel' | 'avenueTunnel';
+export type RouteLayer = 'surface' | 'tunnel';
+export type RouteStep = Vec2 & { layer?: RouteLayer; tunnelId?: string };
 export type RoadDirection = 'north' | 'south' | 'east' | 'west';
 export type TerrainKind = 'mountain' | 'lake';
 export type VegetationKind =
@@ -56,6 +59,9 @@ export type Tile = {
   metroStationId?: string;
   helipadId?: string;
   oneWay?: RoadDirection;
+  roadConnections?: number;
+  tunnelPortalId?: string;
+  tunnelPortalKind?: TunnelType;
   busLane?: boolean;
   bikeLane?: boolean;
   terrainVariant?: number;
@@ -63,6 +69,18 @@ export type Tile = {
   terrainDepth?: number;
   terrainEdgeMask?: number;
   vegetationKind?: VegetationKind;
+};
+
+export type Tunnel = {
+  id: string;
+  type: TunnelType;
+  entryPortal: Vec2;
+  exitPortal: Vec2;
+  entryAccessRoad: Vec2;
+  exitAccessRoad: Vec2;
+  path: Vec2[];
+  createdAtDay: number;
+  active: boolean;
 };
 
 export type Building = {
@@ -286,6 +304,7 @@ export type SelectedEntity =
   | { kind: 'building'; building: Building }
   | { kind: 'busStop'; stop: TransitStop }
   | { kind: 'road'; x: number; y: number; roadType: RoadType; traffic: TrafficCell; trafficLight?: TrafficLightState; oneWay?: RoadDirection; busLane?: boolean; bikeLane?: boolean }
+  | { kind: 'tunnel'; tunnel: Tunnel; traffic: TrafficCell[] }
   | { kind: 'car'; carId: string }
   | { kind: 'metroStation'; station: MetroStation }
   | { kind: 'metroLine'; line: MetroLine }
